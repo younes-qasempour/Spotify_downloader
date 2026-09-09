@@ -325,6 +325,33 @@ class CompletedView(QWidget):
                 child.widget().deleteLater()
 
         playlists = self.archive.get_playlists(search_query)
+        if not playlists:
+            empty_card = CardWidget(self.playlists_container)
+            empty_card.setStyleSheet("background-color: #1e1e1e; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;")
+            empty_layout = QVBoxLayout(empty_card)
+            empty_layout.setContentsMargins(24, 36, 24, 36)
+            empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.setSpacing(10)
+
+            icon = IconWidget(FluentIcon.FOLDER, empty_card)
+            icon.setFixedSize(48, 48)
+            empty_layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignCenter)
+
+            title = StrongBodyLabel("No Playlists Found", empty_card)
+            title.setStyleSheet("font-size: 16px; font-weight: 600; color: #FFFFFF;")
+            empty_layout.addWidget(title, 0, Qt.AlignmentFlag.AlignCenter)
+
+            desc = CaptionLabel(
+                "No playlists match your current filter or no playlists have been downloaded yet.",
+                empty_card
+            )
+            desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
+            desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.addWidget(desc, 0, Qt.AlignmentFlag.AlignCenter)
+
+            self.playlists_layout.insertWidget(0, empty_card)
+            return
+
         for pl in playlists:
             name = pl["name"]
             track_count = pl["track_count"]
@@ -350,6 +377,34 @@ class CompletedView(QWidget):
                 child.widget().deleteLater()
 
         albums = self.archive.get_albums(search_query)
+        if not albums:
+            empty_card = CardWidget(self.albums_container)
+            empty_card.setStyleSheet("background-color: #1e1e1e; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;")
+            empty_layout = QVBoxLayout(empty_card)
+            empty_layout.setContentsMargins(24, 36, 24, 36)
+            empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.setSpacing(10)
+
+            icon = IconWidget(FluentIcon.ALBUM, empty_card)
+            icon.setFixedSize(48, 48)
+            empty_layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignCenter)
+
+            title = StrongBodyLabel("No Downloaded Albums", empty_card)
+            title.setStyleSheet("font-size: 16px; font-weight: 600; color: #FFFFFF;")
+            empty_layout.addWidget(title, 0, Qt.AlignmentFlag.AlignCenter)
+
+            desc = CaptionLabel(
+                "You have only downloaded playlists and individual singles so far.\n"
+                "When you download a Spotify album URL, its complete discography will appear here.",
+                empty_card
+            )
+            desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
+            desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.addWidget(desc, 0, Qt.AlignmentFlag.AlignCenter)
+
+            self.albums_layout.insertWidget(0, empty_card)
+            return
+
         for alb in albums:
             name = alb["name"]
             artist = alb["artist"]

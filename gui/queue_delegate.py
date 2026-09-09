@@ -1,14 +1,15 @@
 import io
+import os
+import base64
 import threading
 from typing import Dict, Optional
 import requests
-from PyQt6.QtCore import Qt, QRectF, QSize, QPointF
+from PyQt6.QtCore import Qt, QRectF, QSize, QPointF, QModelIndex, QTimer, QObject, pyqtSignal
 from PyQt6.QtGui import (
-    QPainter, QColor, QFont, QFontMetrics, QPen, QBrush, QPixmap,
+    QPainter, QColor, QFont, QFontMetrics, QPen, QBrush, QPixmap, QImage,
     QPainterPath, QLinearGradient
 )
 from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
-from PyQt6.QtCore import QModelIndex
 
 from core.queue_manager import QueueItem
 from core.utils import format_duration
@@ -23,8 +24,50 @@ from gui.styles import (
 )
 
 
+def extract_embedded_cover(file_path: str) -> Optional[bytes]:
+    """Extracts embedded front cover artwork bytes directly from a local audio file."""
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    try:
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".flac":
+            from mutagen.flac import FLAC
+            audio = FLAC(file_path)
+            if audio.pictures:
+                return audio.pictures[0].data
+        elif ext == ".mp3":
+            from mutagen.mp3 import MP3
+            audio = MP3(file_path)
+            if audio.tags:
+                apics = audio.tags.getall("APIC")
+                if apics:
+                    return apics[0].data
+        elif ext in (".opus", ".ogg"):
+            import mutagen
+            from mutagen.flac import Picture
+            audio = mutagen.File(file_path)
+            if audio:
+                pics = audio.get("metadata_block_picture", [])
+                if pics:
+                    raw = base64.b64decode(pics[0])
+                    return Picture(raw).data
+        elif ext == ".m4a":
+            from mutagen.mp4 import MP4
+            audio = MP4(file_path)
+            covr = audio.get("covr", [])
+            if covr:
+                return bytes(covr[0])
+    except Exception:
+        pass
+    return None
+
+
+class ThumbnailSignalEmitter(QObject):
+    sig_loaded = pyqtSignal(str)
+
+
 class ThumbnailCache:
-    """Thread-safe in-memory cache for album artwork pixmaps."""
+    """Thread-safe in-memory cache for album artwork pixmaps (both remote URLs and local files)."""
     _instance = None
     _lock = threading.Lock()
 
@@ -33,37 +76,52 @@ class ThumbnailCache:
             cls._instance = super().__new__(cls)
             cls._instance.cache: Dict[str, QPixmap] = {}
             cls._instance.loading: set = set()
+            cls._instance.emitter = ThumbnailSignalEmitter()
         return cls._instance
 
-    def get(self, url: str) -> Optional[QPixmap]:
+    def get(self, key: str) -> Optional[QPixmap]:
+        if not key:
+            return None
         with self._lock:
-            return self.cache.get(url)
+            return self.cache.get(key)
 
-    def load_async(self, url: str, callback):
-        if not url:
+    def load_async(self, key: str):
+        if not key:
             return
         with self._lock:
-            if url in self.cache or url in self.loading:
+            if key in self.cache or key in self.loading:
                 return
-            self.loading.add(url)
+            self.loading.add(key)
 
         def worker():
+            pix_bytes = None
             try:
-                resp = requests.get(url, timeout=5)
-                if resp.status_code == 200:
-                    pix = QPixmap()
-                    pix.loadFromData(resp.content)
-                    if not pix.isNull():
-                        scaled = pix.scaled(50, 50, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                if os.path.isfile(key):
+                    pix_bytes = extract_embedded_cover(key)
+                elif key.startswith("http://") or key.startswith("https://"):
+                    resp = requests.get(key, timeout=6)
+                    if resp.status_code == 200:
+                        pix_bytes = resp.content
+
+                if pix_bytes:
+                    img = QImage()
+                    img.loadFromData(pix_bytes)
+                    if not img.isNull():
+                        scaled = img.scaled(
+                            50, 50,
+                            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                            Qt.TransformationMode.SmoothTransformation
+                        )
+                        pix = QPixmap.fromImage(scaled)
                         with self._lock:
-                            self.cache[url] = scaled
-                            self.loading.discard(url)
-                        callback()
+                            self.cache[key] = pix
+                            self.loading.discard(key)
+                        self.emitter.sig_loaded.emit(key)
                         return
             except Exception:
                 pass
             with self._lock:
-                self.loading.discard(url)
+                self.loading.discard(key)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -81,27 +139,45 @@ class TrackCardDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.thumb_cache = ThumbnailCache()
+        self.thumb_cache.emitter.sig_loaded.connect(self._on_thumbnail_loaded)
         self.hoverRow = -1
         self.pressedRow = -1
         self.selectedRows = set()
 
+    def _on_thumbnail_loaded(self, key: str):
+        p = self.parent()
+        if p:
+            if hasattr(p, "viewport"):
+                p.viewport().update()
+            elif hasattr(p, "table") and hasattr(p.table, "viewport"):
+                p.table.viewport().update()
+
     def setHoverRow(self, row: int):
         self.hoverRow = row
         p = self.parent()
-        if p and hasattr(p, "viewport"):
-            p.viewport().update()
+        if p:
+            if hasattr(p, "viewport"):
+                p.viewport().update()
+            elif hasattr(p, "table") and hasattr(p.table, "viewport"):
+                p.table.viewport().update()
 
     def setPressedRow(self, row: int):
         self.pressedRow = row
         p = self.parent()
-        if p and hasattr(p, "viewport"):
-            p.viewport().update()
+        if p:
+            if hasattr(p, "viewport"):
+                p.viewport().update()
+            elif hasattr(p, "table") and hasattr(p.table, "viewport"):
+                p.table.viewport().update()
 
     def setSelectedRows(self, rows):
         self.selectedRows = rows
         p = self.parent()
-        if p and hasattr(p, "viewport"):
-            p.viewport().update()
+        if p:
+            if hasattr(p, "viewport"):
+                p.viewport().update()
+            elif hasattr(p, "table") and hasattr(p.table, "viewport"):
+                p.table.viewport().update()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
         return QSize(option.rect.width(), self.CARD_HEIGHT)
@@ -144,7 +220,13 @@ class TrackCardDelegate(QStyledItemDelegate):
         thumb_path = QPainterPath()
         thumb_path.addRoundedRect(thumb_rect, 6, 6)
 
-        pixmap = self.thumb_cache.get(item.track.cover_url) if item.track.cover_url else None
+        thumb_key = ""
+        if item.output_path and os.path.isfile(item.output_path):
+            thumb_key = item.output_path
+        elif item.track.cover_url:
+            thumb_key = item.track.cover_url
+
+        pixmap = self.thumb_cache.get(thumb_key) if thumb_key else None
         if pixmap:
             painter.save()
             painter.setClipPath(thumb_path)
@@ -159,10 +241,9 @@ class TrackCardDelegate(QStyledItemDelegate):
             painter.setFont(QFont("Segoe UI", 14))
             painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter, "♫")
 
-            # Asynchronously fetch thumbnail
-            if item.track.cover_url:
-                view = self.parent()
-                self.thumb_cache.load_async(item.track.cover_url, lambda: view.viewport().update() if view else None)
+            # Asynchronously fetch or extract thumbnail
+            if thumb_key:
+                self.thumb_cache.load_async(thumb_key)
 
         # Calculate horizontal positions
         right_margin = card_rect.right() - 14

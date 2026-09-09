@@ -248,8 +248,8 @@ class ArchiveManager:
                 cur = conn.execute("""
                     SELECT 
                         COUNT(*) as total_tracks,
-                        COUNT(DISTINCT collection_name) as total_playlists,
-                        COUNT(DISTINCT CASE WHEN album IS NOT NULL AND album != '' THEN album END) as total_albums,
+                        COUNT(DISTINCT CASE WHEN collection_type = 'playlist' OR (collection_name IS NOT NULL AND collection_name != '') THEN collection_name END) as total_playlists,
+                        COUNT(DISTINCT CASE WHEN collection_type = 'album' OR (album IS NOT NULL AND TRIM(album) != '' AND LOWER(album) NOT IN ('spotify playlist', 'singles', 'unknown album', 'downloads') AND collection_type != 'playlist') THEN album END) as total_albums,
                         COALESCE(SUM(file_size), 0) as total_bytes
                     FROM downloaded_tracks
                 """)
@@ -333,22 +333,27 @@ class ArchiveManager:
     def get_albums(self, search_query: str = "") -> List[Dict[str, Any]]:
         """
         Aggregates downloaded tracks by album.
-        Returns album name, artist, track counts, total size, and folder path.
+        Only returns genuine albums (downloaded via album URL or with genuine album metadata,
+        excluding playlist placeholders like 'Spotify Playlist').
         """
         with self._db_lock:
             conn = self._get_connection()
             try:
                 cur = conn.execute("""
                     SELECT 
-                        album as name,
+                        COALESCE(NULLIF(album, ''), collection_name) as name,
                         artist,
                         COUNT(*) as track_count,
                         COALESCE(SUM(file_size), 0) as total_size,
                         MIN(file_path) as sample_file,
                         MAX(downloaded_at) as latest_download
                     FROM downloaded_tracks
-                    WHERE album IS NOT NULL AND TRIM(album) != ''
-                    GROUP BY album, artist
+                    WHERE collection_type = 'album'
+                       OR (album IS NOT NULL 
+                           AND TRIM(album) != '' 
+                           AND LOWER(album) NOT IN ('spotify playlist', 'singles', 'unknown album', 'downloads')
+                           AND collection_type != 'playlist')
+                    GROUP BY name, artist
                     ORDER BY track_count DESC, latest_download DESC
                 """)
                 rows = cur.fetchall()
