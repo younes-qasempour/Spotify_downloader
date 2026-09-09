@@ -479,24 +479,40 @@ class MusilonEngine:
         score = 50.0 if art_match else 0.0
 
         # 2. Title Matching
-        base_title = re.sub(r'[\(\[\-].*?(?:feat|ft|remaster|version|from|bonus).*?[\)\]]?', '', target_title).strip()
-        base_title = re.sub(r'[^\w\s]', ' ', base_title).strip()
-        base_words = [w for w in base_title.split() if len(w) > 1]
+        # Extract sub-variants if title has bilingual/multi-part format (e.g. "オトノケ - Otonoke" or "Title / Japanese")
+        title_variants = [target_title]
+        for sep in (" - ", " / ", " | ", " : "):
+            if sep in target_title:
+                for part in target_title.split(sep):
+                    p_str = part.strip()
+                    if p_str and len(p_str) >= 2 and p_str not in title_variants:
+                        title_variants.append(p_str)
 
         clean_cand_title = re.sub(r'[^\w\s]', ' ', cand_title).strip()
         cand_words = set(clean_cand_title.split())
 
-        if base_words and all(w in cand_words for w in base_words):
-            score += 60.0
-        elif base_words:
-            matched_words = sum(1 for w in base_words if w in cand_words)
-            if matched_words >= max(1, len(base_words) - 1):
-                score += 40.0
+        best_title_score = 0.0
+        for variant in title_variants:
+            v_score = 0.0
+            base_v = re.sub(r'[\(\[\-].*?(?:feat|ft|remaster|version|from|bonus).*?[\)\]]?', '', variant).strip()
+            base_v = re.sub(r'[^\w\s]', ' ', base_v).strip()
+            v_words = [w for w in base_v.split() if len(w) > 1]
 
-        # Exact title equality bonus
-        clean_target_full = re.sub(r'[^\w\s]', ' ', target_title).strip()
-        if clean_target_full == clean_cand_title or base_title == clean_cand_title:
-            score += 30.0
+            if v_words and all(w in cand_words for w in v_words):
+                v_score += 60.0
+            elif v_words:
+                matched_words = sum(1 for w in v_words if w in cand_words)
+                if matched_words >= max(1, len(v_words) - 1):
+                    v_score += 40.0
+
+            clean_v_full = re.sub(r'[^\w\s]', ' ', variant).strip()
+            if clean_v_full == clean_cand_title or base_v == clean_cand_title:
+                v_score += 30.0
+
+            if v_score > best_title_score:
+                best_title_score = v_score
+
+        score += best_title_score
 
         # 3. Version Modifier Penalties & Bonuses
         for mod in self.UNWANTED_VERSION_MODIFIERS:
@@ -564,6 +580,15 @@ class MusilonEngine:
         norm_title = clean_title.replace("’", "'").replace("`", "'").replace("“", '"').replace("”", '"')
         norm_base = base_title.replace("’", "'").replace("`", "'").replace("“", '"').replace("”", '"')
 
+        # Decompose multi-part or bilingual titles (e.g. "オトノケ - Otonoke" -> ["オトノケ", "Otonoke"])
+        title_sub_variants: List[str] = []
+        for sep in (" - ", " / ", " | ", " : "):
+            if sep in norm_base:
+                for part in norm_base.split(sep):
+                    p_clean = part.strip()
+                    if p_clean and len(p_clean) >= 2 and p_clean not in title_sub_variants:
+                        title_sub_variants.append(p_clean)
+
         candidate_pool: List[Dict[str, Any]] = []
         seen_urls = set()
 
@@ -574,9 +599,11 @@ class MusilonEngine:
                     seen_urls.add(u)
                     candidate_pool.append(c)
 
-        # Stage 1: Play JSON REST Search with artist + base title
+        # Stage 1: Play JSON REST Search with artist + base title (and any sub-variants)
         if simplified_artist and norm_base:
             add_candidates(self._search_play_rest(f"{simplified_artist} {norm_base}"))
+            for sub_v in title_sub_variants:
+                add_candidates(self._search_play_rest(f"{simplified_artist} {sub_v}"))
 
         # Early exit if high-confidence match found
         best = self._find_best_candidate(track, candidate_pool)

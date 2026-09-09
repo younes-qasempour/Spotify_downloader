@@ -127,6 +127,9 @@ class QueueView(QWidget):
         self.pause_btn = PushButton(FluentIcon.PAUSE, "Pause", self)
         self.pause_btn.clicked.connect(self._on_pause_clicked)
 
+        self.stop_btn = PushButton(FluentIcon.CLOSE, "Stop", self)
+        self.stop_btn.clicked.connect(self._on_stop_clicked)
+
         self.retry_btn = PushButton(FluentIcon.SYNC, "Retry Failed", self)
         self.retry_btn.clicked.connect(self._on_retry_failed_clicked)
         self.retry_btn.setEnabled(False)
@@ -136,6 +139,7 @@ class QueueView(QWidget):
 
         ctrl_layout.addWidget(self.start_btn)
         ctrl_layout.addWidget(self.pause_btn)
+        ctrl_layout.addWidget(self.stop_btn)
         ctrl_layout.addWidget(self.retry_btn)
         ctrl_layout.addWidget(self.clear_btn)
 
@@ -249,14 +253,13 @@ class QueueView(QWidget):
             return
 
         self.qm.enqueue(tracks)
-        self.qm.start()
 
         InfoBar.success(
             title="Enqueued Successfully",
-            content=f"Added {len(tracks)} track(s) to the download queue.",
+            content=f"Added {len(tracks)} track(s) to queue. Click 'Start All' to begin downloading.",
             orient=Qt.Orientation.Horizontal,
             position=InfoBarPosition.TOP,
-            duration=3500,
+            duration=4000,
             parent=self
         )
         self._update_metrics()
@@ -275,11 +278,20 @@ class QueueView(QWidget):
         )
 
     def _on_start_clicked(self):
-        self.qm.start()
-        self.qm.resume()
+        count = self.qm.start_all()
         self.pause_btn.setText("Pause")
         self.pause_btn.setIcon(FluentIcon.PAUSE)
-        InfoBar.info("Queue Started", "Download queue is active.", duration=2000, parent=self)
+        InfoBar.info("Queue Started", f"Download queue is active ({count} track(s) pending).", duration=2500, parent=self)
+        self._update_metrics()
+        self.table.viewport().update()
+
+    def _on_stop_clicked(self):
+        self.qm.stop()
+        self.pause_btn.setText("Pause")
+        self.pause_btn.setIcon(FluentIcon.PAUSE)
+        InfoBar.warning("Queue Stopped", "Downloads stopped.", duration=2000, parent=self)
+        self._update_metrics()
+        self.table.viewport().update()
 
     def _on_pause_clicked(self):
         if self.qm.is_paused():
@@ -292,6 +304,8 @@ class QueueView(QWidget):
             self.pause_btn.setText("Resume")
             self.pause_btn.setIcon(FluentIcon.PLAY)
             InfoBar.warning("Queue Paused", "Downloads paused.", duration=2000, parent=self)
+        self._update_metrics()
+        self.table.viewport().update()
 
     def _on_retry_failed_clicked(self):
         count = self.qm.retry_failed()

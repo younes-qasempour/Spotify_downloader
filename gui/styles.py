@@ -42,6 +42,8 @@ STATUS_COLORS = {
     "Tagging": (QColor(245, 158, 11, 40), QColor("#FBBF24")),
     "Fetching Lyrics": (QColor(139, 92, 246, 40), QColor("#A78BFA")),
     "Completed": (QColor(29, 185, 84, 40), QColor("#1ED760")),
+    "Paused": (QColor(234, 179, 8, 40), QColor("#EAB308")),
+    "Stopped": (QColor(249, 115, 22, 40), QColor("#F97316")),
     "Failed": (QColor(239, 68, 68, 40), QColor("#F87171")),
     "Cancelled": (QColor(107, 114, 128, 40), QColor("#9CA3AF")),
 }

@@ -89,6 +89,45 @@ class DownloadQueueManager:
                 self._worker_threads.append(t)
             logger.info(f"Started DownloadQueueManager with {num_workers} workers.")
 
+    def start_all(self) -> int:
+        """
+        User-triggered action to start downloading queued / stopped / paused items.
+        Re-queues any non-completed tracks if not in processing queue and starts workers.
+        """
+        with self._lock:
+            # Drain queue to avoid stale duplicate entries
+            while not self._queue.empty():
+                try:
+                    self._queue.get_nowait()
+                    self._queue.task_done()
+                except queue.Empty:
+                    break
+
+            pending_count = 0
+            for item in self._items.values():
+                if item.status in ("Queued", "Stopped", "Paused", "Failed"):
+                    item.status = "Queued"
+                    item.cancelled = False
+                    self._queue.put(item)
+                    pending_count += 1
+                    if self.on_track_status_changed:
+                        self.on_track_status_changed(item.track.id, "Queued")
+
+            self._running = True
+            self._paused.set()
+
+            # Ensure worker threads are alive
+            self._worker_threads = [t for t in self._worker_threads if t.is_alive()]
+            num_workers = max(1, config.get("download.concurrency", self.max_workers))
+            while len(self._worker_threads) < num_workers:
+                idx = len(self._worker_threads)
+                t = threading.Thread(target=self._worker_loop, name=f"DownloadWorker-{idx}", daemon=True)
+                t.start()
+                self._worker_threads.append(t)
+
+            logger.info(f"Started DownloadQueueManager: {pending_count} tracks enqueued for download across {len(self._worker_threads)} workers.")
+            return pending_count
+
     def pause(self):
         with self._lock:
             self._paused.clear()
@@ -127,8 +166,7 @@ class DownloadQueueManager:
                 if self.on_track_status_changed:
                     self.on_track_status_changed(item.track.id, "Queued")
             if failed_items:
-                self.start()
-                self.resume()
+                self.start_all()
             logger.info(f"Re-queued {len(failed_items)} failed tracks for download.")
             return len(failed_items)
 
@@ -146,34 +184,50 @@ class DownloadQueueManager:
                 self._queue.put(item)
                 if self.on_track_status_changed:
                     self.on_track_status_changed(track_id, "Queued")
-                self.start()
-                self.resume()
+                self.start_all()
                 return True
         return False
 
     def stop(self):
+        """
+        Stops active downloads immediately:
+        - Drains pending items from queue and marks them 'Stopped'
+        - Marks active in-flight items with cancelled = True and 'Stopped'
+        - Unpauses and terminates worker threads cleanly
+        """
         with self._lock:
-            self._running = False
-            self._paused.set()
-            # Drain queue
             while not self._queue.empty():
                 try:
-                    self._queue.get_nowait()
+                    it = self._queue.get_nowait()
+                    if it.status == "Queued":
+                        it.status = "Stopped"
+                        if self.on_track_status_changed:
+                            self.on_track_status_changed(it.track.id, "Stopped")
                     self._queue.task_done()
                 except queue.Empty:
                     break
+
+            for it in self._items.values():
+                if it.status in ("Downloading", "Resolving", "Paused", "Queued"):
+                    it.cancelled = True
+                    it.status = "Stopped"
+                    if self.on_track_status_changed:
+                        self.on_track_status_changed(it.track.id, "Stopped")
+
+            self._running = False
+            self._paused.set()  # Unblock workers so they cleanly exit
         logger.info("Download queue stopped.")
 
     def enqueue(self, tracks: List[TrackMetadata]):
         with self._lock:
             for t in tracks:
                 if t.id in self._items:
-                    # If already completed or in queue, skip duplicate
+                    # If already completed or actively in queue, skip duplicate
                     existing = self._items[t.id]
                     if existing.status in ("Queued", "Downloading", "Resolving"):
                         continue
 
-                item = QueueItem(track=t)
+                item = QueueItem(track=t, status="Queued")
                 self._items[t.id] = item
                 self._queue.put(item)
                 if self.on_track_enqueued:
@@ -326,14 +380,29 @@ class DownloadQueueManager:
                     except Exception as copy_err:
                         logger.warning(f"Failed to copy archived file ({copy_err}). Falling back to fresh download.")
 
+            if item.cancelled or not self._running:
+                self._update_status(item, "Stopped")
+                return
+
             # 2. Resolving Phase
             self._paused.wait()
+            if item.cancelled or not self._running:
+                self._update_status(item, "Stopped")
+                return
+
             self._update_status(item, "Resolving")
             
             # Lazy resolution with rate-limiting bottleneck for Musilon
             with self._musilon_lock:
+                if item.cancelled or not self._running:
+                    self._update_status(item, "Stopped")
+                    return
                 self._paused.wait()
                 resolved = self.engine.resolve_source(track)
+
+            if item.cancelled or not self._running:
+                self._update_status(item, "Stopped")
+                return
 
             if not resolved:
                 raise RuntimeError("No matching audio source found across Musilon or YouTube Music.")
@@ -343,8 +412,8 @@ class DownloadQueueManager:
             if self.on_track_source_resolved:
                 self.on_track_source_resolved(track_id, resolved.source_type, resolved.quality_badge)
 
-            if item.cancelled:
-                self._update_status(item, "Cancelled")
+            if item.cancelled or not self._running:
+                self._update_status(item, "Stopped")
                 return
 
             self._paused.wait()
@@ -365,7 +434,7 @@ class DownloadQueueManager:
                 self._update_status(item, status_str)
 
             def cancel_check() -> bool:
-                return item.cancelled
+                return item.cancelled or not self._running
 
             def pause_wait():
                 self._paused.wait()
@@ -385,6 +454,10 @@ class DownloadQueueManager:
                 pause_wait=pause_wait
             )
 
+            if item.cancelled or not self._running:
+                self._update_status(item, "Stopped")
+                return
+
             item.output_path = file_path or ""
             self._update_status(item, "Completed")
 
@@ -396,6 +469,9 @@ class DownloadQueueManager:
                 self.on_track_completed(track_id, item.output_path)
 
         except Exception as e:
+            if item.cancelled or not self._running:
+                self._update_status(item, "Stopped")
+                return
             logger.error(f"Failed to process track '{track.title}': {e}")
             item.error_message = str(e)
             self._update_status(item, "Failed")
@@ -403,6 +479,9 @@ class DownloadQueueManager:
                 self.on_track_failed(track_id, str(e))
 
     def _update_status(self, item: QueueItem, status: str):
-        item.status = status
-        if self.on_track_status_changed:
-            self.on_track_status_changed(item.track.id, status)
+        with self._lock:
+            if not self._running and status not in ("Stopped", "Cancelled"):
+                return
+            item.status = status
+            if self.on_track_status_changed:
+                self.on_track_status_changed(item.track.id, status)

@@ -10,7 +10,7 @@ from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath
 from qfluentwidgets import (
     TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
     FluentIcon, InfoBar, LineEdit, CaptionLabel, StrongBodyLabel, BodyLabel,
-    SegmentedWidget, CardWidget, SmoothScrollArea, IconWidget
+    SegmentedWidget, CardWidget, SmoothScrollArea, IconWidget, ComboBox
 )
 
 from gui.queue_model import TrackQueueModel
@@ -221,10 +221,24 @@ class CompletedView(QWidget):
 
         nav_row.addStretch(1)
 
+        self.sort_combo = ComboBox(self)
+        self.sort_combo.addItems([
+            "Sort: Track Number",
+            "Sort: Title (A-Z)",
+            "Sort: Artist (A-Z)",
+            "Sort: Duration (Shortest)",
+            "Sort: Duration (Longest)",
+            "Sort: Recently Added"
+        ])
+        self.sort_combo.setCurrentIndex(0)
+        self.sort_combo.setFixedWidth(190)
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        nav_row.addWidget(self.sort_combo)
+
         self.search_input = LineEdit(self)
         self.search_input.setPlaceholderText("Search songs, artists, albums, or playlists...")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setFixedWidth(360)
+        self.search_input.setFixedWidth(300)
         self.search_input.textChanged.connect(self._on_search_changed)
         nav_row.addWidget(self.search_input)
 
@@ -393,9 +407,36 @@ class CompletedView(QWidget):
         self.reload_playlists(search_query)
         self.reload_albums(search_query)
 
+    def _sort_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        idx = self.sort_combo.currentIndex() if hasattr(self, "sort_combo") else 0
+        if idx == 0:  # Track Number
+            return sorted(rows, key=lambda r: (
+                r.get("track_number") if (r.get("track_number") is not None and r.get("track_number") > 0) else 9999,
+                (r.get("title") or "").lower()
+            ))
+        elif idx == 1:  # Title (A-Z)
+            return sorted(rows, key=lambda r: (r.get("title") or "").lower())
+        elif idx == 2:  # Artist (A-Z)
+            return sorted(rows, key=lambda r: (r.get("artist") or "").lower())
+        elif idx == 3:  # Duration (Shortest)
+            return sorted(rows, key=lambda r: r.get("duration_ms") or 0)
+        elif idx == 4:  # Duration (Longest)
+            return sorted(rows, key=lambda r: r.get("duration_ms") or 0, reverse=True)
+        elif idx == 5:  # Recently Added
+            return sorted(rows, key=lambda r: r.get("downloaded_at") or "", reverse=True)
+        return rows
+
+    def _on_sort_changed(self, index: int):
+        search_query = self.search_input.text().strip()
+        if self._current_collection_name and self.stacked.currentIndex() == 0:
+            self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
+        else:
+            self.reload_from_archive(search_query)
+
     def reload_from_archive(self, search_query: str = ""):
         """Loads or filters tracks from SQLite archive into the virtualized TableView."""
         rows = self.archive.get_all_tracks(search_query)
+        rows = self._sort_rows(rows)
         self.model.clear()
 
         for r in rows:
@@ -406,6 +447,8 @@ class CompletedView(QWidget):
                 album=r.get("album", ""),
                 release_date="",
                 duration_ms=r.get("duration_ms", 0),
+                track_number=r.get("track_number", 1) or 1,
+                disc_number=r.get("disc_number", 1) or 1,
                 collection_name=r.get("collection_name", ""),
                 collection_type=r.get("collection_type", "track")
             )
@@ -590,6 +633,7 @@ class CompletedView(QWidget):
     def _load_collection_tracks(self, name: str, coll_type: str = "playlist", filter_query: str = ""):
         """Loads all tracks from SQLite archive belonging specifically to this collection."""
         rows = self.archive.get_collection_tracks(name, coll_type)
+        rows = self._sort_rows(rows)
         self.model.clear()
 
         q = filter_query.strip().lower()
@@ -608,8 +652,10 @@ class CompletedView(QWidget):
                 album=r.get("album", ""),
                 release_date="",
                 duration_ms=r.get("duration_ms", 0),
+                track_number=r.get("track_number", 1) or 1,
+                disc_number=r.get("disc_number", 1) or 1,
                 collection_name=r.get("collection_name", ""),
-                collection_type=r.get("collection_type", "track")
+                collection_type=r.get("collection_type", coll_type)
             )
             item = QueueItem(
                 track=track,

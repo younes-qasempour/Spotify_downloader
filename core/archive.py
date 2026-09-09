@@ -92,7 +92,7 @@ class ArchiveManager:
         return conn
 
     def _init_db(self):
-        """Initializes database tables and performance indexes."""
+        """Initializes database tables, performance indexes, and schema migrations."""
         with self._db_lock:
             conn = self._get_connection()
             try:
@@ -105,6 +105,8 @@ class ArchiveManager:
                             artist TEXT NOT NULL,
                             album TEXT,
                             duration_ms INTEGER,
+                            track_number INTEGER DEFAULT 1,
+                            disc_number INTEGER DEFAULT 1,
                             file_path TEXT NOT NULL,
                             file_size INTEGER DEFAULT 0,
                             quality_badge TEXT DEFAULT 'FLAC',
@@ -117,6 +119,42 @@ class ArchiveManager:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_artist_title ON downloaded_tracks (artist, title);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_isrc ON downloaded_tracks (isrc);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_downloaded_at ON downloaded_tracks (downloaded_at DESC);")
+
+                    # Migrations for existing databases
+                    try:
+                        conn.execute("ALTER TABLE downloaded_tracks ADD COLUMN track_number INTEGER DEFAULT 1;")
+                    except sqlite3.OperationalError:
+                        pass
+                    try:
+                        conn.execute("ALTER TABLE downloaded_tracks ADD COLUMN disc_number INTEGER DEFAULT 1;")
+                    except sqlite3.OperationalError:
+                        pass
+
+                    # One-time backfill of track_number from audio tags for existing files
+                    cur = conn.execute("SELECT spotify_id, file_path, track_number FROM downloaded_tracks")
+                    rows = cur.fetchall()
+                    if rows:
+                        try:
+                            import mutagen
+                            for r in rows:
+                                fpath = r["file_path"]
+                                if fpath and os.path.isfile(fpath):
+                                    try:
+                                        a = mutagen.File(fpath)
+                                        if a:
+                                            tr_val = a.get("tracknumber") or a.get("TRACKNUMBER") or a.get("trkn") or a.get("TRCK")
+                                            if tr_val:
+                                                raw_t = tr_val[0] if isinstance(tr_val, list) else str(tr_val)
+                                                if isinstance(raw_t, tuple):
+                                                    raw_t = raw_t[0]
+                                                t_num = int(str(raw_t).split("/")[0])
+                                                if t_num > 0:
+                                                    conn.execute("UPDATE downloaded_tracks SET track_number = ? WHERE spotify_id = ?", (t_num, r["spotify_id"]))
+                                    except Exception:
+                                        pass
+                        except ImportError:
+                            pass
+
                 logger.info(f"Initialized Archive database at: {self.db_path}")
             except Exception as e:
                 logger.error(f"Failed to initialize Archive database: {e}")
@@ -149,9 +187,10 @@ class ArchiveManager:
                     conn.execute("""
                         INSERT OR REPLACE INTO downloaded_tracks (
                             spotify_id, isrc, title, artist, album, duration_ms,
+                            track_number, disc_number,
                             file_path, file_size, quality_badge, source_type,
                             collection_name, collection_type, downloaded_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     """, (
                         track.id,
                         track.isrc or "",
@@ -159,6 +198,8 @@ class ArchiveManager:
                         track.artist_str,
                         track.album or "",
                         track.duration_ms,
+                        getattr(track, "track_number", 1) or 1,
+                        getattr(track, "disc_number", 1) or 1,
                         norm_path,
                         file_size,
                         quality_badge,
@@ -166,7 +207,7 @@ class ArchiveManager:
                         getattr(track, "collection_name", ""),
                         getattr(track, "collection_type", "track")
                     ))
-                logger.debug(f"Archived track '{track.title}' -> {norm_path}")
+                logger.debug(f"Archived track '{track.title}' (track #{getattr(track, 'track_number', 1)}) -> {norm_path}")
                 return True
             except Exception as e:
                 logger.error(f"Failed to record track in archive: {e}")
@@ -293,8 +334,8 @@ class ArchiveManager:
                 cur = conn.execute("""
                     SELECT 
                         COUNT(*) as total_tracks,
-                        COUNT(DISTINCT CASE WHEN collection_type = 'playlist' OR (collection_name IS NOT NULL AND collection_name != '') THEN collection_name END) as total_playlists,
-                        COUNT(DISTINCT CASE WHEN collection_type = 'album' OR (album IS NOT NULL AND TRIM(album) != '' AND LOWER(album) NOT IN ('spotify playlist', 'singles', 'unknown album', 'downloads') AND collection_type != 'playlist') THEN album END) as total_albums,
+                        COUNT(DISTINCT CASE WHEN (collection_type = 'playlist' OR (collection_name IS NOT NULL AND collection_name != '')) AND (collection_type IS NULL OR collection_type != 'album') THEN collection_name END) as total_playlists,
+                        COUNT(DISTINCT CASE WHEN collection_type = 'album' OR (album IS NOT NULL AND TRIM(album) != '' AND LOWER(album) NOT IN ('spotify playlist', 'singles', 'unknown album', 'downloads') AND (collection_type IS NULL OR collection_type != 'playlist')) THEN COALESCE(NULLIF(album, ''), collection_name) END) as total_albums,
                         COALESCE(SUM(file_size), 0) as total_bytes
                     FROM downloaded_tracks
                 """)
@@ -322,6 +363,7 @@ class ArchiveManager:
         """
         Aggregates downloaded tracks by collection / playlist folder.
         Returns a list of playlists with track counts, total size, folder paths, and sample tracks.
+        Excludes albums (which strictly belong in get_albums).
         """
         with self._db_lock:
             conn = self._get_connection()
@@ -335,6 +377,7 @@ class ArchiveManager:
                         MIN(file_path) as sample_file,
                         MAX(downloaded_at) as latest_download
                     FROM downloaded_tracks
+                    WHERE collection_type IS NULL OR collection_type != 'album'
                     GROUP BY name
                     ORDER BY latest_download DESC
                 """)
@@ -363,7 +406,7 @@ class ArchiveManager:
 
                     results.append({
                         "name": pl_name,
-                        "type": r["collection_type"] or "playlist",
+                        "collection_type": r["collection_type"] or "playlist",
                         "track_count": r["track_count"],
                         "total_size_bytes": sz_bytes,
                         "size_str": sz_str,
@@ -443,7 +486,7 @@ class ArchiveManager:
                 conn.close()
 
     def get_collection_tracks(self, collection_name: str, collection_type: str = "playlist") -> List[Dict[str, Any]]:
-        """Retrieves all tracks belonging to a specific collection (playlist or album)."""
+        """Retrieves all tracks belonging to a specific collection (playlist or album) ordered by track number."""
         with self._db_lock:
             conn = self._get_connection()
             try:
@@ -451,14 +494,14 @@ class ArchiveManager:
                     cur = conn.execute("""
                         SELECT * FROM downloaded_tracks
                         WHERE album = ? OR collection_name = ?
-                        ORDER BY track_number ASC, downloaded_at DESC
+                        ORDER BY track_number ASC, downloaded_at ASC
                     """, (collection_name, collection_name))
                 else:
                     cur = conn.execute("""
                         SELECT * FROM downloaded_tracks
                         WHERE collection_name = ?
                            OR (? = 'Singles' AND (collection_name IS NULL OR collection_name = '' OR collection_name = 'Singles'))
-                        ORDER BY downloaded_at DESC
+                        ORDER BY track_number ASC, downloaded_at ASC
                     """, (collection_name, collection_name))
                 results = []
                 for row in cur.fetchall():
@@ -534,6 +577,8 @@ class ArchiveManager:
                 artist = "Unknown Artist"
                 album = folder_name
                 isrc = ""
+                track_num = 1
+                disc_num = 1
                 quality = "FLAC 16" if ext == ".flac" else ("320k" if ext == ".mp3" else "Opus")
 
                 if " - " in title:
@@ -545,6 +590,30 @@ class ArchiveManager:
                     try:
                         audio = mutagen.File(full_path)
                         if audio:
+                            tr_val = audio.get("tracknumber") or audio.get("TRACKNUMBER") or audio.get("trkn") or audio.get("TRCK")
+                            if tr_val:
+                                raw_t = tr_val[0] if isinstance(tr_val, list) else str(tr_val)
+                                if isinstance(raw_t, tuple):
+                                    raw_t = raw_t[0]
+                                try:
+                                    t_parsed = int(str(raw_t).split("/")[0])
+                                    if t_parsed > 0:
+                                        track_num = t_parsed
+                                except Exception:
+                                    pass
+
+                            disc_val = audio.get("discnumber") or audio.get("DISCNUMBER") or audio.get("disk") or audio.get("TPOS")
+                            if disc_val:
+                                raw_d = disc_val[0] if isinstance(disc_val, list) else str(disc_val)
+                                if isinstance(raw_d, tuple):
+                                    raw_d = raw_d[0]
+                                try:
+                                    d_parsed = int(str(raw_d).split("/")[0])
+                                    if d_parsed > 0:
+                                        disc_num = d_parsed
+                                except Exception:
+                                    pass
+
                             if ext == ".flac":
                                 artist = audio.get("artist", [artist])[0]
                                 title = audio.get("title", [title])[0]
@@ -572,6 +641,8 @@ class ArchiveManager:
                     album=album,
                     release_date="",
                     duration_ms=0,
+                    track_number=track_num,
+                    disc_number=disc_num,
                     isrc=isrc,
                     collection_name=folder_name,
                     collection_type="playlist" if folder_name not in ("Singles", "downloads") else "track"
