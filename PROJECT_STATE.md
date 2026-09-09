@@ -125,6 +125,27 @@ d:\Spotify-Downloader\
   - Added `target_folder` property to `TrackMetadata` using `sanitize_filename()`.
   - Both `CascadingAudioEngine.download_and_tag()` and `DownloadQueueManager._process_item()` route downloads into `{base_output_dir}/{target_folder}/` without double-nesting.
 
+### 15. Chunk-Level Pause / Resume Synchronization
+- **Symptom:** Pausing the queue in the GUI only prevented new tracks from starting, while in-flight downloads continued consuming network bandwidth and writing bytes.
+- **Fix:**
+  - In `core/musilon.py`, passed a `pause_wait` callback inside the `resp.iter_content()` chunk streaming loop to block worker threads on `threading.Event.wait()` immediately without dropping TCP connections or corrupting partial files.
+  - In `core/ytdlp_engine.py`, intercepted the yt-dlp `progress_hook` with `pause_wait()`.
+  - In `gui/views/queue_view.py`, dynamically toggle between "Pause" (`FluentIcon.PAUSE`) and "Resume" (`FluentIcon.PLAY`), updating active card statuses to `Paused`.
+
+### 16. Failed Songs Bulk Retry (High-Capacity Resilience)
+- **Problem:** When downloading large 1,000–5,000 track libraries, transient Wi-Fi/network drops can cause dozens of songs to fail. Requiring the user to restart or reload the playlist was inefficient.
+- **Fix:**
+  - Added `DownloadQueueManager.retry_failed() -> int` and `retry_track(track_id) -> bool` to reset failed items to `Queued` and re-inject them into the worker queue without re-scraping Spotify.
+  - Added dynamic "Retry Failed (X)" button in the queue control bar and a "Retry Download" option in the right-click context menu.
+
+### 17. Persistent SQLite Music Archive & Local Deduplication (`archive.db`)
+- **Problem:** If a song was already downloaded (e.g. in `Singles/` or another playlist), enqueuing it in a new playlist would waste bandwidth re-downloading it from Musilon or YouTube.
+- **Fix:**
+  - Implemented `core/archive.py` (`ArchiveManager`) using SQLite with composite indexes on `(artist, title)`, `isrc`, and `downloaded_at`.
+  - Three-tier matching: matches by Spotify ID, ISRC, or normalized `(artist, title)` and verifies the audio file exists on disk.
+  - If a track exists in another directory, the queue manager copies the audio file and `.lrc` locally in ~2ms into the new playlist subfolder, tags the card with `Local Archive`, and completes instantly with 0 internet usage.
+  - `CompletedView` acts as an offline library with real-time search, track count stats, double-click playback (`os.startfile`), and Explorer integration. Pre-existing files in `downloads/` are automatically indexed in the background on startup.
+
 ---
 
 ## 4. Verification History
