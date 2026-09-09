@@ -81,6 +81,13 @@ class AudioTagger:
             logger.warning(f"Could not download or verify album art from {url}: {e}")
         return None
 
+    @staticmethod
+    def _resolve_clean_album(track: TrackMetadata, clean_title: str) -> str:
+        raw_album = clean_watermarks(track.album)
+        if not raw_album or raw_album.lower() in ("spotify playlist", "unknown album", "singles", "downloads"):
+            return clean_title or "Single"
+        return raw_album
+
     # -------------------------------------------------------------------------
     # FLAC Vorbis Tagging
     # -------------------------------------------------------------------------
@@ -90,7 +97,7 @@ class AudioTagger:
         audio.clear()
 
         clean_title = clean_watermarks(track.title)
-        clean_album = clean_watermarks(track.album) or clean_title or "Single"
+        clean_album = self._resolve_clean_album(track, clean_title)
 
         audio["TITLE"] = clean_title
         audio["ARTIST"] = track.artists
@@ -132,7 +139,7 @@ class AudioTagger:
             pass
 
         clean_title = clean_watermarks(track.title)
-        clean_album = clean_watermarks(track.album) or clean_title or "Single"
+        clean_album = self._resolve_clean_album(track, clean_title)
         rel_date_str = str(track.release_date) if track.release_date else ""
 
         audio.add(TIT2(encoding=3, text=clean_title))
@@ -170,7 +177,7 @@ class AudioTagger:
         audio.clear()
 
         clean_title = clean_watermarks(track.title)
-        clean_album = clean_watermarks(track.album) or clean_title or "Single"
+        clean_album = self._resolve_clean_album(track, clean_title)
 
         audio["\xa9nam"] = clean_title
         audio["\xa9ART"] = track.artist_str
@@ -200,7 +207,7 @@ class AudioTagger:
         audio.clear()
 
         clean_title = clean_watermarks(track.title)
-        clean_album = clean_watermarks(track.album) or clean_title or "Single"
+        clean_album = self._resolve_clean_album(track, clean_title)
 
         audio["TITLE"] = clean_title
         audio["ARTIST"] = track.artists

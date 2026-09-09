@@ -1,7 +1,7 @@
 import os
 import sys
 import logging
-from PyQt6.QtCore import Qt, QSize, QTimer
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QKeySequence, QShortcut, QColor
 from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import (
@@ -32,6 +32,8 @@ class MainWindow(FluentWindow):
     Windows 11 Fluent Design Main Application Window.
     Integrates Navigation Sidebar, Queue View, Completed View, and Settings View.
     """
+
+    sig_reload_library = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -102,6 +104,7 @@ class MainWindow(FluentWindow):
 
         # Connect Bridge to Completed View
         self.bridge.sig_completed.connect(self._on_track_completed)
+        self.sig_reload_library.connect(self.completed_view.reload_all)
 
         # Background scan of output directory to index any pre-existing downloads into archive
         output_dir = config.get("download.output_dir", "downloads")
@@ -157,8 +160,8 @@ class MainWindow(FluentWindow):
             indexed = self.archive_manager.scan_and_index_directory(output_dir)
             if indexed > 0:
                 logger.info(f"Startup scan indexed {indexed} tracks into download archive.")
-            # Safe reload of the completed library on the Qt event loop
-            QTimer.singleShot(0, self.completed_view.reload_all)
+            # Safe thread-safe reload of the completed library on the Qt event loop
+            self.sig_reload_library.emit()
         except Exception as e:
             logger.warning(f"Error during startup archive directory scan: {e}")
 

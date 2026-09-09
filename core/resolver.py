@@ -128,12 +128,17 @@ class CascadingAudioEngine:
         album_clean = sanitize_filename(track.album, max_length=40)
         track_num_str = f"{track.track_number:02d}"
 
-        base_name = naming_template.format(
-            artist=artist_clean,
-            title=title_clean,
-            album=album_clean,
-            track_num=track_num_str
-        )
+        try:
+            base_name = naming_template.format(
+                artist=artist_clean,
+                title=title_clean,
+                album=album_clean,
+                track_num=track_num_str,
+                track_number=track_num_str,
+                track=track_num_str
+            )
+        except Exception:
+            base_name = f"{artist_clean} - {title_clean}"
         base_name = sanitize_filename(base_name, max_length=120)
         base_dest_without_ext = os.path.join(output_dir, base_name)
 

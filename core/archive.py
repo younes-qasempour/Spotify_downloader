@@ -130,31 +130,6 @@ class ArchiveManager:
                     except sqlite3.OperationalError:
                         pass
 
-                    # One-time backfill of track_number from audio tags for existing files
-                    cur = conn.execute("SELECT spotify_id, file_path, track_number FROM downloaded_tracks")
-                    rows = cur.fetchall()
-                    if rows:
-                        try:
-                            import mutagen
-                            for r in rows:
-                                fpath = r["file_path"]
-                                if fpath and os.path.isfile(fpath):
-                                    try:
-                                        a = mutagen.File(fpath)
-                                        if a:
-                                            tr_val = a.get("tracknumber") or a.get("TRACKNUMBER") or a.get("trkn") or a.get("TRCK")
-                                            if tr_val:
-                                                raw_t = tr_val[0] if isinstance(tr_val, list) else str(tr_val)
-                                                if isinstance(raw_t, tuple):
-                                                    raw_t = raw_t[0]
-                                                t_num = int(str(raw_t).split("/")[0])
-                                                if t_num > 0:
-                                                    conn.execute("UPDATE downloaded_tracks SET track_number = ? WHERE spotify_id = ?", (t_num, r["spotify_id"]))
-                                    except Exception:
-                                        pass
-                        except ImportError:
-                            pass
-
                 logger.info(f"Initialized Archive database at: {self.db_path}")
             except Exception as e:
                 logger.error(f"Failed to initialize Archive database: {e}")
@@ -506,14 +481,15 @@ class ArchiveManager:
                 if collection_type == "album":
                     cur = conn.execute("""
                         SELECT * FROM downloaded_tracks
-                        WHERE album = ? OR collection_name = ?
+                        WHERE LOWER(album) = LOWER(?) OR LOWER(collection_name) = LOWER(?)
                         ORDER BY track_number ASC, title ASC
                     """, (collection_name, collection_name))
                 else:
                     cur = conn.execute("""
                         SELECT * FROM downloaded_tracks
-                        WHERE collection_name = ?
-                           OR (? = 'Singles' AND (collection_name IS NULL OR collection_name = '' OR collection_name = 'Singles'))
+                        WHERE (LOWER(collection_name) = LOWER(?)
+                           OR (LOWER(?) = 'singles' AND (collection_name IS NULL OR collection_name = '' OR LOWER(collection_name) = 'singles')))
+                          AND (collection_type IS NULL OR collection_type != 'album')
                         ORDER BY title ASC, downloaded_at ASC
                     """, (collection_name, collection_name))
                 results = []
@@ -664,7 +640,7 @@ class ArchiveManager:
                     except Exception:
                         pass
 
-                # Check if this folder belongs to a known album
+                # Check if this folder belongs to an album
                 is_album = False
                 with self._db_lock:
                     conn = self._get_connection()
@@ -679,6 +655,10 @@ class ArchiveManager:
                         pass
                     finally:
                         conn.close()
+
+                # If folder matches audio file's album metadata tag, identify as album
+                if not is_album and album and folder_name.lower() == album.lower() and folder_name.lower() not in ("singles", "downloads"):
+                    is_album = True
 
                 if is_album:
                     c_type = "album"

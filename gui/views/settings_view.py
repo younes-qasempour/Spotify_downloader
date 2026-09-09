@@ -143,13 +143,13 @@ class SettingsView(QScrollArea):
         self.user_input = LineEdit(musilon_card)
         self.user_input.setPlaceholderText("Username or Email")
         self.user_input.setText(config.get("musilon.username", ""))
-        self.user_input.textChanged.connect(lambda t: config.set("musilon.username", t))
+        self.user_input.textChanged.connect(self._on_user_changed)
 
         self.pwd_input = LineEdit(musilon_card)
         self.pwd_input.setPlaceholderText("Password")
         self.pwd_input.setEchoMode(LineEdit.EchoMode.Password)
         self.pwd_input.setText(config.get("musilon.password", ""))
-        self.pwd_input.textChanged.connect(lambda t: config.set("musilon.password", t))
+        self.pwd_input.textChanged.connect(self._on_pwd_changed)
 
         self.login_btn = PushButton(FluentIcon.PEOPLE, "Log In", musilon_card)
         self.login_btn.clicked.connect(self._login_musilon)
@@ -479,12 +479,22 @@ class SettingsView(QScrollArea):
         else:
             InfoBar.warning("Strict Musilon Mode", "YouTube fallback disabled. Downloads restricted strictly to Musilon.", duration=3500, parent=self)
 
-    def _paste_cookie(self):
+    def _on_user_changed(self, text: str):
+        val = text.strip()
+        config.set("musilon.username", val)
+        self.musilon_engine.username = val
+
+    def _on_pwd_changed(self, text: str):
+        val = text.strip()
+        config.set("musilon.password", val)
+        self.musilon_engine.password = val
+
+    def _paste_cookie(self, *args):
         text = QApplication.clipboard().text().strip()
         if text:
             self.cookie_input.setText(text)
 
-    def _login_musilon(self):
+    def _login_musilon(self, *args):
         user = self.user_input.text().strip()
         pwd = self.pwd_input.text().strip()
         if not user or not pwd:
@@ -518,7 +528,7 @@ class SettingsView(QScrollArea):
             self._set_status_badge(False)
             InfoBar.error("Login Failed", msg, duration=5000, parent=self)
 
-    def _test_musilon(self):
+    def _test_musilon(self, *args):
         self.test_btn.setEnabled(False)
         self.test_btn.setText("Connecting...")
         self.result_label.setText("Testing connection to musilon.com...")
@@ -563,7 +573,7 @@ class SettingsView(QScrollArea):
                 "padding: 3px 10px; border-radius: 10px; font-weight: bold; border: 1px solid rgba(239, 68, 68, 0.4);"
             )
 
-    def _validate_spotify(self):
+    def _validate_spotify(self, *args):
         cid = self.spotify_id.text().strip()
         sec = self.spotify_secret.text().strip()
         if not cid or not sec:
@@ -591,7 +601,7 @@ class SettingsView(QScrollArea):
         else:
             InfoBar.error("Spotify Error", msg, duration=5000, parent=self)
 
-    def _browse_folder(self):
+    def _browse_folder(self, *args):
         cur = self.folder_input.text().strip() or os.path.expanduser("~/Music")
         chosen = QFileDialog.getExistingDirectory(self, "Select Download Directory", cur)
         if chosen:
@@ -600,7 +610,7 @@ class SettingsView(QScrollArea):
             config.set("download.output_dir", norm)
             InfoBar.success("Saved", f"Download directory updated: {norm}", duration=2500, parent=self)
 
-    def _open_folder(self):
+    def _open_folder(self, *args):
         path = self.folder_input.text().strip()
         if os.path.exists(path):
             os.startfile(path)
@@ -624,7 +634,7 @@ class SettingsView(QScrollArea):
             )
             self.ffmpeg_status_label.setText("FFmpeg is not found. Click the button to auto-download.")
 
-    def _download_ffmpeg(self):
+    def _download_ffmpeg(self, *args):
         self.download_ffmpeg_btn.setEnabled(False)
         self.download_ffmpeg_btn.setText("Downloading...")
         self.ffmpeg_status_label.setText("Connecting to repository...")

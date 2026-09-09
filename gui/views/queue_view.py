@@ -186,12 +186,18 @@ class QueueView(QWidget):
         else:
             self.paste_btn.setIcon(FluentIcon.PASTE)
 
-    def _paste_from_clipboard(self):
+    def _paste_from_clipboard(self, *args):
         text = QApplication.clipboard().text().strip()
         if text:
             self.url_input.setText(text)
 
-    def _on_enqueue_clicked(self):
+    def _on_enqueue_clicked(self, *args):
+        # Dynamically synchronize credentials from live configuration
+        self.spotify_client.update_credentials(
+            client_id=config.get("spotify.client_id", ""),
+            client_secret=config.get("spotify.client_secret", "")
+        )
+
         url = self.url_input.text().strip()
         if not url:
             InfoBar.warning(
@@ -277,7 +283,7 @@ class QueueView(QWidget):
             parent=self
         )
 
-    def _on_start_clicked(self):
+    def _on_start_clicked(self, *args):
         count = self.qm.start_all()
         self.pause_btn.setText("Pause")
         self.pause_btn.setIcon(FluentIcon.PAUSE)
@@ -285,7 +291,7 @@ class QueueView(QWidget):
         self._update_metrics()
         self.table.viewport().update()
 
-    def _on_stop_clicked(self):
+    def _on_stop_clicked(self, *args):
         self.qm.stop()
         self.pause_btn.setText("Pause")
         self.pause_btn.setIcon(FluentIcon.PAUSE)
@@ -293,7 +299,7 @@ class QueueView(QWidget):
         self._update_metrics()
         self.table.viewport().update()
 
-    def _on_pause_clicked(self):
+    def _on_pause_clicked(self, *args):
         if self.qm.is_paused():
             self.qm.resume()
             self.pause_btn.setText("Pause")
@@ -307,7 +313,7 @@ class QueueView(QWidget):
         self._update_metrics()
         self.table.viewport().update()
 
-    def _on_retry_failed_clicked(self):
+    def _on_retry_failed_clicked(self, *args):
         count = self.qm.retry_failed()
         if count > 0:
             InfoBar.success("Retrying Downloads", f"Re-queued {count} failed track(s).", duration=3000, parent=self)
@@ -316,7 +322,7 @@ class QueueView(QWidget):
         self._update_metrics()
         self.table.viewport().update()
 
-    def _on_clear_clicked(self):
+    def _on_clear_clicked(self, *args):
         self.model.clear_completed()
         self.qm.clear_completed()
         self._update_metrics()

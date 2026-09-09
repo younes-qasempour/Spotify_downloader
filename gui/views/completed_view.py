@@ -123,7 +123,7 @@ class CollectionCard(CardWidget):
 
         if on_browse:
             self.browse_btn = PushButton(FluentIcon.MUSIC, "Browse Tracks", self)
-            self.browse_btn.clicked.connect(on_browse)
+            self.browse_btn.clicked.connect(lambda checked=False: self.on_browse() if self.on_browse else None)
             btn_layout.addWidget(self.browse_btn)
 
         self.open_btn = PrimaryPushButton(FluentIcon.FOLDER, "Open Folder", self)
@@ -140,7 +140,7 @@ class CollectionCard(CardWidget):
                 return
         super().mousePressEvent(event)
 
-    def _open_folder(self):
+    def _open_folder(self, *args):
         if self.folder_path and os.path.isdir(self.folder_path):
             os.startfile(self.folder_path)
         else:
@@ -516,7 +516,7 @@ class CompletedView(QWidget):
                 folder_path=folder,
                 icon=FluentIcon.FOLDER,
                 cover_path=cover_path,
-                on_browse=lambda n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "playlist", cp, fp, sub),
+                on_browse=lambda *args, n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "playlist", cp, fp, sub),
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
@@ -572,7 +572,7 @@ class CompletedView(QWidget):
                 folder_path=folder,
                 icon=FluentIcon.MUSIC,
                 cover_path=cover_path,
-                on_browse=lambda n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "album", cp, fp, sub),
+                on_browse=lambda *args, n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "album", cp, fp, sub),
                 parent=self.albums_container
             )
             self.albums_layout.insertWidget(self.albums_layout.count() - 1, card)
@@ -589,7 +589,7 @@ class CompletedView(QWidget):
         else:
             self.back_btn.setText("Back to Playlists")
 
-        self.banner_title.setText(name)
+        self.banner_title.setText(str(name))
         self.banner_desc.setText(subtitle if subtitle else ("Playlist" if coll_type == "playlist" else "Album"))
 
         # Load banner thumbnail if available
@@ -681,7 +681,7 @@ class CompletedView(QWidget):
 
         self.table.viewport().update()
 
-    def _on_back_to_collections(self):
+    def _on_back_to_collections(self, *args):
         """Returns from collection tracks back to the Playlists or Albums grid."""
         self.coll_banner.setVisible(False)
         target_tab = "albums" if self._current_collection_type == "album" else "playlists"
@@ -694,7 +694,7 @@ class CompletedView(QWidget):
         self.segmented.setCurrentItem(target_tab)
         self._switch_tab(target_idx)
 
-    def _open_current_collection_folder(self):
+    def _open_current_collection_folder(self, *args):
         """Opens current collection folder in Windows Explorer."""
         folder = getattr(self, "_current_collection_folder", "")
         if folder and os.path.isdir(folder):
@@ -722,7 +722,7 @@ class CompletedView(QWidget):
         """Immediately updates views upon track completion."""
         self.reload_all()
 
-    def _on_rescan_clicked(self):
+    def _on_rescan_clicked(self, *args):
         out_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))
         if os.path.isdir(out_dir):
             indexed = self.archive.scan_and_index_directory(out_dir)
@@ -731,7 +731,7 @@ class CompletedView(QWidget):
         else:
             InfoBar.warning("Folder Not Found", f"Directory does not exist: {out_dir}", parent=self)
 
-    def _open_download_folder(self):
+    def _open_download_folder(self, *args):
         out_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))
         if os.path.exists(out_dir):
             os.startfile(out_dir)

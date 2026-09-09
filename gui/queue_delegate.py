@@ -334,7 +334,7 @@ class TrackCardDelegate(QStyledItemDelegate):
 
         # Subtitle (Artist • Album • Duration)
         dur_str = format_duration(item.track.duration_ms)
-        album_part = f" • {item.track.album}" if item.track.album else ""
+        album_part = f" • {item.track.album}" if (item.track.album and item.track.album.lower() not in ("spotify playlist", "unknown album", "singles", "downloads")) else ""
         sub_text = f"{item.track.artist_str}{album_part} • {dur_str}"
 
         painter.setPen(TEXT_SECONDARY)

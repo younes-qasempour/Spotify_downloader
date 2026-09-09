@@ -329,12 +329,17 @@ class DownloadQueueManager:
                 file_ext = os.path.splitext(src_file)[1]
                 artist_clean = sanitize_filename(track.primary_artist, max_length=40)
                 title_clean = sanitize_filename(track.title, max_length=40)
-                base_name = naming_tmpl.format(
-                    artist=artist_clean,
-                    title=title_clean,
-                    album=sanitize_filename(track.album, max_length=40),
-                    track_num=f"{track.track_number:02d}"
-                )
+                try:
+                    base_name = naming_tmpl.format(
+                        artist=artist_clean,
+                        title=title_clean,
+                        album=sanitize_filename(track.album, max_length=40),
+                        track_num=f"{track.track_number:02d}",
+                        track_number=f"{track.track_number:02d}",
+                        track=f"{track.track_number:02d}"
+                    )
+                except Exception:
+                    base_name = f"{artist_clean} - {title_clean}"
                 base_name = sanitize_filename(base_name, max_length=120)
                 target_dest = os.path.normpath(os.path.join(output_dir, f"{base_name}{file_ext}"))
 
