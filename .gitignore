@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Executables & Third-party Binaries
+bin/
+*.exe
+*.dll
+
+# Config & Credentials (NEVER commit secrets or session tokens)
+config.json
+cookies.json
+*.session
+*.env
+
+# Local Music Downloads & Temporary Streams
+downloads/
+Music/
+*.part
+*.ytdl
+*.lrc.temp
+*.mp3
+*.flac
+*.m4a
+*.opus
+*.wav
+
+# Scratch & Temporary Testing
+scratch/
+*.log
+*.tmp
+
+# PyInstaller Build & Dist
+build/
+dist/
+*.spec
+!build_windows.spec
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

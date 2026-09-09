@@ -1,0 +1,9 @@
+# Windows Spotify Downloader Dependencies
+PyQt6>=6.6.0
+PyQt6-Fluent-Widgets>=1.6.0
+spotipy>=2.24.0
+yt-dlp>=2024.0.0
+mutagen>=1.47.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+Pillow>=10.0.0

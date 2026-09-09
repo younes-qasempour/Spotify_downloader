@@ -1,0 +1,33 @@
+{
+  "musilon": {
+    "session_cookie": "",
+    "username": "",
+    "password": "",
+    "enabled": true,
+    "arcsjs": "",
+    "arcsjsc": ""
+  },
+  "spotify": {
+    "client_id": "",
+    "client_secret": ""
+  },
+  "download": {
+    "output_dir": "downloads",
+    "naming_template": "{artist} - {title}",
+    "save_lrc": true,
+    "embed_lyrics": true,
+    "embed_cover_art": true,
+    "allow_fallback": true,
+    "quality_priority": [
+      "musilon_flac_16",
+      "musilon_flac_24",
+      "musilon_mp3_320",
+      "ytm_opus"
+    ],
+    "concurrency": 2
+  },
+  "ui": {
+    "theme": "Dark",
+    "clipboard_auto_detect": true
+  }
+}
