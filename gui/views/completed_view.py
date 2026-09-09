@@ -4,8 +4,9 @@ from typing import Optional, List, Dict, Any
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QHeaderView, QMenu, QApplication,
-    QStackedWidget, QFrame
+    QStackedWidget, QFrame, QLabel
 )
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath
 from qfluentwidgets import (
     TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
     FluentIcon, InfoBar, LineEdit, CaptionLabel, StrongBodyLabel, BodyLabel,
@@ -25,7 +26,7 @@ from core.config import config
 class CollectionCard(CardWidget):
     """
     Sleek modern card representing a downloaded Playlist or Album.
-    Provides folder info, track counts, and quick actions to open folder or browse tracks.
+    Provides folder thumbnail, info, track counts, and quick actions to open folder or browse tracks.
     """
 
     def __init__(
@@ -34,15 +35,18 @@ class CollectionCard(CardWidget):
         subtitle: str,
         folder_path: str,
         icon: FluentIcon = FluentIcon.FOLDER,
+        cover_path: Optional[str] = None,
         on_browse=None,
         parent=None
     ):
         super().__init__(parent)
         self.folder_path = folder_path
+        self.cover_path = cover_path
         self.on_browse = on_browse
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setContentsMargins(16, 12, 18, 12)
         layout.setSpacing(16)
 
         self.setStyleSheet("""
@@ -57,10 +61,47 @@ class CollectionCard(CardWidget):
             }
         """)
 
-        # 1. Collection Icon
-        icon_widget = IconWidget(icon, self)
-        icon_widget.setFixedSize(36, 36)
-        layout.addWidget(icon_widget)
+        # 1. Collection Cover Thumbnail / Icon (54x54)
+        self.thumb_label = QLabel(self)
+        self.thumb_label.setFixedSize(54, 54)
+        self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.thumb_label.setStyleSheet("""
+            QLabel {
+                background-color: #2b2b2b;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 8px;
+            }
+        """)
+
+        loaded_pixmap = False
+        if cover_path and os.path.isfile(cover_path):
+            try:
+                img = QImage(cover_path)
+                if not img.isNull():
+                    scaled = img.scaled(54, 54, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    rounded = QPixmap(54, 54)
+                    rounded.fill(Qt.GlobalColor.transparent)
+                    p = QPainter(rounded)
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    path = QPainterPath()
+                    path.addRoundedRect(0, 0, 54, 54, 8, 8)
+                    p.setClipPath(path)
+                    p.drawPixmap(0, 0, QPixmap.fromImage(scaled))
+                    p.end()
+                    self.thumb_label.setPixmap(rounded)
+                    loaded_pixmap = True
+            except Exception:
+                pass
+
+        if not loaded_pixmap:
+            icon_w = IconWidget(icon, self.thumb_label)
+            icon_w.setFixedSize(30, 30)
+            icon_lay = QHBoxLayout(self.thumb_label)
+            icon_lay.setContentsMargins(0, 0, 0, 0)
+            icon_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon_lay.addWidget(icon_w)
+
+        layout.addWidget(self.thumb_label)
 
         # 2. Text Metadata
         text_layout = QVBoxLayout()
@@ -91,6 +132,14 @@ class CollectionCard(CardWidget):
 
         layout.addLayout(btn_layout)
 
+    def mousePressEvent(self, event):
+        """Clicking anywhere on the collection card opens the collection songs."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.on_browse:
+                self.on_browse()
+                return
+        super().mousePressEvent(event)
+
     def _open_folder(self):
         if self.folder_path and os.path.isdir(self.folder_path):
             os.startfile(self.folder_path)
@@ -119,6 +168,10 @@ class CompletedView(QWidget):
 
         self.model = TrackQueueModel(self)
         self.delegate = TrackCardDelegate(self)
+
+        self._current_collection_name: Optional[str] = None
+        self._current_collection_type: str = "playlist"
+        self._current_collection_folder: str = ""
 
         self._init_ui()
         self.reload_all()
@@ -184,6 +237,48 @@ class CompletedView(QWidget):
         self.table_page = QWidget(self)
         table_layout = QVBoxLayout(self.table_page)
         table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(10)
+
+        # Collection Context Banner (displayed when browsing a specific playlist or album)
+        self.coll_banner = QFrame(self.table_page)
+        self.coll_banner.setStyleSheet("""
+            QFrame {
+                background-color: #1f1f1f;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+            }
+        """)
+        self.coll_banner.setVisible(False)
+        banner_layout = QHBoxLayout(self.coll_banner)
+        banner_layout.setContentsMargins(14, 10, 16, 10)
+        banner_layout.setSpacing(14)
+
+        self.back_btn = PushButton(FluentIcon.LEFT_ARROW, "Back to Playlists", self.coll_banner)
+        self.back_btn.clicked.connect(self._on_back_to_collections)
+        banner_layout.addWidget(self.back_btn)
+
+        self.banner_thumb = QLabel(self.coll_banner)
+        self.banner_thumb.setFixedSize(44, 44)
+        self.banner_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.banner_thumb.setStyleSheet("background-color: #2a2a2a; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.08);")
+        banner_layout.addWidget(self.banner_thumb)
+
+        banner_text_box = QVBoxLayout()
+        banner_text_box.setSpacing(2)
+        self.banner_title = StrongBodyLabel("", self.coll_banner)
+        self.banner_title.setStyleSheet("font-size: 15px; font-weight: 600; color: #FFFFFF;")
+        self.banner_desc = CaptionLabel("", self.coll_banner)
+        self.banner_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        banner_text_box.addWidget(self.banner_title)
+        banner_text_box.addWidget(self.banner_desc)
+        banner_layout.addLayout(banner_text_box, 1)
+
+        self.banner_open_folder_btn = ToolButton(FluentIcon.FOLDER, self.coll_banner)
+        self.banner_open_folder_btn.setToolTip("Open Folder in Explorer")
+        self.banner_open_folder_btn.clicked.connect(self._open_current_collection_folder)
+        banner_layout.addWidget(self.banner_open_folder_btn)
+
+        table_layout.addWidget(self.coll_banner)
 
         self.table = TableView(self.table_page)
         self.table.setModel(self.model)
@@ -257,10 +352,19 @@ class CompletedView(QWidget):
         self.stacked.setCurrentIndex(0)
 
     def _switch_tab(self, index: int):
+        if index != 0 or not self._current_collection_name:
+            # Clear collection filter banner when switching tabs or clicking All Songs
+            self._current_collection_name = None
+            if hasattr(self, "coll_banner"):
+                self.coll_banner.setVisible(False)
+
         self.stacked.setCurrentIndex(index)
         search_query = self.search_input.text().strip()
         if index == 0:
-            self.reload_from_archive(search_query)
+            if self._current_collection_name:
+                self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
+            else:
+                self.reload_from_archive(search_query)
         elif index == 1:
             self.reload_playlists(search_query)
         elif index == 2:
@@ -282,7 +386,10 @@ class CompletedView(QWidget):
 
         # Refresh all tabs so switching is instantaneous
         search_query = self.search_input.text().strip()
-        self.reload_from_archive(search_query)
+        if self._current_collection_name and self.stacked.currentIndex() == 0:
+            self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
+        else:
+            self.reload_from_archive(search_query)
         self.reload_playlists(search_query)
         self.reload_albums(search_query)
 
@@ -357,6 +464,7 @@ class CompletedView(QWidget):
             track_count = pl["track_count"]
             sz_str = pl["size_str"]
             folder = pl["folder_path"]
+            cover_path = pl.get("cover_path", "")
             subtitle = f"{track_count} song(s) • {sz_str}  |  {folder}"
 
             card = CollectionCard(
@@ -364,7 +472,8 @@ class CompletedView(QWidget):
                 subtitle=subtitle,
                 folder_path=folder,
                 icon=FluentIcon.FOLDER,
-                on_browse=lambda n=name: self._browse_collection(n),
+                cover_path=cover_path,
+                on_browse=lambda n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "playlist", cp, fp, sub),
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
@@ -411,6 +520,7 @@ class CompletedView(QWidget):
             track_count = alb["track_count"]
             sz_str = alb["size_str"]
             folder = alb["folder_path"]
+            cover_path = alb.get("cover_path", "")
             subtitle = f"by {artist} • {track_count} song(s) • {sz_str}"
 
             card = CollectionCard(
@@ -418,21 +528,128 @@ class CompletedView(QWidget):
                 subtitle=subtitle,
                 folder_path=folder,
                 icon=FluentIcon.MUSIC,
-                on_browse=lambda n=name: self._browse_collection(n),
+                cover_path=cover_path,
+                on_browse=lambda n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "album", cp, fp, sub),
                 parent=self.albums_container
             )
             self.albums_layout.insertWidget(self.albums_layout.count() - 1, card)
 
-    def _browse_collection(self, name: str):
-        """Switches to Songs view and pre-fills search with collection or album name."""
-        self.search_input.setText(name)
-        self.segmented.setCurrentItem("tracks")
-        self._switch_tab(0)
+    def _browse_collection(self, name: str, coll_type: str = "playlist", cover_path: str = "", folder_path: str = "", subtitle: str = ""):
+        """Opens collection and displays all of its tracks inside the GUI with a breadcrumb header."""
+        self._current_collection_name = name
+        self._current_collection_type = coll_type
+        self._current_collection_folder = folder_path
+
+        # Update Back button label
+        if coll_type == "album":
+            self.back_btn.setText("Back to Albums")
+        else:
+            self.back_btn.setText("Back to Playlists")
+
+        self.banner_title.setText(name)
+        self.banner_desc.setText(subtitle if subtitle else ("Playlist" if coll_type == "playlist" else "Album"))
+
+        # Load banner thumbnail if available
+        loaded_thumb = False
+        if cover_path and os.path.isfile(cover_path):
+            try:
+                img = QImage(cover_path)
+                if not img.isNull():
+                    scaled = img.scaled(44, 44, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    rounded = QPixmap(44, 44)
+                    rounded.fill(Qt.GlobalColor.transparent)
+                    p = QPainter(rounded)
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    path = QPainterPath()
+                    path.addRoundedRect(0, 0, 44, 44, 6, 6)
+                    p.setClipPath(path)
+                    p.drawPixmap(0, 0, QPixmap.fromImage(scaled))
+                    p.end()
+                    self.banner_thumb.setPixmap(rounded)
+                    loaded_thumb = True
+            except Exception:
+                pass
+
+        if not loaded_thumb:
+            self.banner_thumb.setPixmap(QPixmap())
+            self.banner_thumb.setText("📁" if coll_type == "playlist" else "💿")
+
+        self.coll_banner.setVisible(True)
+
+        # Clear search input temporarily when opening a collection
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
+
+        # Load tracks belonging to this collection
+        self._load_collection_tracks(name, coll_type)
+
+        # Switch to table page
+        self.stacked.setCurrentIndex(0)
+
+    def _load_collection_tracks(self, name: str, coll_type: str = "playlist", filter_query: str = ""):
+        """Loads all tracks from SQLite archive belonging specifically to this collection."""
+        rows = self.archive.get_collection_tracks(name, coll_type)
+        self.model.clear()
+
+        q = filter_query.strip().lower()
+        for r in rows:
+            if q:
+                t_title = r.get("title", "").lower()
+                t_artist = r.get("artist", "").lower()
+                t_album = r.get("album", "").lower()
+                if q not in t_title and q not in t_artist and q not in t_album:
+                    continue
+
+            track = TrackMetadata(
+                id=r["spotify_id"],
+                title=r["title"],
+                artists=[a.strip() for a in r["artist"].split(",")],
+                album=r.get("album", ""),
+                release_date="",
+                duration_ms=r.get("duration_ms", 0),
+                collection_name=r.get("collection_name", ""),
+                collection_type=r.get("collection_type", "track")
+            )
+            item = QueueItem(
+                track=track,
+                status="Completed",
+                source_type=r.get("source_type", "Musilon"),
+                quality_badge=r.get("quality_badge", "FLAC 16"),
+                progress_percent=100.0,
+                output_path=r.get("file_path", "")
+            )
+            self.model.add_item(item)
+            row = self.model.rowCount() - 1
+            if row >= 0:
+                self.table.setRowHeight(row, 76)
+
+        self.table.viewport().update()
+
+    def _on_back_to_collections(self):
+        """Returns from collection tracks back to the Playlists or Albums grid."""
+        self.coll_banner.setVisible(False)
+        target_tab = "albums" if self._current_collection_type == "album" else "playlists"
+        target_idx = 2 if self._current_collection_type == "album" else 1
+        self._current_collection_name = None
+        self.segmented.setCurrentItem(target_tab)
+        self._switch_tab(target_idx)
+
+    def _open_current_collection_folder(self):
+        """Opens current collection folder in Windows Explorer."""
+        folder = getattr(self, "_current_collection_folder", "")
+        if folder and os.path.isdir(folder):
+            os.startfile(folder)
+        else:
+            self._open_download_folder()
 
     def _on_search_changed(self, text: str):
         curr = self.stacked.currentIndex()
         if curr == 0:
-            self.reload_from_archive(text.strip())
+            if self._current_collection_name:
+                self._load_collection_tracks(self._current_collection_name, self._current_collection_type, text.strip())
+            else:
+                self.reload_from_archive(text.strip())
         elif curr == 1:
             self.reload_playlists(text.strip())
         elif curr == 2:

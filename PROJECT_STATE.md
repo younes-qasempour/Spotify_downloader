@@ -146,6 +146,28 @@ d:\Spotify-Downloader\
   - If a track exists in another directory, the queue manager copies the audio file and `.lrc` locally in ~2ms into the new playlist subfolder, tags the card with `Local Archive`, and completes instantly with 0 internet usage.
   - `CompletedView` acts as an offline library with real-time search, track count stats, double-click playback (`os.startfile`), and Explorer integration. Pre-existing files in `downloads/` are automatically indexed in the background on startup.
 
+### 18. High-Performance Cover Art Extraction & Virtualized Thumbnail Cache
+- **Problem:** Downloaded tracks in the All Songs table lacked album artwork thumbnails because remote URLs were volatile and not indexed offline.
+- **Fix:**
+  - Implemented `extract_embedded_cover(file_path)` in `core/utils.py` supporting FLAC, MP3 (ID3 APIC), Opus/OGG (metadata_block_picture base64 decode), and M4A/MP4 (covr atom).
+  - Built thread-safe `ThumbnailCache` with `ThumbnailSignalEmitter` for background extraction without UI lag.
+  - Connected `sig_loaded` Qt signals to update TableView cells smoothly.
+
+### 19. Clean Album vs. Playlist Separation
+- **Problem:** Playlists and placeholder albums (like "Spotify Playlist") were polluting the Albums tab.
+- **Fix:**
+  - Filtered `ArchiveManager.get_albums()` to strictly require `collection_type = 'album'` or genuine album tags, rejecting placeholders.
+  - Added dedicated empty states for unpopulated tabs.
+
+### 20. In-App Playlist / Album Navigation & Cover Thumbnails
+- **Problem:** Clicking playlist cards did not open their songs in the GUI, and playlist/album cards lacked thumbnail covers.
+- **Fix:**
+  - `TrackMetadata` now records `collection_cover_url` from Spotify embed/API.
+  - In `core/queue_manager.py`, the playlist's cover art is downloaded and saved as `{folder}/cover.jpg`.
+  - In `core/archive.py`, `resolve_collection_cover()` automatically locates `cover.jpg` or derives it from audio tracks.
+  - `CollectionCard` displays a rounded 54×54 cover thumbnail and handles full-card mouse clicks (`mousePressEvent`) with pointing hand cursor.
+  - Clicking any playlist or album card opens the collection view with a navigation banner (`[ ← Back to Playlists ]`, thumbnail, title, stats, and Explorer button), displaying only that collection's songs while strictly preserving individual song cover art.
+
 ---
 
 ## 4. Verification History

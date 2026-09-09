@@ -208,3 +208,43 @@ def ensure_or_download_ffmpeg(progress_callback: Optional[Callable[[float, str],
     logger.info("FFmpeg missing. Initiating automatic download...")
     return download_ffmpeg(progress_callback=progress_callback)
 
+
+def extract_embedded_cover(file_path: str) -> Optional[bytes]:
+    """Extracts embedded front cover artwork bytes directly from a local audio file."""
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    try:
+        import base64
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".flac":
+            from mutagen.flac import FLAC
+            audio = FLAC(file_path)
+            if audio.pictures:
+                return audio.pictures[0].data
+        elif ext == ".mp3":
+            from mutagen.mp3 import MP3
+            audio = MP3(file_path)
+            if audio.tags:
+                apics = audio.tags.getall("APIC")
+                if apics:
+                    return apics[0].data
+        elif ext in (".opus", ".ogg"):
+            import mutagen
+            from mutagen.flac import Picture
+            audio = mutagen.File(file_path)
+            if audio:
+                pics = audio.get("metadata_block_picture", [])
+                if pics:
+                    raw = base64.b64decode(pics[0])
+                    return Picture(raw).data
+        elif ext == ".m4a":
+            from mutagen.mp4 import MP4
+            audio = MP4(file_path)
+            covr = audio.get("covr", [])
+            if covr:
+                return bytes(covr[0])
+    except Exception:
+        pass
+    return None
+
+

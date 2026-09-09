@@ -97,7 +97,12 @@ class ThumbnailCache:
             pix_bytes = None
             try:
                 if os.path.isfile(key):
-                    pix_bytes = extract_embedded_cover(key)
+                    ext = os.path.splitext(key)[1].lower()
+                    if ext in (".jpg", ".jpeg", ".png", ".webp"):
+                        with open(key, "rb") as f_img:
+                            pix_bytes = f_img.read()
+                    else:
+                        pix_bytes = extract_embedded_cover(key)
                 elif key.startswith("http://") or key.startswith("https://"):
                     resp = requests.get(key, timeout=6)
                     if resp.status_code == 200:

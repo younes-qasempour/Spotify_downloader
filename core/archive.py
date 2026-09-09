@@ -6,8 +6,53 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 from core.spotify_client import TrackMetadata
+from core.utils import extract_embedded_cover
 
 logger = logging.getLogger("core.archive")
+
+
+def resolve_collection_cover(folder_path: str, sample_file: str = "") -> str:
+    """
+    Checks if a collection folder has a cover image (cover.jpg, cover.png, etc.).
+    If not, extracts embedded artwork from sample_file (or first audio file found in folder)
+    and saves it to folder_path/cover.jpg so it can be displayed as the collection's thumbnail.
+    Returns the path to the cover image if found/created, or empty string.
+    """
+    if not folder_path or not os.path.isdir(folder_path):
+        return ""
+
+    for ext in (".jpg", ".jpeg", ".png", ".webp"):
+        candidate = os.path.join(folder_path, f"cover{ext}")
+        if os.path.isfile(candidate):
+            return candidate
+        candidate_f = os.path.join(folder_path, f"folder{ext}")
+        if os.path.isfile(candidate_f):
+            return candidate_f
+
+    # If no cover image exists, attempt extraction from sample_file or first audio file
+    target_audio = sample_file if (sample_file and os.path.isfile(sample_file)) else None
+    if not target_audio:
+        try:
+            for fname in os.listdir(folder_path):
+                if os.path.splitext(fname)[1].lower() in (".flac", ".mp3", ".opus", ".m4a", ".ogg"):
+                    target_audio = os.path.join(folder_path, fname)
+                    break
+        except Exception:
+            pass
+
+    if target_audio and os.path.isfile(target_audio):
+        try:
+            art_bytes = extract_embedded_cover(target_audio)
+            if art_bytes and len(art_bytes) > 500:
+                cover_out = os.path.join(folder_path, "cover.jpg")
+                with open(cover_out, "wb") as f:
+                    f.write(art_bytes)
+                logger.info(f"Generated collection cover from audio track: {cover_out}")
+                return cover_out
+        except Exception as e:
+            logger.debug(f"Could not extract collection cover from audio file: {e}")
+
+    return ""
 
 
 class ArchiveManager:
@@ -314,6 +359,8 @@ class ArchiveManager:
                     else:
                         sz_str = f"{sz_bytes / (1024 ** 2):.1f} MB"
 
+                    cover_path = resolve_collection_cover(folder_path, sample_file)
+
                     results.append({
                         "name": pl_name,
                         "type": r["collection_type"] or "playlist",
@@ -321,6 +368,7 @@ class ArchiveManager:
                         "total_size_bytes": sz_bytes,
                         "size_str": sz_str,
                         "folder_path": folder_path,
+                        "cover_path": cover_path,
                         "latest_download": r["latest_download"]
                     })
                 return results
@@ -375,6 +423,8 @@ class ArchiveManager:
                     else:
                         sz_str = f"{sz_bytes / (1024 ** 2):.1f} MB"
 
+                    cover_path = resolve_collection_cover(folder_path, sample_file)
+
                     results.append({
                         "name": alb_name,
                         "artist": artist_name,
@@ -382,11 +432,42 @@ class ArchiveManager:
                         "total_size_bytes": sz_bytes,
                         "size_str": sz_str,
                         "folder_path": folder_path,
+                        "cover_path": cover_path,
                         "latest_download": r["latest_download"]
                     })
                 return results
             except Exception as e:
                 logger.error(f"Failed to aggregate albums: {e}")
+                return []
+            finally:
+                conn.close()
+
+    def get_collection_tracks(self, collection_name: str, collection_type: str = "playlist") -> List[Dict[str, Any]]:
+        """Retrieves all tracks belonging to a specific collection (playlist or album)."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                if collection_type == "album":
+                    cur = conn.execute("""
+                        SELECT * FROM downloaded_tracks
+                        WHERE album = ? OR collection_name = ?
+                        ORDER BY track_number ASC, downloaded_at DESC
+                    """, (collection_name, collection_name))
+                else:
+                    cur = conn.execute("""
+                        SELECT * FROM downloaded_tracks
+                        WHERE collection_name = ?
+                           OR (? = 'Singles' AND (collection_name IS NULL OR collection_name = '' OR collection_name = 'Singles'))
+                        ORDER BY downloaded_at DESC
+                    """, (collection_name, collection_name))
+                results = []
+                for row in cur.fetchall():
+                    item = dict(row)
+                    if os.path.isfile(item.get("file_path", "")):
+                        results.append(item)
+                return results
+            except Exception as e:
+                logger.error(f"Failed to fetch collection tracks for '{collection_name}': {e}")
                 return []
             finally:
                 conn.close()

@@ -33,6 +33,7 @@ class TrackMetadata:
     cover_url: str = ""
     collection_type: str = "track"   # "track", "album", "playlist"
     collection_name: str = "Singles" # Playlist title, album title, or "Singles"
+    collection_cover_url: str = ""   # Playlist or album cover art URL
 
     @property
     def primary_artist(self) -> str:
@@ -168,7 +169,8 @@ class SpotifyClient:
                     tracks.append(self._format_track_item(
                         item,
                         collection_type="album",
-                        collection_name=album_name
+                        collection_name=album_name,
+                        collection_cover_url=cover_url
                     ))
                 if results.get("next"):
                     results = self._sp.next(results)
@@ -178,12 +180,16 @@ class SpotifyClient:
 
         elif entity_type == "playlist":
             pl_title = "Spotify Playlist"
+            pl_cover = ""
             try:
-                pl_meta = self._sp.playlist(entity_id, fields="name")
-                if pl_meta and pl_meta.get("name"):
-                    pl_title = clean_watermarks(pl_meta["name"])
+                pl_meta = self._sp.playlist(entity_id, fields="name,images")
+                if pl_meta:
+                    if pl_meta.get("name"):
+                        pl_title = clean_watermarks(pl_meta["name"])
+                    if pl_meta.get("images"):
+                        pl_cover = pl_meta["images"][0].get("url", "")
             except Exception as e:
-                logger.debug(f"Could not fetch playlist title: {e}")
+                logger.debug(f"Could not fetch playlist metadata: {e}")
 
             tracks: List[TrackMetadata] = []
             offset = 0
@@ -215,7 +221,8 @@ class SpotifyClient:
                         tracks.append(self._format_track_item(
                             track_item,
                             collection_type="playlist",
-                            collection_name=pl_title
+                            collection_name=pl_title,
+                            collection_cover_url=pl_cover
                         ))
 
                 if results.get("next"):
@@ -234,7 +241,8 @@ class SpotifyClient:
         self,
         item: Dict[str, Any],
         collection_type: str = "track",
-        collection_name: str = "Singles"
+        collection_name: str = "Singles",
+        collection_cover_url: str = ""
     ) -> TrackMetadata:
         artists = [a.get("name", "") for a in item.get("artists", []) if a.get("name")]
         album_data = item.get("album", {})
@@ -259,7 +267,8 @@ class SpotifyClient:
             isrc=isrc,
             cover_url=cover_url,
             collection_type=collection_type,
-            collection_name=collection_name
+            collection_name=collection_name,
+            collection_cover_url=collection_cover_url
         )
 
     # -------------------------------------------------------------------------
@@ -299,6 +308,7 @@ class SpotifyClient:
                 r_date = r_date.split("T")[0]
             release_date = str(r_date) if r_date else ""
 
+            collection_cover = cover_url
             tracks: List[TrackMetadata] = []
             for idx, t in enumerate(track_list, start=1):
                 tid = t.get("uri", "").split(":")[-1] or t.get("id", f"track_{idx}")
@@ -323,7 +333,8 @@ class SpotifyClient:
                     isrc="",
                     cover_url=cover_url,
                     collection_type=c_type,
-                    collection_name=c_name
+                    collection_name=c_name,
+                    collection_cover_url=collection_cover
                 ))
 
             # If resolving a playlist, fetch unique high-res cover art for each individual track

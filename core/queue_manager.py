@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Callable, Any
 from concurrent.futures import ThreadPoolExecutor
+import requests
 
 from core.spotify_client import TrackMetadata
 from core.resolver import CascadingAudioEngine, ResolvedTrackSource
@@ -239,6 +240,21 @@ class DownloadQueueManager:
             else:
                 output_dir = base_output_dir
             naming_tmpl = config.get("download.naming_template", "{artist} - {title}")
+
+            # Save collection (playlist / album) cover art to cover.jpg if available
+            coll_cover_url = getattr(track, "collection_cover_url", "")
+            if coll_cover_url and getattr(track, "collection_type", "track") in ("playlist", "album"):
+                try:
+                    os.makedirs(output_dir, exist_ok=True)
+                    cover_target = os.path.join(output_dir, "cover.jpg")
+                    if not os.path.isfile(cover_target):
+                        r_cov = requests.get(coll_cover_url, timeout=8)
+                        if r_cov.status_code == 200 and len(r_cov.content) > 500:
+                            with open(cover_target, "wb") as f_cov:
+                                f_cov.write(r_cov.content)
+                            logger.info(f"Saved collection cover art: {cover_target}")
+                except Exception as e_cov:
+                    logger.debug(f"Could not save collection cover art: {e_cov}")
 
             # 1. Archive Deduplication Check (Instant Local Reuse)
             archived = self.archive.find_track(
