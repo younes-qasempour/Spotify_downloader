@@ -185,7 +185,13 @@ class DownloadQueueManager:
                 return
 
             # 2. Download and Tagging Phase
-            output_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))
+            base_output_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))
+            subfolder = getattr(track, "target_folder", "")
+            norm_base = os.path.normpath(base_output_dir)
+            if subfolder and os.path.basename(norm_base).lower() != subfolder.lower():
+                output_dir = os.path.join(base_output_dir, subfolder)
+            else:
+                output_dir = base_output_dir
             naming_tmpl = config.get("download.naming_template", "{artist} - {title}")
             save_lrc = config.get("download.save_lrc", True)
             embed_lyrics = config.get("download.embed_lyrics", True)

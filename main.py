@@ -83,6 +83,7 @@ def run_headless_cli(spotify_url: str, output_dir: str | None = None):
 
     for idx, t in enumerate(tracks, 1):
         print(f"\n--- [{idx}/{len(tracks)}] {t.title} - {t.artist_str} ({t.duration_sec:.1f}s) ---")
+        print(f"Folder: {t.target_folder}/")
         print("Resolving audio source (Tier 1-3 Musilon -> Tier 4 YTM)...")
         resolved = engine.resolve_source(t)
         if not resolved:

@@ -109,6 +109,16 @@ class CascadingAudioEngine:
         Downloads audio stream, queries lyrics, embeds metadata and saves companion .lrc.
         Returns final destination file path.
         """
+        # Automatically organize into subfolder based on collection type:
+        # - Playlists: folder named after the playlist
+        # - Albums: folder named after the album
+        # - Singles/Tracks: folder named "Singles"
+        subfolder = getattr(track, "target_folder", "")
+        if subfolder:
+            norm_output = os.path.normpath(output_dir)
+            if os.path.basename(norm_output).lower() != subfolder.lower():
+                output_dir = os.path.join(output_dir, subfolder)
+
         os.makedirs(output_dir, exist_ok=True)
 
         # Build clean filename

@@ -38,6 +38,12 @@ Musilon's catalog is probed across four concurrent search vectors with smart sco
 - **Synchronized Lyrics**: Automated companion `.lrc` files fetched from LRCLIB and embedded directly into audio container tags.
 - **Watermark Scrubbing**: Automatically strips promotional site tags and watermarks (e.g. `[Musilon]`, `- Musilon`) from filenames and audio metadata.
 
+### 📁 Smart Folder Organization
+Downloads are automatically organized into dedicated subdirectories within your chosen download directory based on the Spotify entity:
+- **Playlists:** Saved into a folder named after the playlist (e.g. `downloads/Chill Moody Mix/`).
+- **Albums:** Saved into a separate folder named after the album (e.g. `downloads/Random Access Memories/`).
+- **Singles:** Standalone tracks are neatly placed into a dedicated `downloads/Singles/` folder.
+
 ### ⚡ Windows 11 Fluent Design GUI
 - Built with `PyQt6` and `PyQt6-Fluent-Widgets`.
 - **Virtualized Card Delegate**: Renders hundreds of tracks smoothly with zero Windows GDI handle exhaustion.

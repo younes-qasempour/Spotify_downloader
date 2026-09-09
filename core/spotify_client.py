@@ -14,7 +14,7 @@ except ImportError:
     spotipy = None
     SpotifyClientCredentials = None
 
-from core.utils import clean_watermarks
+from core.utils import clean_watermarks, sanitize_filename
 
 logger = logging.getLogger("core.spotify")
 
@@ -31,6 +31,8 @@ class TrackMetadata:
     disc_number: int = 1
     isrc: str = ""
     cover_url: str = ""
+    collection_type: str = "track"   # "track", "album", "playlist"
+    collection_name: str = "Singles" # Playlist title, album title, or "Singles"
 
     @property
     def primary_artist(self) -> str:
@@ -43,6 +45,22 @@ class TrackMetadata:
     @property
     def duration_sec(self) -> float:
         return self.duration_ms / 1000.0
+
+    @property
+    def target_folder(self) -> str:
+        """
+        Returns the sanitized relative subfolder for organizing downloads:
+        - Playlists: folder named after the playlist (e.g. "Chill Moody Mix")
+        - Albums: folder named after the album (e.g. "Random Access Memories")
+        - Singles / Standalone Tracks: "Singles"
+        """
+        if self.collection_type == "playlist" and self.collection_name:
+            return sanitize_filename(self.collection_name, max_length=60)
+        elif self.collection_type == "album" and self.collection_name:
+            return sanitize_filename(self.collection_name, max_length=60)
+        elif self.collection_type == "track" or not self.collection_name:
+            return "Singles"
+        return sanitize_filename(self.collection_name, max_length=60)
 
 
 class SpotifyClient:
@@ -129,13 +147,13 @@ class SpotifyClient:
 
         if entity_type == "track":
             item = self._sp.track(entity_id)
-            return [self._format_track_item(item)]
+            return [self._format_track_item(item, collection_type="track", collection_name="Singles")]
 
         elif entity_type == "album":
             album = self._sp.album(entity_id)
             cover_url = album.get("images", [{}])[0].get("url", "")
             release_date = album.get("release_date", "")
-            album_name = album.get("name", "")
+            album_name = clean_watermarks(album.get("name", "Unknown Album"))
 
             tracks: List[TrackMetadata] = []
             results = self._sp.album_tracks(entity_id, limit=50)
@@ -147,7 +165,11 @@ class SpotifyClient:
                         "release_date": release_date,
                         "images": [{"url": cover_url}]
                     }
-                    tracks.append(self._format_track_item(item))
+                    tracks.append(self._format_track_item(
+                        item,
+                        collection_type="album",
+                        collection_name=album_name
+                    ))
                 if results.get("next"):
                     results = self._sp.next(results)
                 else:
@@ -155,6 +177,14 @@ class SpotifyClient:
             return tracks
 
         elif entity_type == "playlist":
+            pl_title = "Spotify Playlist"
+            try:
+                pl_meta = self._sp.playlist(entity_id, fields="name")
+                if pl_meta and pl_meta.get("name"):
+                    pl_title = clean_watermarks(pl_meta["name"])
+            except Exception as e:
+                logger.debug(f"Could not fetch playlist title: {e}")
+
             tracks: List[TrackMetadata] = []
             offset = 0
             limit = 50
@@ -182,7 +212,11 @@ class SpotifyClient:
                 for item_wrapper in results["items"]:
                     track_item = item_wrapper.get("track")
                     if track_item and track_item.get("id"):
-                        tracks.append(self._format_track_item(track_item))
+                        tracks.append(self._format_track_item(
+                            track_item,
+                            collection_type="playlist",
+                            collection_name=pl_title
+                        ))
 
                 if results.get("next"):
                     offset += limit
@@ -192,11 +226,16 @@ class SpotifyClient:
 
         elif entity_type == "artist":
             top_tracks = self._sp.artist_top_tracks(entity_id)
-            return [self._format_track_item(item) for item in top_tracks.get("tracks", [])]
+            return [self._format_track_item(item, collection_type="playlist", collection_name="Artist Top Tracks") for item in top_tracks.get("tracks", [])]
 
         raise ValueError(f"Unsupported entity type: {entity_type}")
 
-    def _format_track_item(self, item: Dict[str, Any]) -> TrackMetadata:
+    def _format_track_item(
+        self,
+        item: Dict[str, Any],
+        collection_type: str = "track",
+        collection_name: str = "Singles"
+    ) -> TrackMetadata:
         artists = [a.get("name", "") for a in item.get("artists", []) if a.get("name")]
         album_data = item.get("album", {})
         album_name = album_data.get("name", "")
@@ -218,7 +257,9 @@ class SpotifyClient:
             track_number=item.get("track_number", 1),
             disc_number=item.get("disc_number", 1),
             isrc=isrc,
-            cover_url=cover_url
+            cover_url=cover_url,
+            collection_type=collection_type,
+            collection_name=collection_name
         )
 
     # -------------------------------------------------------------------------
@@ -247,7 +288,10 @@ class SpotifyClient:
             if images:
                 cover_url = images[0].get("url", "")
 
-            entity_title = entity.get("title", "")
+            entity_title = clean_watermarks(entity.get("title", ""))
+            c_type = "album" if entity_type == "album" else "playlist"
+            c_name = entity_title if entity_title else ("Unknown Album" if entity_type == "album" else "Spotify Playlist")
+
             r_date = entity.get("releaseDate") or ""
             if isinstance(r_date, dict):
                 r_date = r_date.get("isoString", "") or str(r_date.get("year", ""))
@@ -277,7 +321,9 @@ class SpotifyClient:
                     track_number=idx,
                     disc_number=1,
                     isrc="",
-                    cover_url=cover_url
+                    cover_url=cover_url,
+                    collection_type=c_type,
+                    collection_name=c_name
                 ))
 
             # If resolving a playlist, fetch unique high-res cover art for each individual track
@@ -310,8 +356,6 @@ class SpotifyClient:
             logger.debug(f"Could not fetch individual cover for track {track_id}: {e}")
         return ""
 
-        raise ValueError(f"Guest fallback unsupported for entity type: {entity_type}")
-
     def _format_guest_track_entity(self, entity: Dict[str, Any]) -> TrackMetadata:
         title = clean_watermarks(entity.get("title") or entity.get("name") or "")
         artists_raw = entity.get("artists", [])
@@ -341,5 +385,8 @@ class SpotifyClient:
             track_number=1,
             disc_number=1,
             isrc="",
-            cover_url=cover_url
+            cover_url=cover_url,
+            collection_type="track",
+            collection_name="Singles"
         )
+

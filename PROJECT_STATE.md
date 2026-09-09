@@ -118,6 +118,13 @@ d:\Spotify-Downloader\
 - **Symptom:** `ffmpeg executable not found in bundle or PATH` repeated on systems without global FFmpeg.
 - **Fix:** Implemented `download_ffmpeg()` in `core/utils.py` to auto-fetch the standalone 64-bit Windows FFmpeg (~29MB gzip) directly into `bin/ffmpeg.exe`. Added one-click download card in `gui/views/settings_view.py`.
 
+### 14. Smart Folder Organization (Playlists, Albums, Singles)
+- **Requirement:** Playlist tracks save to `{output_dir}/{playlist_name}/`, album tracks to `{output_dir}/{album_name}/`, and individual songs to `{output_dir}/Singles/`.
+- **Fix:**
+  - `TrackMetadata` records `collection_type` (`"track"`, `"album"`, `"playlist"`) and `collection_name`.
+  - Added `target_folder` property to `TrackMetadata` using `sanitize_filename()`.
+  - Both `CascadingAudioEngine.download_and_tag()` and `DownloadQueueManager._process_item()` route downloads into `{base_output_dir}/{target_folder}/` without double-nesting.
+
 ---
 
 ## 4. Verification History
