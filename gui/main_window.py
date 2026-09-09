@@ -163,9 +163,14 @@ class MainWindow(FluentWindow):
             logger.warning(f"Error during startup archive directory scan: {e}")
 
     def _on_paste_shortcut(self):
-        self.switchTo(self.queue_view)
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit
+        from qfluentwidgets import LineEdit
+        focus_w = QApplication.focusWidget()
+        if isinstance(focus_w, (QLineEdit, QTextEdit, LineEdit)) and focus_w != self.queue_view.url_input:
+            return  # Allow standard paste in active input fields
         clipboard_text = QApplication.clipboard().text().strip()
         if "spotify.com" in clipboard_text:
+            self.switchTo(self.queue_view)
             self.queue_view.url_input.setText(clipboard_text)
             self.queue_view.url_input.setFocus()
 

@@ -334,8 +334,16 @@ class ArchiveManager:
                 cur = conn.execute("""
                     SELECT 
                         COUNT(*) as total_tracks,
-                        COUNT(DISTINCT CASE WHEN (collection_type = 'playlist' OR (collection_name IS NOT NULL AND collection_name != '')) AND (collection_type IS NULL OR collection_type != 'album') THEN collection_name END) as total_playlists,
-                        COUNT(DISTINCT CASE WHEN collection_type = 'album' OR (album IS NOT NULL AND TRIM(album) != '' AND LOWER(album) NOT IN ('spotify playlist', 'singles', 'unknown album', 'downloads') AND (collection_type IS NULL OR collection_type != 'playlist')) THEN COALESCE(NULLIF(album, ''), collection_name) END) as total_albums,
+                        COUNT(DISTINCT CASE WHEN (collection_type = 'playlist' OR (collection_name IS NOT NULL AND collection_name != ''))
+                                             AND (collection_type IS NULL OR collection_type != 'album')
+                                             AND LOWER(collection_name) NOT IN (
+                                                 SELECT DISTINCT LOWER(COALESCE(NULLIF(album, ''), collection_name))
+                                                 FROM downloaded_tracks
+                                                 WHERE collection_type = 'album'
+                                             )
+                                        THEN collection_name END) as total_playlists,
+                        COUNT(DISTINCT CASE WHEN collection_type = 'album' OR (album IS NOT NULL AND TRIM(album) != '' AND LOWER(album) NOT IN ('spotify playlist', 'singles', 'unknown album', 'downloads') AND (collection_type IS NULL OR collection_type != 'playlist'))
+                                        THEN COALESCE(NULLIF(album, ''), collection_name) END) as total_albums,
                         COALESCE(SUM(file_size), 0) as total_bytes
                     FROM downloaded_tracks
                 """)
@@ -377,7 +385,12 @@ class ArchiveManager:
                         MIN(file_path) as sample_file,
                         MAX(downloaded_at) as latest_download
                     FROM downloaded_tracks
-                    WHERE collection_type IS NULL OR collection_type != 'album'
+                    WHERE (collection_type IS NULL OR collection_type != 'album')
+                      AND LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles')) NOT IN (
+                          SELECT DISTINCT LOWER(COALESCE(NULLIF(album, ''), collection_name))
+                          FROM downloaded_tracks
+                          WHERE collection_type = 'album'
+                      )
                     GROUP BY name
                     ORDER BY latest_download DESC
                 """)
@@ -494,14 +507,14 @@ class ArchiveManager:
                     cur = conn.execute("""
                         SELECT * FROM downloaded_tracks
                         WHERE album = ? OR collection_name = ?
-                        ORDER BY track_number ASC, downloaded_at ASC
+                        ORDER BY track_number ASC, title ASC
                     """, (collection_name, collection_name))
                 else:
                     cur = conn.execute("""
                         SELECT * FROM downloaded_tracks
                         WHERE collection_name = ?
                            OR (? = 'Singles' AND (collection_name IS NULL OR collection_name = '' OR collection_name = 'Singles'))
-                        ORDER BY track_number ASC, downloaded_at ASC
+                        ORDER BY title ASC, downloaded_at ASC
                     """, (collection_name, collection_name))
                 results = []
                 for row in cur.fetchall():
@@ -550,6 +563,7 @@ class ArchiveManager:
         except ImportError:
             mutagen = None
 
+        import hashlib
         for dirpath, _, filenames in os.walk(root_dir):
             folder_name = os.path.basename(dirpath)
             for fname in filenames:
@@ -559,11 +573,11 @@ class ArchiveManager:
 
                 full_path = os.path.normpath(os.path.join(dirpath, fname))
 
-                # Check if already indexed
+                # Check if already indexed by path (case-insensitive on Windows)
                 with self._db_lock:
                     conn = self._get_connection()
                     try:
-                        cur = conn.execute("SELECT spotify_id FROM downloaded_tracks WHERE file_path = ? LIMIT 1", (full_path,))
+                        cur = conn.execute("SELECT spotify_id FROM downloaded_tracks WHERE LOWER(file_path) = LOWER(?) LIMIT 1", (full_path,))
                         if cur.fetchone():
                             conn.close()
                             continue
@@ -577,7 +591,7 @@ class ArchiveManager:
                 artist = "Unknown Artist"
                 album = folder_name
                 isrc = ""
-                track_num = 1
+                track_num = 0
                 disc_num = 1
                 quality = "FLAC 16" if ext == ".flac" else ("320k" if ext == ".mp3" else "Opus")
 
@@ -585,6 +599,24 @@ class ArchiveManager:
                     parts = title.split(" - ", 1)
                     artist = parts[0].strip()
                     title = parts[1].strip()
+
+                # Check if already in database by (title, artist, collection)
+                with self._db_lock:
+                    conn = self._get_connection()
+                    try:
+                        cur = conn.execute("""
+                            SELECT spotify_id FROM downloaded_tracks 
+                            WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) 
+                              AND (LOWER(collection_name) = LOWER(?) OR LOWER(album) = LOWER(?))
+                            LIMIT 1
+                        """, (title, artist, folder_name, folder_name))
+                        if cur.fetchone():
+                            conn.close()
+                            continue
+                    except Exception:
+                        pass
+                    finally:
+                        conn.close()
 
                 if mutagen:
                     try:
@@ -632,8 +664,34 @@ class ArchiveManager:
                     except Exception:
                         pass
 
-                # Derive synthetic ID from artist and title hash
-                synth_id = f"local_{abs(hash(artist + title))}"
+                # Check if this folder belongs to a known album
+                is_album = False
+                with self._db_lock:
+                    conn = self._get_connection()
+                    try:
+                        c_chk = conn.execute(
+                            "SELECT 1 FROM downloaded_tracks WHERE collection_type = 'album' AND (LOWER(collection_name) = LOWER(?) OR LOWER(album) = LOWER(?)) LIMIT 1",
+                            (folder_name, folder_name)
+                        )
+                        if c_chk.fetchone():
+                            is_album = True
+                    except Exception:
+                        pass
+                    finally:
+                        conn.close()
+
+                if is_album:
+                    c_type = "album"
+                elif folder_name in ("Singles", "downloads"):
+                    c_type = "track"
+                    track_num = 0
+                else:
+                    c_type = "playlist"
+                    track_num = 0
+
+                # Deterministic synthetic ID derived from path hash
+                path_hash = hashlib.sha256(full_path.lower().encode("utf-8")).hexdigest()[:16]
+                synth_id = f"local_{path_hash}"
                 fake_track = TrackMetadata(
                     id=synth_id,
                     title=title,
@@ -645,7 +703,7 @@ class ArchiveManager:
                     disc_number=disc_num,
                     isrc=isrc,
                     collection_name=folder_name,
-                    collection_type="playlist" if folder_name not in ("Singles", "downloads") else "track"
+                    collection_type=c_type
                 )
 
                 if self.add_track(fake_track, full_path, quality, "Local File"):

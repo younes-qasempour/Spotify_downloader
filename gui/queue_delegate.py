@@ -329,11 +329,6 @@ class TrackCardDelegate(QStyledItemDelegate):
         fm_title = QFontMetrics(font_title)
 
         display_title = item.track.title
-        t_num = getattr(item.track, "track_number", 0)
-        c_type = getattr(item.track, "collection_type", "track")
-        if t_num > 0 and (c_type in ("album", "playlist") or getattr(item.track, "collection_name", "") not in ("", "Singles")):
-            display_title = f"{t_num}. {item.track.title}"
-
         elided_title = fm_title.elidedText(display_title, Qt.TextElideMode.ElideRight, int(text_w))
         painter.drawText(int(text_x), int(card_rect.y() + 25), elided_title)
 

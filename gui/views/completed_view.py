@@ -223,8 +223,8 @@ class CompletedView(QWidget):
 
         self.sort_combo = ComboBox(self)
         self.sort_combo.addItems([
-            "Sort: Track Number",
             "Sort: Title (A-Z)",
+            "Sort: Track Number",
             "Sort: Artist (A-Z)",
             "Sort: Duration (Shortest)",
             "Sort: Duration (Longest)",
@@ -409,15 +409,15 @@ class CompletedView(QWidget):
 
     def _sort_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         idx = self.sort_combo.currentIndex() if hasattr(self, "sort_combo") else 0
-        if idx == 0:  # Track Number
+        if idx == 0:  # Title (A-Z)
+            return sorted(rows, key=lambda r: (r.get("title") or "").strip().lower())
+        elif idx == 1:  # Track Number
             return sorted(rows, key=lambda r: (
                 r.get("track_number") if (r.get("track_number") is not None and r.get("track_number") > 0) else 9999,
-                (r.get("title") or "").lower()
+                (r.get("title") or "").strip().lower()
             ))
-        elif idx == 1:  # Title (A-Z)
-            return sorted(rows, key=lambda r: (r.get("title") or "").lower())
         elif idx == 2:  # Artist (A-Z)
-            return sorted(rows, key=lambda r: (r.get("artist") or "").lower())
+            return sorted(rows, key=lambda r: (r.get("artist") or "").strip().lower())
         elif idx == 3:  # Duration (Shortest)
             return sorted(rows, key=lambda r: r.get("duration_ms") or 0)
         elif idx == 4:  # Duration (Longest)
@@ -619,6 +619,15 @@ class CompletedView(QWidget):
 
         self.coll_banner.setVisible(True)
 
+        # Update sort selection: albums default to Track Number, playlists default to Title (A-Z)
+        if hasattr(self, "sort_combo"):
+            self.sort_combo.blockSignals(True)
+            if coll_type == "album":
+                self.sort_combo.setCurrentIndex(1)  # Track Number
+            else:
+                self.sort_combo.setCurrentIndex(0)  # Title (A-Z)
+            self.sort_combo.blockSignals(False)
+
         # Clear search input temporarily when opening a collection
         self.search_input.blockSignals(True)
         self.search_input.clear()
@@ -678,6 +687,10 @@ class CompletedView(QWidget):
         target_tab = "albums" if self._current_collection_type == "album" else "playlists"
         target_idx = 2 if self._current_collection_type == "album" else 1
         self._current_collection_name = None
+        if hasattr(self, "sort_combo"):
+            self.sort_combo.blockSignals(True)
+            self.sort_combo.setCurrentIndex(0)
+            self.sort_combo.blockSignals(False)
         self.segmented.setCurrentItem(target_tab)
         self._switch_tab(target_idx)
 
