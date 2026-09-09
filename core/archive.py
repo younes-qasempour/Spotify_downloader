@@ -240,6 +240,152 @@ class ArchiveManager:
             finally:
                 conn.close()
 
+    def get_library_stats(self) -> Dict[str, Any]:
+        """Returns high-level statistics for the offline music library."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.execute("""
+                    SELECT 
+                        COUNT(*) as total_tracks,
+                        COUNT(DISTINCT collection_name) as total_playlists,
+                        COUNT(DISTINCT CASE WHEN album IS NOT NULL AND album != '' THEN album END) as total_albums,
+                        COALESCE(SUM(file_size), 0) as total_bytes
+                    FROM downloaded_tracks
+                """)
+                row = cur.fetchone()
+                total_bytes = row["total_bytes"]
+                if total_bytes >= 1024 * 1024 * 1024:
+                    size_str = f"{total_bytes / (1024 ** 3):.2f} GB"
+                else:
+                    size_str = f"{total_bytes / (1024 ** 2):.1f} MB"
+
+                return {
+                    "total_tracks": row["total_tracks"],
+                    "total_playlists": row["total_playlists"],
+                    "total_albums": row["total_albums"],
+                    "total_bytes": total_bytes,
+                    "size_str": size_str
+                }
+            except Exception as e:
+                logger.error(f"Failed to fetch library stats: {e}")
+                return {"total_tracks": 0, "total_playlists": 0, "total_albums": 0, "total_bytes": 0, "size_str": "0 MB"}
+            finally:
+                conn.close()
+
+    def get_playlists(self, search_query: str = "") -> List[Dict[str, Any]]:
+        """
+        Aggregates downloaded tracks by collection / playlist folder.
+        Returns a list of playlists with track counts, total size, folder paths, and sample tracks.
+        """
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.execute("""
+                    SELECT 
+                        COALESCE(NULLIF(collection_name, ''), 'Singles') as name,
+                        collection_type,
+                        COUNT(*) as track_count,
+                        COALESCE(SUM(file_size), 0) as total_size,
+                        MIN(file_path) as sample_file,
+                        MAX(downloaded_at) as latest_download
+                    FROM downloaded_tracks
+                    GROUP BY name
+                    ORDER BY latest_download DESC
+                """)
+                rows = cur.fetchall()
+                results: List[Dict[str, Any]] = []
+                q = search_query.strip().lower()
+
+                for r in rows:
+                    pl_name = r["name"]
+                    if q and q not in pl_name.lower():
+                        continue
+
+                    sample_file = r["sample_file"] or ""
+                    folder_path = os.path.dirname(sample_file) if sample_file else ""
+                    if not folder_path or not os.path.isdir(folder_path):
+                        base_dir = config.get("download.output_dir", "downloads")
+                        folder_path = os.path.join(base_dir, pl_name)
+
+                    sz_bytes = r["total_size"]
+                    if sz_bytes >= 1024 * 1024 * 1024:
+                        sz_str = f"{sz_bytes / (1024 ** 3):.2f} GB"
+                    else:
+                        sz_str = f"{sz_bytes / (1024 ** 2):.1f} MB"
+
+                    results.append({
+                        "name": pl_name,
+                        "type": r["collection_type"] or "playlist",
+                        "track_count": r["track_count"],
+                        "total_size_bytes": sz_bytes,
+                        "size_str": sz_str,
+                        "folder_path": folder_path,
+                        "latest_download": r["latest_download"]
+                    })
+                return results
+            except Exception as e:
+                logger.error(f"Failed to aggregate playlists: {e}")
+                return []
+            finally:
+                conn.close()
+
+    def get_albums(self, search_query: str = "") -> List[Dict[str, Any]]:
+        """
+        Aggregates downloaded tracks by album.
+        Returns album name, artist, track counts, total size, and folder path.
+        """
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.execute("""
+                    SELECT 
+                        album as name,
+                        artist,
+                        COUNT(*) as track_count,
+                        COALESCE(SUM(file_size), 0) as total_size,
+                        MIN(file_path) as sample_file,
+                        MAX(downloaded_at) as latest_download
+                    FROM downloaded_tracks
+                    WHERE album IS NOT NULL AND TRIM(album) != ''
+                    GROUP BY album, artist
+                    ORDER BY track_count DESC, latest_download DESC
+                """)
+                rows = cur.fetchall()
+                results: List[Dict[str, Any]] = []
+                q = search_query.strip().lower()
+
+                for r in rows:
+                    alb_name = r["name"]
+                    artist_name = r["artist"] or ""
+                    if q and (q not in alb_name.lower() and q not in artist_name.lower()):
+                        continue
+
+                    sample_file = r["sample_file"] or ""
+                    folder_path = os.path.dirname(sample_file) if sample_file else ""
+
+                    sz_bytes = r["total_size"]
+                    if sz_bytes >= 1024 * 1024 * 1024:
+                        sz_str = f"{sz_bytes / (1024 ** 3):.2f} GB"
+                    else:
+                        sz_str = f"{sz_bytes / (1024 ** 2):.1f} MB"
+
+                    results.append({
+                        "name": alb_name,
+                        "artist": artist_name,
+                        "track_count": r["track_count"],
+                        "total_size_bytes": sz_bytes,
+                        "size_str": sz_str,
+                        "folder_path": folder_path,
+                        "latest_download": r["latest_download"]
+                    })
+                return results
+            except Exception as e:
+                logger.error(f"Failed to aggregate albums: {e}")
+                return []
+            finally:
+                conn.close()
+
     def delete_track(self, spotify_id: str) -> bool:
         """Deletes a track from the archive record."""
         with self._db_lock:

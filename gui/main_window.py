@@ -119,7 +119,7 @@ class MainWindow(FluentWindow):
         self.paste_shortcut.activated.connect(self._on_paste_shortcut)
 
         # Ensure Queue View is selected on initial display
-        QTimer.singleShot(50, lambda: self.switchTo(self.queue_view))
+        self.switchTo(self.queue_view)
 
     def _init_navigation(self):
         self.addSubInterface(
@@ -130,8 +130,8 @@ class MainWindow(FluentWindow):
         )
         self.addSubInterface(
             self.completed_view,
-            FluentIcon.COMPLETED,
-            "Completed",
+            FluentIcon.MUSIC,
+            "Library",
             NavigationItemPosition.TOP
         )
         self.addSubInterface(
@@ -157,8 +157,8 @@ class MainWindow(FluentWindow):
             indexed = self.archive_manager.scan_and_index_directory(output_dir)
             if indexed > 0:
                 logger.info(f"Startup scan indexed {indexed} tracks into download archive.")
-                # Safe reload of the completed library on the Qt event loop
-                QTimer.singleShot(0, self.completed_view.reload_from_archive)
+            # Safe reload of the completed library on the Qt event loop
+            QTimer.singleShot(0, self.completed_view.reload_all)
         except Exception as e:
             logger.warning(f"Error during startup archive directory scan: {e}")
 

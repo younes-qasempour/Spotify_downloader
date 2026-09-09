@@ -1,32 +1,115 @@
 import os
 import subprocess
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QHeaderView, QMenu, QApplication
+    QWidget, QVBoxLayout, QHBoxLayout, QHeaderView, QMenu, QApplication,
+    QStackedWidget, QFrame
 )
 from qfluentwidgets import (
-    TableView, SubtitleLabel, PushButton, ToolButton, FluentIcon, InfoBar, LineEdit, CaptionLabel
+    TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
+    FluentIcon, InfoBar, LineEdit, CaptionLabel, StrongBodyLabel, BodyLabel,
+    SegmentedWidget, CardWidget, SmoothScrollArea, IconWidget
 )
 
 from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
 from gui.bridge import EngineSignalBridge
-from gui.styles import TEXT_MUTED
+from gui.styles import TEXT_MUTED, BG_CARD, SPOTIFY_EMERALD
 from core.archive import ArchiveManager
 from core.spotify_client import TrackMetadata
 from core.queue_manager import QueueItem
+from core.config import config
+
+
+class CollectionCard(CardWidget):
+    """
+    Sleek modern card representing a downloaded Playlist or Album.
+    Provides folder info, track counts, and quick actions to open folder or browse tracks.
+    """
+
+    def __init__(
+        self,
+        title: str,
+        subtitle: str,
+        folder_path: str,
+        icon: FluentIcon = FluentIcon.FOLDER,
+        on_browse=None,
+        parent=None
+    ):
+        super().__init__(parent)
+        self.folder_path = folder_path
+        self.on_browse = on_browse
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(16)
+
+        self.setStyleSheet("""
+            CardWidget, CollectionCard {
+                background-color: #222222;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+            }
+            CardWidget:hover, CollectionCard:hover {
+                background-color: #2a2a2a;
+                border: 1px solid rgba(255, 255, 255, 0.16);
+            }
+        """)
+
+        # 1. Collection Icon
+        icon_widget = IconWidget(icon, self)
+        icon_widget.setFixedSize(36, 36)
+        layout.addWidget(icon_widget)
+
+        # 2. Text Metadata
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(4)
+
+        self.title_label = StrongBodyLabel(title, self)
+        self.title_label.setStyleSheet("font-size: 15px; font-weight: 600; color: #FFFFFF;")
+
+        self.subtitle_label = CaptionLabel(subtitle, self)
+        self.subtitle_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+
+        text_layout.addWidget(self.title_label)
+        text_layout.addWidget(self.subtitle_label)
+        layout.addLayout(text_layout, 1)
+
+        # 3. Action Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        if on_browse:
+            self.browse_btn = PushButton(FluentIcon.MUSIC, "Browse Tracks", self)
+            self.browse_btn.clicked.connect(on_browse)
+            btn_layout.addWidget(self.browse_btn)
+
+        self.open_btn = PrimaryPushButton(FluentIcon.FOLDER, "Open Folder", self)
+        self.open_btn.clicked.connect(self._open_folder)
+        btn_layout.addWidget(self.open_btn)
+
+        layout.addLayout(btn_layout)
+
+    def _open_folder(self):
+        if self.folder_path and os.path.isdir(self.folder_path):
+            os.startfile(self.folder_path)
+        else:
+            base_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))
+            if os.path.isdir(base_dir):
+                os.startfile(base_dir)
 
 
 class CompletedView(QWidget):
     """
-    Persistent Downloaded Music Library view.
+    Persistent Downloaded Music Library & Archive View.
     Features:
     - Backed by SQLite ArchiveManager (preserves all downloads across sessions)
-    - Real-time search by song, artist, album, or playlist
-    - Total library counter
+    - 3-Tab Segmented Switcher: All Songs (60) | Playlists (3) | Albums (12)
+    - Real-time search across songs, artists, albums, or playlists
+    - Double-click to play audio file natively
     - Right-click context menu (Play, Open in Explorer, Remove)
-    - Double-click to instantly play file
+    - Direct folder navigation and one-click Rescan & Sync
     """
 
     def __init__(self, bridge: EngineSignalBridge, archive_manager: Optional[ArchiveManager] = None, parent=None):
@@ -38,22 +121,22 @@ class CompletedView(QWidget):
         self.delegate = TrackCardDelegate(self)
 
         self._init_ui()
-        self.reload_from_archive()
+        self.reload_all()
 
         # Connect Signal Bridge for live completed events
         self.bridge.sig_completed.connect(self._on_track_completed)
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(14)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(24, 20, 24, 20)
+        main_layout.setSpacing(14)
 
         # 1. Header Row
         header_layout = QHBoxLayout()
         header_layout.setSpacing(12)
 
         title_box = QVBoxLayout()
-        title = SubtitleLabel("Downloaded Library", self)
+        title = SubtitleLabel("Music Library & Archive", self)
         self.stats_label = CaptionLabel("Loading library...", self)
         self.stats_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
         title_box.addWidget(title)
@@ -62,28 +145,47 @@ class CompletedView(QWidget):
         header_layout.addLayout(title_box)
         header_layout.addStretch(1)
 
-        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Music Folder", self)
+        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Downloads Folder", self)
         self.open_folder_btn.clicked.connect(self._open_download_folder)
 
-        self.refresh_btn = ToolButton(FluentIcon.SYNC, self)
-        self.refresh_btn.setToolTip("Refresh Library")
-        self.refresh_btn.clicked.connect(lambda: self.reload_from_archive(self.search_input.text()))
+        self.rescan_btn = ToolButton(FluentIcon.SYNC, self)
+        self.rescan_btn.setToolTip("Rescan & Sync Downloads from Disk")
+        self.rescan_btn.clicked.connect(self._on_rescan_clicked)
 
         header_layout.addWidget(self.open_folder_btn)
-        header_layout.addWidget(self.refresh_btn)
-        layout.addLayout(header_layout)
+        header_layout.addWidget(self.rescan_btn)
+        main_layout.addLayout(header_layout)
 
-        # 2. Search & Filter Bar
-        search_layout = QHBoxLayout()
+        # 2. Segmented Navigation & Search Row
+        nav_row = QHBoxLayout()
+        nav_row.setSpacing(16)
+
+        self.segmented = SegmentedWidget(self)
+        self.segmented.addItem("tracks", "🎵 All Songs", onClick=lambda: self._switch_tab(0))
+        self.segmented.addItem("playlists", "📁 Playlists", onClick=lambda: self._switch_tab(1))
+        self.segmented.addItem("albums", "💿 Albums", onClick=lambda: self._switch_tab(2))
+        nav_row.addWidget(self.segmented)
+
+        nav_row.addStretch(1)
+
         self.search_input = LineEdit(self)
-        self.search_input.setPlaceholderText("Search library by song title, artist, album, or playlist name...")
+        self.search_input.setPlaceholderText("Search songs, artists, albums, or playlists...")
         self.search_input.setClearButtonEnabled(True)
+        self.search_input.setFixedWidth(360)
         self.search_input.textChanged.connect(self._on_search_changed)
-        search_layout.addWidget(self.search_input)
-        layout.addLayout(search_layout)
+        nav_row.addWidget(self.search_input)
 
-        # 3. Virtualized Table View
-        self.table = TableView(self)
+        main_layout.addLayout(nav_row)
+
+        # 3. Stacked Widget (Pages)
+        self.stacked = QStackedWidget(self)
+
+        # --- Page 0: All Songs Table ---
+        self.table_page = QWidget(self)
+        table_layout = QVBoxLayout(self.table_page)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.table = TableView(self.table_page)
         self.table.setModel(self.model)
         self.table.setItemDelegate(self.delegate)
         self.table.setShowGrid(False)
@@ -103,10 +205,89 @@ class CompletedView(QWidget):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
 
-        layout.addWidget(self.table, 1)
+        table_layout.addWidget(self.table)
+        self.stacked.addWidget(self.table_page)
+
+        # --- Page 1: Playlists Grid/List ---
+        self.playlists_page = QWidget(self)
+        playlists_page_layout = QVBoxLayout(self.playlists_page)
+        playlists_page_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.playlists_scroll = SmoothScrollArea(self.playlists_page)
+        self.playlists_scroll.setWidgetResizable(True)
+        self.playlists_scroll.setStyleSheet("QScrollArea, SmoothScrollArea { border: none; background: transparent; }")
+        self.playlists_scroll.viewport().setStyleSheet("background: transparent;")
+
+        self.playlists_container = QWidget()
+        self.playlists_container.setStyleSheet("background: transparent;")
+        self.playlists_layout = QVBoxLayout(self.playlists_container)
+        self.playlists_layout.setContentsMargins(0, 0, 0, 0)
+        self.playlists_layout.setSpacing(10)
+        self.playlists_layout.addStretch(1)
+
+        self.playlists_scroll.setWidget(self.playlists_container)
+        playlists_page_layout.addWidget(self.playlists_scroll)
+        self.stacked.addWidget(self.playlists_page)
+
+        # --- Page 2: Albums Grid/List ---
+        self.albums_page = QWidget(self)
+        albums_page_layout = QVBoxLayout(self.albums_page)
+        albums_page_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.albums_scroll = SmoothScrollArea(self.albums_page)
+        self.albums_scroll.setWidgetResizable(True)
+        self.albums_scroll.setStyleSheet("QScrollArea, SmoothScrollArea { border: none; background: transparent; }")
+        self.albums_scroll.viewport().setStyleSheet("background: transparent;")
+
+        self.albums_container = QWidget()
+        self.albums_container.setStyleSheet("background: transparent;")
+        self.albums_layout = QVBoxLayout(self.albums_container)
+        self.albums_layout.setContentsMargins(0, 0, 0, 0)
+        self.albums_layout.setSpacing(10)
+        self.albums_layout.addStretch(1)
+
+        self.albums_scroll.setWidget(self.albums_container)
+        albums_page_layout.addWidget(self.albums_scroll)
+        self.stacked.addWidget(self.albums_page)
+
+        main_layout.addWidget(self.stacked, 1)
+
+        # Default to Tracks tab
+        self.segmented.setCurrentItem("tracks")
+        self.stacked.setCurrentIndex(0)
+
+    def _switch_tab(self, index: int):
+        self.stacked.setCurrentIndex(index)
+        search_query = self.search_input.text().strip()
+        if index == 0:
+            self.reload_from_archive(search_query)
+        elif index == 1:
+            self.reload_playlists(search_query)
+        elif index == 2:
+            self.reload_albums(search_query)
+
+    def reload_all(self):
+        """Refreshes high-level library counters and all view tabs."""
+        stats = self.archive.get_library_stats()
+        t_count = stats["total_tracks"]
+        p_count = stats["total_playlists"]
+        a_count = stats["total_albums"]
+        size_str = stats["size_str"]
+
+        self.segmented.setItemText("tracks", f"🎵 All Songs ({t_count})")
+        self.segmented.setItemText("playlists", f"📁 Playlists ({p_count})")
+        self.segmented.setItemText("albums", f"💿 Albums ({a_count})")
+
+        self.stats_label.setText(f"{t_count} song(s) • {p_count} collection(s) • {size_str} offline library")
+
+        # Refresh all tabs so switching is instantaneous
+        search_query = self.search_input.text().strip()
+        self.reload_from_archive(search_query)
+        self.reload_playlists(search_query)
+        self.reload_albums(search_query)
 
     def reload_from_archive(self, search_query: str = ""):
-        """Loads or filters all tracks from SQLite archive."""
+        """Loads or filters tracks from SQLite archive into the virtualized TableView."""
         rows = self.archive.get_all_tracks(search_query)
         self.model.clear()
 
@@ -134,27 +315,92 @@ class CompletedView(QWidget):
             if row >= 0:
                 self.table.setRowHeight(row, 76)
 
-        count = len(rows)
-        if search_query:
-            self.stats_label.setText(f"Showing {count} match(es) for '{search_query}'")
-        else:
-            self.stats_label.setText(f"{count} track(s) in offline library")
-
         self.table.viewport().update()
 
+    def reload_playlists(self, search_query: str = ""):
+        """Populates the Playlists page with cards."""
+        while self.playlists_layout.count() > 1:
+            child = self.playlists_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        playlists = self.archive.get_playlists(search_query)
+        for pl in playlists:
+            name = pl["name"]
+            track_count = pl["track_count"]
+            sz_str = pl["size_str"]
+            folder = pl["folder_path"]
+            subtitle = f"{track_count} song(s) • {sz_str}  |  {folder}"
+
+            card = CollectionCard(
+                title=name,
+                subtitle=subtitle,
+                folder_path=folder,
+                icon=FluentIcon.FOLDER,
+                on_browse=lambda n=name: self._browse_collection(n),
+                parent=self.playlists_container
+            )
+            self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
+
+    def reload_albums(self, search_query: str = ""):
+        """Populates the Albums page with cards."""
+        while self.albums_layout.count() > 1:
+            child = self.albums_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        albums = self.archive.get_albums(search_query)
+        for alb in albums:
+            name = alb["name"]
+            artist = alb["artist"]
+            track_count = alb["track_count"]
+            sz_str = alb["size_str"]
+            folder = alb["folder_path"]
+            subtitle = f"by {artist} • {track_count} song(s) • {sz_str}"
+
+            card = CollectionCard(
+                title=name,
+                subtitle=subtitle,
+                folder_path=folder,
+                icon=FluentIcon.MUSIC,
+                on_browse=lambda n=name: self._browse_collection(n),
+                parent=self.albums_container
+            )
+            self.albums_layout.insertWidget(self.albums_layout.count() - 1, card)
+
+    def _browse_collection(self, name: str):
+        """Switches to Songs view and pre-fills search with collection or album name."""
+        self.search_input.setText(name)
+        self.segmented.setCurrentItem("tracks")
+        self._switch_tab(0)
+
     def _on_search_changed(self, text: str):
-        self.reload_from_archive(text.strip())
+        curr = self.stacked.currentIndex()
+        if curr == 0:
+            self.reload_from_archive(text.strip())
+        elif curr == 1:
+            self.reload_playlists(text.strip())
+        elif curr == 2:
+            self.reload_albums(text.strip())
 
     def _on_track_completed(self, track_id: str, path: str):
-        # Refresh current view when a track finishes
-        self.reload_from_archive(self.search_input.text())
+        # Refresh views when a track finishes
+        self.reload_all()
 
     def add_completed_item(self, item: QueueItem):
-        """Immediately adds a completed item to the view."""
-        self.reload_from_archive(self.search_input.text())
+        """Immediately updates views upon track completion."""
+        self.reload_all()
+
+    def _on_rescan_clicked(self):
+        out_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))
+        if os.path.isdir(out_dir):
+            indexed = self.archive.scan_and_index_directory(out_dir)
+            self.reload_all()
+            InfoBar.success("Library Synced", f"Scanned folder and synchronized {indexed} file(s).", duration=3000, parent=self)
+        else:
+            InfoBar.warning("Folder Not Found", f"Directory does not exist: {out_dir}", parent=self)
 
     def _open_download_folder(self):
-        from core.config import config
         out_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))
         if os.path.exists(out_dir):
             os.startfile(out_dir)
@@ -198,5 +444,5 @@ class CompletedView(QWidget):
             QApplication.clipboard().setText(f"{item.track.title} - {item.track.artist_str}")
         elif action == delete_act:
             self.archive.delete_track(item.track.id)
-            self.reload_from_archive(self.search_input.text())
+            self.reload_all()
             InfoBar.info("Removed", f"Removed '{item.track.title}' from archive.", duration=2500, parent=self)
