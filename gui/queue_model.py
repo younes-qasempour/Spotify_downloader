@@ -78,6 +78,12 @@ class TrackQueueModel(QAbstractTableModel):
             return self.items[row]
         return None
 
+    def clear(self):
+        self.beginResetModel()
+        self.items.clear()
+        self._id_to_row.clear()
+        self.endResetModel()
+
     def clear_completed(self):
         self.beginResetModel()
         self.items = [it for it in self.items if it.status not in ("Completed", "Cancelled", "Failed")]

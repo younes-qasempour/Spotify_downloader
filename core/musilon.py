@@ -751,7 +751,8 @@ class MusilonEngine:
         url: str,
         dest_path: str,
         progress_callback: Optional[Callable[[float, str, str], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
+        cancel_check: Optional[Callable[[], bool]] = None,
+        pause_wait: Optional[Callable[[], None]] = None
     ) -> bool:
         """
         Streams audio file directly from CDN to disk with chunked progress reporting.
@@ -774,6 +775,9 @@ class MusilonEngine:
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
                     return False
+
+                if pause_wait:
+                    pause_wait()
 
                 if chunk:
                     f.write(chunk)

@@ -127,11 +127,16 @@ class QueueView(QWidget):
         self.pause_btn = PushButton(FluentIcon.PAUSE, "Pause", self)
         self.pause_btn.clicked.connect(self._on_pause_clicked)
 
+        self.retry_btn = PushButton(FluentIcon.SYNC, "Retry Failed", self)
+        self.retry_btn.clicked.connect(self._on_retry_failed_clicked)
+        self.retry_btn.setEnabled(False)
+
         self.clear_btn = PushButton(FluentIcon.DELETE, "Clear Completed", self)
         self.clear_btn.clicked.connect(self._on_clear_clicked)
 
         ctrl_layout.addWidget(self.start_btn)
         ctrl_layout.addWidget(self.pause_btn)
+        ctrl_layout.addWidget(self.retry_btn)
         ctrl_layout.addWidget(self.clear_btn)
 
         main_layout.addLayout(ctrl_layout)
@@ -272,11 +277,30 @@ class QueueView(QWidget):
     def _on_start_clicked(self):
         self.qm.start()
         self.qm.resume()
+        self.pause_btn.setText("Pause")
+        self.pause_btn.setIcon(FluentIcon.PAUSE)
         InfoBar.info("Queue Started", "Download queue is active.", duration=2000, parent=self)
 
     def _on_pause_clicked(self):
-        self.qm.pause()
-        InfoBar.warning("Queue Paused", "Downloads paused.", duration=2000, parent=self)
+        if self.qm.is_paused():
+            self.qm.resume()
+            self.pause_btn.setText("Pause")
+            self.pause_btn.setIcon(FluentIcon.PAUSE)
+            InfoBar.info("Queue Resumed", "Download queue resumed.", duration=2000, parent=self)
+        else:
+            self.qm.pause()
+            self.pause_btn.setText("Resume")
+            self.pause_btn.setIcon(FluentIcon.PLAY)
+            InfoBar.warning("Queue Paused", "Downloads paused.", duration=2000, parent=self)
+
+    def _on_retry_failed_clicked(self):
+        count = self.qm.retry_failed()
+        if count > 0:
+            InfoBar.success("Retrying Downloads", f"Re-queued {count} failed track(s).", duration=3000, parent=self)
+        else:
+            InfoBar.info("No Failed Tracks", "There are no failed tracks to retry.", duration=2000, parent=self)
+        self._update_metrics()
+        self.table.viewport().update()
 
     def _on_clear_clicked(self):
         self.model.clear_completed()
@@ -320,6 +344,13 @@ class QueueView(QWidget):
         self.card_completed.set_value(completed)
         self.card_failed.set_value(failed)
 
+        if failed > 0:
+            self.retry_btn.setEnabled(True)
+            self.retry_btn.setText(f"Retry Failed ({failed})")
+        else:
+            self.retry_btn.setEnabled(False)
+            self.retry_btn.setText("Retry Failed")
+
     def _show_context_menu(self, pos):
         index = self.table.indexAt(pos)
         if not index.isValid():
@@ -329,11 +360,19 @@ class QueueView(QWidget):
             return
 
         menu = QMenu(self)
-        cancel_act = menu.addAction("Cancel Download")
+        retry_act = None
+        if item.status in ("Failed", "Cancelled"):
+            retry_act = menu.addAction("Retry Download")
+        cancel_act = None
+        if item.status in ("Queued", "Downloading", "Resolving", "Paused"):
+            cancel_act = menu.addAction("Cancel Download")
         copy_act = menu.addAction("Copy Track Title")
 
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
-        if action == cancel_act:
+        if action == cancel_act and cancel_act:
             self.qm.cancel_track(item.track.id)
+        elif action == retry_act and retry_act:
+            self.qm.retry_track(item.track.id)
+            self._update_metrics()
         elif action == copy_act:
             QApplication.clipboard().setText(f"{item.track.title} - {item.track.artist_str}")

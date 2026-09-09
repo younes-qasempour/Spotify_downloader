@@ -103,6 +103,7 @@ class CascadingAudioEngine:
         progress_callback: Optional[Callable[[float, str, str], None]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        pause_wait: Optional[Callable[[], None]] = None,
         musilon_only: bool = False
     ) -> Optional[str]:
         """
@@ -149,7 +150,8 @@ class CascadingAudioEngine:
                     url=m_src.download_url,
                     dest_path=dest_file,
                     progress_callback=progress_callback,
-                    cancel_check=cancel_check
+                    cancel_check=cancel_check,
+                    pause_wait=pause_wait
                 )
                 if success and os.path.isfile(dest_file):
                     final_file_path = dest_file
@@ -179,7 +181,8 @@ class CascadingAudioEngine:
                 source=yt_src,
                 output_template_without_ext=base_dest_without_ext,
                 progress_callback=progress_callback,
-                cancel_check=cancel_check
+                cancel_check=cancel_check,
+                pause_wait=pause_wait
             )
 
         if not final_file_path or not os.path.isfile(final_file_path):

@@ -166,7 +166,8 @@ class YtdlpEngine:
         source: YtdlpSource,
         output_template_without_ext: str,
         progress_callback: Optional[Callable[[float, str, str], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
+        cancel_check: Optional[Callable[[], bool]] = None,
+        pause_wait: Optional[Callable[[], None]] = None
     ) -> Optional[str]:
         """
         Downloads the best audio stream directly to disk without lossy re-encoding.
@@ -181,6 +182,8 @@ class YtdlpEngine:
                 nonlocal downloaded_file
                 if cancel_check and cancel_check():
                     raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")
+                if pause_wait:
+                    pause_wait()
 
                 status = d.get("status")
                 if status == "downloading":

@@ -15,6 +15,7 @@ from core.ytdlp_engine import YtdlpEngine
 from core.lyrics import LyricsEngine
 from core.tagger import AudioTagger
 from core.resolver import CascadingAudioEngine
+from core.archive import ArchiveManager
 from core.config import config
 from core.utils import resource_path
 
@@ -54,7 +55,9 @@ class MainWindow(FluentWindow):
         setTheme(Theme.DARK)
         self.setStyleSheet("MainWindow, FluentWindow { background-color: #181818; }")
 
-        # Initialize Headless Core Engine
+        # Initialize Headless Core Engine & Persistent Archive
+        self.archive_manager = ArchiveManager()
+
         self.musilon_engine = MusilonEngine(
             session_cookie=config.get("musilon.session_cookie", ""),
             username=config.get("musilon.username", ""),
@@ -76,6 +79,7 @@ class MainWindow(FluentWindow):
 
         self.queue_manager = DownloadQueueManager(
             audio_engine=self.audio_engine,
+            archive_manager=self.archive_manager,
             max_concurrent_downloads=config.get("download.concurrency", 2)
         )
 
@@ -87,7 +91,7 @@ class MainWindow(FluentWindow):
         self.queue_view = QueueView(self.queue_manager, self.bridge, self)
         self.queue_view.setObjectName("queue_view")
 
-        self.completed_view = CompletedView(self.bridge, self)
+        self.completed_view = CompletedView(self.bridge, archive_manager=self.archive_manager, parent=self)
         self.completed_view.setObjectName("completed_view")
 
         self.settings_view = SettingsView(musilon_engine=self.musilon_engine, parent=self)
@@ -98,6 +102,17 @@ class MainWindow(FluentWindow):
 
         # Connect Bridge to Completed View
         self.bridge.sig_completed.connect(self._on_track_completed)
+
+        # Background scan of output directory to index any pre-existing downloads into archive
+        output_dir = config.get("download.output_dir", "downloads")
+        if os.path.exists(output_dir):
+            import threading
+            threading.Thread(
+                target=self._scan_and_index_startup,
+                args=(output_dir,),
+                daemon=True,
+                name="ArchiveStartupScanner"
+            ).start()
 
         # Global Hotkey (Ctrl+V to focus and paste into URL bar)
         self.paste_shortcut = QShortcut(QKeySequence("Ctrl+V"), self)
@@ -136,6 +151,16 @@ class MainWindow(FluentWindow):
             if it.track.id == track_id:
                 self.completed_view.add_completed_item(it)
                 break
+
+    def _scan_and_index_startup(self, output_dir: str):
+        try:
+            indexed = self.archive_manager.scan_and_index_directory(output_dir)
+            if indexed > 0:
+                logger.info(f"Startup scan indexed {indexed} tracks into download archive.")
+                # Safe reload of the completed library on the Qt event loop
+                QTimer.singleShot(0, self.completed_view.reload_from_archive)
+        except Exception as e:
+            logger.warning(f"Error during startup archive directory scan: {e}")
 
     def _on_paste_shortcut(self):
         self.switchTo(self.queue_view)
