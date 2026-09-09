@@ -175,8 +175,20 @@ class YtdlpEngine:
         """
         urls_to_try = source.candidate_urls if source.candidate_urls else [source.url]
 
+        def _clean_part_files():
+            base_dir = os.path.dirname(output_template_without_ext)
+            base_file = os.path.basename(output_template_without_ext)
+            if os.path.isdir(base_dir):
+                for fname in os.listdir(base_dir):
+                    if fname.startswith(base_file) and fname.endswith(".part"):
+                        try:
+                            os.remove(os.path.join(base_dir, fname))
+                        except Exception:
+                            pass
+
         for url in urls_to_try:
             downloaded_file = None
+            _clean_part_files()
 
             def ydl_hook(d: Dict[str, Any]):
                 nonlocal downloaded_file
@@ -220,6 +232,8 @@ class YtdlpEngine:
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
+                "continuedl": False,
+                "overwrites": True,
                 "progress_hooks": [ydl_hook],
                 "remote_components": {"ejs:github"},
                 "postprocessors": postprocessors,
@@ -247,8 +261,10 @@ class YtdlpEngine:
 
             except yt_dlp.utils.DownloadCancelled:
                 logger.info("yt-dlp download cancelled.")
+                _clean_part_files()
                 return None
             except Exception as e:
+                _clean_part_files()
                 logger.warning(f"Download candidate {url} failed: {e}. Trying next candidate...")
 
         logger.error("All YouTube download candidates failed.")

@@ -247,12 +247,18 @@ class DownloadQueueManager:
                 try:
                     os.makedirs(output_dir, exist_ok=True)
                     cover_target = os.path.join(output_dir, "cover.jpg")
-                    if not os.path.isfile(cover_target):
+                    marker_file = os.path.join(output_dir, ".cover_synced")
+                    if not os.path.isfile(cover_target) or not os.path.isfile(marker_file):
                         r_cov = requests.get(coll_cover_url, timeout=8)
                         if r_cov.status_code == 200 and len(r_cov.content) > 500:
                             with open(cover_target, "wb") as f_cov:
                                 f_cov.write(r_cov.content)
-                            logger.info(f"Saved collection cover art: {cover_target}")
+                            try:
+                                with open(marker_file, "w") as f_m:
+                                    f_m.write("spotify_synced")
+                            except Exception:
+                                pass
+                            logger.info(f"Saved authentic collection cover art: {cover_target}")
                 except Exception as e_cov:
                     logger.debug(f"Could not save collection cover art: {e_cov}")
 
