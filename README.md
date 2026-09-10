@@ -35,7 +35,7 @@ Musilon's catalog is probed across four concurrent search vectors with smart sco
 ### 🖼️ Artwork & Tagging Perfection
 - **Unique Album Art**: Fetches individual 640×640 front cover artwork directly from Spotify's CDN per track (no shared or generic cover art).
 - **Embedded Tags**: Complete Vorbis comments (FLAC/Opus), ID3v2.4 (MP3), and MP4 metadata (M4A) via `mutagen`.
-- **Synchronized Lyrics**: Automated companion `.lrc` files fetched from LRCLIB and embedded directly into audio container tags.
+- **Synchronized Lyrics**: Automated companion `.lrc` files or embedded lyrics fetched from LRCLIB with Windows CRLF (`\r\n`) timestamps for full compatibility with desktop music players.
 - **Watermark Scrubbing**: Automatically strips promotional site tags and watermarks (e.g. `[Musilon]`, `- Musilon`) from filenames and audio metadata.
 
 ### 📁 Smart Folder Organization
@@ -47,8 +47,9 @@ Downloads are automatically organized into dedicated subdirectories within your 
 ### ⚡ Windows 11 Fluent Design GUI
 - Built with `PyQt6` and `PyQt6-Fluent-Widgets`.
 - **Virtualized Card Delegate**: Renders hundreds of tracks smoothly with zero Windows GDI handle exhaustion.
-- **Queue Management**: Start, Pause, Resume, and Clear controls with live metric counters (Total, Downloading, Completed, Failed).
-- **Settings View**: Visual status indicators, one-click FFmpeg downloader, directory chooser, and VIP credential testing.
+- **Queue Management**: Start, Pause, Resume, Retry Failed, and Clear controls with live metric counters (Total, Downloading, Completed, Failed).
+- **Offline Completed Library**: Interactive library view with Songs, Albums, and Playlists navigation, search filter, thumbnail covers, double-click playback, and Explorer reveal.
+- **Settings View & Auto-Repair**: Visual status badges, one-click FFmpeg auto-downloader, directory chooser, VIP credential testing, and a Deep Scan Auto-Repair tool to heal missing lyrics or cover art.
 - **Clipboard Auto-Detect**: Instantly recognizes copied Spotify URLs upon focusing the app or via `Ctrl+V`.
 
 ---
@@ -64,6 +65,7 @@ Spotify-Downloader/
 │
 ├── core/                     # HEADLESS MULTIMEDIA ENGINE (Zero GUI Dependencies)
 │   ├── config.py             # Thread-safe persistent JSON config manager
+│   ├── archive.py            # SQLite music library archive, deduplication & auto-repair
 │   ├── spotify_client.py     # Spotify Web API client + guest scraper fallback
 │   ├── musilon.py            # Musilon VIP engine (ArvanCloud solver, 4-tier search, CDN downloader)
 │   ├── ytdlp_engine.py       # YouTube Music fallback engine (yt-dlp wrapper)
@@ -82,7 +84,7 @@ Spotify-Downloader/
     └── views/
         ├── queue_view.py     # Queue management, URL inputs, metric cards, context menu
         ├── completed_view.py # Completed downloads library with direct file launcher
-        └── settings_view.py  # VIP credentials, fallback toggle, directory picker
+        └── settings_view.py  # VIP credentials, fallback toggle, directory picker, auto-repair
 ```
 
 ---
@@ -153,14 +155,19 @@ All runtime settings are stored in `config.json` (excluded from git tracking):
 | `musilon.username` | String | Musilon account email or username | `""` |
 | `musilon.password` | String | Musilon account password | `""` |
 | `musilon.enabled` | Boolean | Enable or disable Musilon Tier 1–3 downloads | `true` |
+| `musilon_max_retries` | Integer | Max VIP download retry attempts before YouTube fallback | `5` |
 | `spotify.client_id` | String | Official Spotify Developer Client ID (optional) | `""` |
 | `spotify.client_secret`| String | Official Spotify Developer Client Secret (optional) | `""` |
-| `download.output_dir` | String | Local directory where audio files and `.lrc` are saved | `downloads` |
+| `download.output_dir` | String | Local directory where audio files and collections are saved | `downloads` |
 | `download.naming_template` | String | File naming pattern (`{artist}`, `{title}`, `{album}`, `{track_num}`) | `"{artist} - {title}"` |
-| `download.allow_fallback` | Boolean | Allow YouTube Music Opus fallback when track is absent on Musilon | `true` |
-| `download.save_lrc` | Boolean | Generate synchronized `.lrc` timestamped lyrics files | `true` |
+| `download.lyrics_mode` | String | Lyrics storage strategy (`"embedded_only"`, `"companion_lrc"`, `"both"`) | `"embedded_only"` |
+| `download.save_lrc` | Boolean | Save external companion `.lrc` file (superseded by `lyrics_mode`) | `false` |
+| `download.embed_lyrics` | Boolean | Embed synchronized lyrics directly into audio container tags | `true` |
 | `download.embed_cover_art`| Boolean | Embed 640×640 JPEG album art into audio container | `true` |
+| `download.allow_fallback` | Boolean | Allow YouTube Music Opus fallback when track is absent on Musilon | `true` |
 | `download.concurrency` | Integer | Maximum simultaneous background download streams | `2` |
+| `ui.theme` | String | Fluent UI Theme palette (`"Dark"` or `"Light"`) | `"Dark"` |
+| `ui.clipboard_auto_detect` | Boolean | Automatically analyze Spotify URLs detected in clipboard | `true` |
 
 ---
 

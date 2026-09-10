@@ -21,6 +21,7 @@ d:\Spotify-Downloader\
 │
 ├── core/                    # HEADLESS MULTIMEDIA ENGINE
 │   ├── config.py            # Thread-safe JSON config manager
+│   ├── archive.py           # SQLite music library archive, deduplication & auto-repair
 │   ├── spotify_client.py    # Spotify metadata resolver (API + guest embed scraper)
 │   ├── musilon.py           # Musilon VIP engine (ArvanCloud solver, CDN downloader, jitter)
 │   ├── ytdlp_engine.py      # YouTube Music fallback engine (±5s duration validation)
@@ -185,6 +186,25 @@ d:\Spotify-Downloader\
   - In `core/config.py`, added `download.lyrics_mode` defaulting to `"embedded_only"`, embedding lyrics directly into audio tags so ZERO extra files exist in the song folder.
   - Added `purge_corrupt_and_cleanup_library()` in `core/archive.py` to purge corrupt files, relocate existing covers, and clean `.cover_synced` files.
 
+### 23. Embedded Synchronized CRLF Lyrics for Windows Audio Players (Vorbis & ID3)
+- **Symptom:** Embedded lyrics inside FLAC, Opus, and MP3 containers were displayed as a single run-on block or failed to scroll synchronously in desktop players (foobar2000, Windows Media Player, MusicBee, AIMP).
+- **Cause:** LRCLIB provides Unix LF (`\n`) newlines. Windows audio parsers strictly expect Windows CRLF (`\r\n`) line endings. Furthermore, different players expect different tag keys: some read `LYRICS`, others read `UNSYNCEDLYRICS`, and MP3 engines require the `USLT` frame with CRLF.
+- **Fix:**
+  - Standardized lyrics string normalization in `core/lyrics.py` to ensure all synchronized and plain lyrics strictly use CRLF (`\r\n`).
+  - In `core/tagger.py`, write both `LYRICS` and `UNSYNCEDLYRICS` Vorbis comments for FLAC/OggOpus, and properly formed `USLT` frame with language `'eng'` and descriptor `''` for MP3.
+  - Verified across players that synchronized playback and timestamps function flawlessly.
+
+### 24. Deep Scan Library Auto-Repair & Multi-Tier Cover Art Healing
+- **Problem:** Files downloaded prior to CRLF normalization or during transient network drops lacked synchronized lyrics or high-resolution cover artwork.
+- **Fix:**
+  - Implemented `repair_library()` in `core/archive.py` with multi-tier cover art resolution cascade:
+    1. Direct Spotify track artwork
+    2. Spotify oEmbed 640×640 lookup
+    3. Collection cover from app cache (`cache/covers/{collection}.jpg`)
+    4. Existing embedded cover extraction
+  - Deep scan queries LRCLIB for synchronized lyrics, updates tags with CRLF, and extracts/heals cover art in-place without re-downloading audio streams.
+  - Added visual "Deep Scan & Repair" card with live progress bar and status log in `gui/views/settings_view.py`.
+
 ---
 
 ## 4. Verification History
@@ -196,6 +216,8 @@ d:\Spotify-Downloader\
 | 2026-09-08 | The Black Eyed Peas — *Pump It* | Smart Candidate Scoring | ✅ Success (100%) | Score: +160 (exact) vs -78 (workout mix) |
 | 2026-09-08 | Creepy Nuts — *Bling-Bang-Bang-Born* | Smart Candidate Scoring | ✅ Success (100%) | Score: +160 (vocal) vs +26 (instrumental rejected) |
 | 2026-09-08 | Standalone FFmpeg Engine | `bin/ffmpeg.exe` | ✅ Success (100%) | Verified `ffmpeg version 6.1.1` |
+| 2026-09-10 | Synchronized CRLF Lyrics & Vorbis Tagging | LRCLIB + Mutagen FLAC/Opus | ✅ Success (100%) | Verified CRLF line breaks and multi-tag mapping across downloaded tracks |
+| 2026-09-10 | Deep Scan Library Auto-Repair | `ArchiveManager.repair_library()` | ✅ Success (100%) | Healed plain tracks to synchronized lyrics and regenerated covers |
 
 ## 5. Development Cheat Sheet
 
@@ -216,5 +238,6 @@ python -c "from core.spotify_client import SpotifyClient; c = SpotifyClient(); p
 
 ### Validate Tagging Pipeline:
 ```powershell
-python -c "from core.tagger import AudioTagger; from core.spotify_client import TrackMetadata; t = TrackMetadata(id='1', title='Test', artists=['Artist'], album='Album', release_date='2024', duration_ms=1000); print(AudioTagger().tag_file('scratch/test_dl.m4a', t, None, True, False))"
+python -c "from core.tagger import AudioTagger; from core.spotify_client import TrackMetadata; t = TrackMetadata(id='1', title='Test', artists=['Artist'], album='Album', release_date='2024', duration_ms=1000); print(AudioTagger())"
 ```
+

@@ -14,10 +14,12 @@
   "download": {
     "output_dir": "downloads",
     "naming_template": "{artist} - {title}",
-    "save_lrc": true,
+    "lyrics_mode": "embedded_only",
+    "save_lrc": false,
     "embed_lyrics": true,
     "embed_cover_art": true,
     "allow_fallback": true,
+    "musilon_max_retries": 5,
     "quality_priority": [
       "musilon_flac_16",
       "musilon_flac_24",
