@@ -12,7 +12,7 @@ import requests
 from core.spotify_client import TrackMetadata
 from core.resolver import CascadingAudioEngine, ResolvedTrackSource
 from core.archive import ArchiveManager
-from core.utils import sanitize_filename
+from core.utils import sanitize_filename, is_valid_audio_file
 from core.config import config
 
 logger = logging.getLogger("core.queue")
@@ -246,10 +246,10 @@ class DownloadQueueManager:
 
     def clear_completed(self):
         with self._lock:
-            completed_ids = [tid for tid, it in self._items.items() if it.status in ("Completed", "Cancelled", "Failed")]
+            completed_ids = [tid for tid, it in self._items.items() if it.status == "Completed"]
             for tid in completed_ids:
                 del self._items[tid]
-        logger.info("Cleared completed/failed items from tracker.")
+        logger.info(f"Cleared {len(completed_ids)} completed items from tracker.")
 
     def get_items(self) -> List[QueueItem]:
         with self._lock:
@@ -295,26 +295,28 @@ class DownloadQueueManager:
                 output_dir = base_output_dir
             naming_tmpl = config.get("download.naming_template", "{artist} - {title}")
 
-            # Save collection (playlist / album) cover art to cover.jpg if available
+            # Save collection (playlist / album) cover art to dedicated app cache directory
             coll_cover_url = getattr(track, "collection_cover_url", "")
-            if coll_cover_url and getattr(track, "collection_type", "track") in ("playlist", "album"):
+            coll_type = getattr(track, "collection_type", "track")
+            coll_name = getattr(track, "collection_name", "")
+            if coll_cover_url and coll_type in ("playlist", "album") and coll_name:
                 try:
-                    os.makedirs(output_dir, exist_ok=True)
-                    cover_target = os.path.join(output_dir, "cover.jpg")
-                    marker_file = os.path.join(output_dir, ".cover_synced")
-                    if not os.path.isfile(cover_target) or not os.path.isfile(marker_file):
+                    cache_dir = config.get("download.cache_dir", "")
+                    if not cache_dir:
+                        cache_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache"))
+                    covers_dir = os.path.join(cache_dir, "covers")
+                    os.makedirs(covers_dir, exist_ok=True)
+                    safe_coll = sanitize_filename(coll_name, max_length=50)
+                    cover_target = os.path.join(covers_dir, f"{coll_type}_{safe_coll}.jpg")
+
+                    if not os.path.isfile(cover_target):
                         r_cov = requests.get(coll_cover_url, timeout=8)
                         if r_cov.status_code == 200 and len(r_cov.content) > 500:
                             with open(cover_target, "wb") as f_cov:
                                 f_cov.write(r_cov.content)
-                            try:
-                                with open(marker_file, "w") as f_m:
-                                    f_m.write("spotify_synced")
-                            except Exception:
-                                pass
-                            logger.info(f"Saved authentic collection cover art: {cover_target}")
+                            logger.info(f"Saved authentic collection cover art to app cache: {cover_target}")
                 except Exception as e_cov:
-                    logger.debug(f"Could not save collection cover art: {e_cov}")
+                    logger.debug(f"Could not save collection cover art to cache: {e_cov}")
 
             # 1. Archive Deduplication Check (Instant Local Reuse)
             archived = self.archive.find_track(
@@ -323,6 +325,14 @@ class DownloadQueueManager:
                 title=track.title,
                 artist=track.primary_artist
             )
+
+            # Ensure archived file is a genuine playable audio file before reusing
+            if archived and os.path.isfile(archived.get("file_path", "")):
+                src_file = os.path.normpath(archived["file_path"])
+                is_valid, _ = is_valid_audio_file(src_file)
+                if not is_valid:
+                    logger.warning(f"Archived file '{src_file}' failed integrity check; redownloading freshly.")
+                    archived = None
 
             if archived and os.path.isfile(archived.get("file_path", "")):
                 src_file = os.path.normpath(archived["file_path"])
@@ -363,10 +373,17 @@ class DownloadQueueManager:
                     try:
                         os.makedirs(os.path.dirname(target_dest), exist_ok=True)
                         shutil.copy2(src_file, target_dest)
-                        src_lrc = os.path.splitext(src_file)[0] + ".lrc"
-                        target_lrc = os.path.splitext(target_dest)[0] + ".lrc"
-                        if os.path.isfile(src_lrc):
-                            shutil.copy2(src_lrc, target_lrc)
+                        lyrics_mode = config.get("download.lyrics_mode", "embedded_only")
+                        if lyrics_mode != "embedded_only":
+                            src_lrc = os.path.splitext(src_file)[0] + ".lrc"
+                            if lyrics_mode == "separate_folder":
+                                lrc_dir = os.path.join(output_dir, "lyrics")
+                                os.makedirs(lrc_dir, exist_ok=True)
+                                target_lrc = os.path.join(lrc_dir, f"{base_name}.lrc")
+                            else:
+                                target_lrc = os.path.splitext(target_dest)[0] + ".lrc"
+                            if os.path.isfile(src_lrc):
+                                shutil.copy2(src_lrc, target_lrc)
 
                         item.output_path = target_dest
                         item.quality_badge = archived.get("quality_badge", "FLAC 16")

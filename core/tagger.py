@@ -31,6 +31,18 @@ class AudioTagger:
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
 
+    @staticmethod
+    def _normalize_crlf(text: Optional[str]) -> str:
+        """
+        Ensures all lyrics strings use Windows standard CRLF (\r\n) line endings.
+        Windows media players (including PotPlayer and rich text subtitle renderers)
+        require \r\n to parse synchronized timestamp lines correctly.
+        """
+        if not text:
+            return ""
+        unified = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        return unified.replace("\n", "\r\n")
+
     def tag_file(
         self,
         file_path: str,
@@ -46,28 +58,102 @@ class AudioTagger:
         ext = os.path.splitext(file_path)[1].lower()
         logger.info(f"Tagging {ext} file: {file_path}")
 
-        # Download cover art bytes if requested
-        cover_bytes = None
-        if embed_art and track.cover_url:
-            cover_bytes = self._download_image(track.cover_url)
+        # Download or resolve cover art bytes across 5-tier cascade if requested
+        cover_bytes = self._resolve_cover_bytes(track, file_path, embed_art=embed_art)
 
-        plain_lyrics = lyrics_data.plain_lyrics if (embed_lyrics and lyrics_data) else ""
+        plain_lyrics = ""
+        synced_lyrics = ""
+        if embed_lyrics and lyrics_data:
+            import re
+            plain_lyrics = lyrics_data.plain_lyrics or ""
+            synced_lyrics = lyrics_data.synced_lyrics or ""
+            if not plain_lyrics and synced_lyrics:
+                plain_lyrics = re.sub(r'\[\d+:\d+\.\d+\]\s*', '', synced_lyrics).strip()
+
+        plain_lyrics = self._normalize_crlf(plain_lyrics)
+        synced_lyrics = self._normalize_crlf(synced_lyrics)
 
         try:
             if ext == ".flac":
-                return self._tag_flac(file_path, track, cover_bytes, plain_lyrics)
+                return self._tag_flac(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             elif ext == ".mp3":
-                return self._tag_mp3(file_path, track, cover_bytes, plain_lyrics)
+                return self._tag_mp3(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             elif ext == ".m4a":
-                return self._tag_m4a(file_path, track, cover_bytes, plain_lyrics)
+                return self._tag_m4a(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             elif ext in (".opus", ".ogg"):
-                return self._tag_opus(file_path, track, cover_bytes, plain_lyrics)
+                return self._tag_opus(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             else:
                 logger.warning(f"Unsupported extension for tagging: {ext}")
                 return False
         except Exception as e:
             logger.error(f"Failed to tag {file_path}: {e}")
             return False
+
+    def _resolve_cover_bytes(
+        self,
+        track: TrackMetadata,
+        file_path: str,
+        embed_art: bool = True
+    ) -> Optional[bytes]:
+        """
+        Multi-tier cover art resolution cascade:
+        1. Direct track.cover_url (if provided)
+        2. Spotify official oEmbed API (returns pristine 640x640 JPEG album art)
+        3. track.collection_cover_url (playlist or album artwork)
+        4. App collection cover cache (cache/covers/{collection}.jpg)
+        5. Existing embedded cover already inside the audio container
+        """
+        if not embed_art:
+            return None
+
+        # Tier 1: Direct track cover URL
+        if track.cover_url:
+            b = self._download_image(track.cover_url)
+            if b:
+                return b
+
+        # Tier 2: Spotify official oEmbed API (returns 640x640 JPEG)
+        if track.id:
+            try:
+                oembed_url = f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{track.id}"
+                resp = self.session.get(oembed_url, timeout=6)
+                if resp.status_code == 200:
+                    thumb_url = resp.json().get("thumbnail_url")
+                    if thumb_url:
+                        b = self._download_image(thumb_url)
+                        if b:
+                            logger.info(f"Resolved 640x640 cover art via Spotify oEmbed for '{track.title}'")
+                            return b
+            except Exception as e:
+                logger.debug(f"Spotify oEmbed resolution failed for {track.id}: {e}")
+
+        # Tier 3: Collection cover URL (playlist or album cover art)
+        coll_url = getattr(track, "collection_cover_url", "")
+        if coll_url:
+            b = self._download_image(coll_url)
+            if b:
+                return b
+
+        # Tier 4: App collection cover cache
+        try:
+            from core.archive import resolve_collection_cover
+            cached_path = resolve_collection_cover(os.path.dirname(file_path))
+            if cached_path and os.path.isfile(cached_path):
+                with open(cached_path, "rb") as f:
+                    return f.read()
+        except Exception:
+            pass
+
+        # Tier 5: Preserve existing embedded cover in file if present
+        try:
+            from core.utils import extract_embedded_cover
+            existing = extract_embedded_cover(file_path)
+            if existing and len(existing) > 500:
+                return existing
+        except Exception:
+            pass
+
+        return None
 
     def _download_image(self, url: str) -> Optional[bytes]:
         try:
@@ -91,9 +177,21 @@ class AudioTagger:
     # -------------------------------------------------------------------------
     # FLAC Vorbis Tagging
     # -------------------------------------------------------------------------
-    def _tag_flac(self, file_path: str, track: TrackMetadata, cover_bytes: Optional[bytes], lyrics: str) -> bool:
+    def _tag_flac(
+        self,
+        file_path: str,
+        track: TrackMetadata,
+        cover_bytes: Optional[bytes],
+        plain_lyrics: str,
+        synced_lyrics: str = ""
+    ) -> bool:
         audio = FLAC(file_path)
-        # Clear existing comments and tags (scrub watermarks)
+        # Preserve existing lyrics if new ones are not provided
+        existing_lyrics = audio.get("LYRICS", [""])[0] or audio.get("lyrics", [""])[0] or audio.get("SYNCEDLYRICS", [""])[0] or audio.get("UNSYNCEDLYRICS", [""])[0]
+        if existing_lyrics:
+            existing_lyrics = self._normalize_crlf(existing_lyrics)
+
+        # Clear existing comments (scrub watermarks)
         audio.clear()
 
         clean_title = clean_watermarks(track.title)
@@ -112,8 +210,29 @@ class AudioTagger:
 
         if track.isrc:
             audio["ISRC"] = track.isrc
-        if lyrics:
-            audio["LYRICS"] = lyrics
+
+        # Populate all standard Vorbis comment lyrics keys so any player finds them
+        lyr_to_use = synced_lyrics or plain_lyrics or existing_lyrics
+        if lyr_to_use:
+            audio["LYRICS"] = lyr_to_use
+            audio["lyrics"] = lyr_to_use
+
+        if synced_lyrics:
+            audio["SYNCEDLYRICS"] = synced_lyrics
+            audio["SYNCED LYRICS"] = synced_lyrics
+        elif existing_lyrics and ("[" in existing_lyrics and "]" in existing_lyrics):
+            audio["SYNCEDLYRICS"] = existing_lyrics
+            audio["SYNCED LYRICS"] = existing_lyrics
+
+        unsynced_to_use = plain_lyrics or (existing_lyrics if not ("[" in existing_lyrics and "]" in existing_lyrics) else "")
+        if not unsynced_to_use and lyr_to_use:
+            import re
+            unsynced_to_use = self._normalize_crlf(re.sub(r'\[\d+:\d+\.\d+\]\s*', '', lyr_to_use).strip())
+
+        if unsynced_to_use:
+            audio["UNSYNCEDLYRICS"] = unsynced_to_use
+            audio["UNSYNCED LYRICS"] = unsynced_to_use
+            audio["DESCRIPTION"] = unsynced_to_use
 
         if cover_bytes:
             audio.clear_pictures()
@@ -131,7 +250,24 @@ class AudioTagger:
     # -------------------------------------------------------------------------
     # MP3 ID3v2.4 Tagging
     # -------------------------------------------------------------------------
-    def _tag_mp3(self, file_path: str, track: TrackMetadata, cover_bytes: Optional[bytes], lyrics: str) -> bool:
+    def _tag_mp3(
+        self,
+        file_path: str,
+        track: TrackMetadata,
+        cover_bytes: Optional[bytes],
+        plain_lyrics: str,
+        synced_lyrics: str = ""
+    ) -> bool:
+        # Preserve existing APIC cover and USLT lyrics if not being updated
+        existing_apic = []
+        existing_uslt = []
+        try:
+            existing_id3 = ID3(file_path)
+            existing_apic = existing_id3.getall("APIC")
+            existing_uslt = existing_id3.getall("USLT")
+        except Exception:
+            pass
+
         audio = ID3()
         try:
             audio.delete(file_path)
@@ -140,7 +276,6 @@ class AudioTagger:
 
         clean_title = clean_watermarks(track.title)
         clean_album = self._resolve_clean_album(track, clean_title)
-        rel_date_str = str(track.release_date) if track.release_date else ""
 
         audio.add(TIT2(encoding=3, text=clean_title))
         audio.add(TPE1(encoding=3, text=track.artist_str))
@@ -152,8 +287,16 @@ class AudioTagger:
 
         if track.isrc:
             audio.add(TSRC(encoding=3, text=track.isrc))
-        if lyrics:
-            audio.add(USLT(encoding=3, lang='eng', desc='', text=lyrics))
+
+        main_lyr = synced_lyrics or plain_lyrics
+        if main_lyr:
+            main_lyr = self._normalize_crlf(main_lyr)
+            # Language-independent 'XXX' and standard 'eng'
+            audio.add(USLT(encoding=3, lang='XXX', desc='', text=main_lyr))
+            audio.add(USLT(encoding=3, lang='eng', desc='', text=main_lyr))
+        elif existing_uslt:
+            for u in existing_uslt:
+                audio.add(u)
 
         if cover_bytes:
             mime = "image/jpeg" if cover_bytes[:2] == b'\xff\xd8' else "image/png"
@@ -164,6 +307,9 @@ class AudioTagger:
                 desc='Cover',
                 data=cover_bytes
             ))
+        elif existing_apic:
+            for ap in existing_apic:
+                audio.add(ap)
 
         audio.save(file_path, v2_version=4)
         logger.info(f"Successfully tagged MP3: {file_path}")
@@ -172,8 +318,17 @@ class AudioTagger:
     # -------------------------------------------------------------------------
     # M4A MP4 Tagging
     # -------------------------------------------------------------------------
-    def _tag_m4a(self, file_path: str, track: TrackMetadata, cover_bytes: Optional[bytes], lyrics: str) -> bool:
+    def _tag_m4a(
+        self,
+        file_path: str,
+        track: TrackMetadata,
+        cover_bytes: Optional[bytes],
+        plain_lyrics: str,
+        synced_lyrics: str = ""
+    ) -> bool:
         audio = MP4(file_path)
+        existing_covr = audio.get("covr")
+        existing_lyr = audio.get("\xa9lyr")
         audio.clear()
 
         clean_title = clean_watermarks(track.title)
@@ -188,12 +343,18 @@ class AudioTagger:
             audio["disk"] = [(int(getattr(track, "disc_number", 1) or 1), 0)]
         audio["\xa9cmt"] = "Spotify Downloader High-Fidelity Engine"
 
-        if lyrics:
-            audio["\xa9lyr"] = lyrics
+        main_lyr = synced_lyrics or plain_lyrics
+        if main_lyr:
+            main_lyr = self._normalize_crlf(main_lyr)
+            audio["\xa9lyr"] = main_lyr
+        elif existing_lyr:
+            audio["\xa9lyr"] = existing_lyr
 
         if cover_bytes:
             img_format = MP4Cover.FORMAT_JPEG if cover_bytes[:2] == b'\xff\xd8' else MP4Cover.FORMAT_PNG
             audio["covr"] = [MP4Cover(cover_bytes, imageformat=img_format)]
+        elif existing_covr:
+            audio["covr"] = existing_covr
 
         audio.save()
         logger.info(f"Successfully tagged M4A: {file_path}")
@@ -202,8 +363,21 @@ class AudioTagger:
     # -------------------------------------------------------------------------
     # Opus / Ogg Tagging
     # -------------------------------------------------------------------------
-    def _tag_opus(self, file_path: str, track: TrackMetadata, cover_bytes: Optional[bytes], lyrics: str) -> bool:
+    def _tag_opus(
+        self,
+        file_path: str,
+        track: TrackMetadata,
+        cover_bytes: Optional[bytes],
+        plain_lyrics: str,
+        synced_lyrics: str = ""
+    ) -> bool:
         audio = OggOpus(file_path)
+        # In OggOpus, METADATA_BLOCK_PICTURE is stored as a Vorbis comment.
+        # Preserve existing picture and lyrics before audio.clear()
+        existing_pic = audio.get("METADATA_BLOCK_PICTURE")
+        existing_lyr = audio.get("LYRICS", [""])[0] or audio.get("lyrics", [""])[0] or audio.get("SYNCEDLYRICS", [""])[0] or audio.get("UNSYNCEDLYRICS", [""])[0]
+        if existing_lyr:
+            existing_lyr = self._normalize_crlf(existing_lyr)
         audio.clear()
 
         clean_title = clean_watermarks(track.title)
@@ -220,8 +394,29 @@ class AudioTagger:
 
         if track.isrc:
             audio["ISRC"] = track.isrc
-        if lyrics:
-            audio["LYRICS"] = lyrics
+
+        # Populate all standard Vorbis comment lyrics keys
+        lyr_to_use = synced_lyrics or plain_lyrics or existing_lyr
+        if lyr_to_use:
+            audio["LYRICS"] = lyr_to_use
+            audio["lyrics"] = lyr_to_use
+
+        if synced_lyrics:
+            audio["SYNCEDLYRICS"] = synced_lyrics
+            audio["SYNCED LYRICS"] = synced_lyrics
+        elif existing_lyr and ("[" in existing_lyr and "]" in existing_lyr):
+            audio["SYNCEDLYRICS"] = existing_lyr
+            audio["SYNCED LYRICS"] = existing_lyr
+
+        unsynced_to_use = plain_lyrics or (existing_lyr if not ("[" in existing_lyr and "]" in existing_lyr) else "")
+        if not unsynced_to_use and lyr_to_use:
+            import re
+            unsynced_to_use = self._normalize_crlf(re.sub(r'\[\d+:\d+\.\d+\]\s*', '', lyr_to_use).strip())
+
+        if unsynced_to_use:
+            audio["UNSYNCEDLYRICS"] = unsynced_to_use
+            audio["UNSYNCED LYRICS"] = unsynced_to_use
+            audio["DESCRIPTION"] = unsynced_to_use
 
         if cover_bytes:
             import base64
@@ -231,6 +426,8 @@ class AudioTagger:
             pic.desc = "Front Cover"
             pic.data = cover_bytes
             audio["METADATA_BLOCK_PICTURE"] = [base64.b64encode(pic.write()).decode("ascii")]
+        elif existing_pic:
+            audio["METADATA_BLOCK_PICTURE"] = existing_pic
 
         audio.save()
         logger.info(f"Successfully tagged Opus: {file_path}")

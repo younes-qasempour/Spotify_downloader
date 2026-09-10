@@ -8,7 +8,7 @@ from core.musilon import MusilonEngine, MusilonSource
 from core.ytdlp_engine import YtdlpEngine, YtdlpSource
 from core.lyrics import LyricsEngine
 from core.tagger import AudioTagger
-from core.utils import sanitize_filename
+from core.utils import sanitize_filename, is_valid_audio_file
 from core.config import config
 
 logger = logging.getLogger("core.resolver")
@@ -147,35 +147,48 @@ class CascadingAudioEngine:
 
         if resolved.source_type == "Musilon":
             if status_callback:
-                status_callback("Downloading (Musilon)")
+                status_callback("Downloading (Musilon VIP)")
             m_src: MusilonSource = resolved.source_obj
             dest_file = f"{base_dest_without_ext}.{m_src.file_extension}"
+            retries = config.get("download.musilon_max_retries", 5)
             try:
-                success = self.musilon.download_file(
-                    url=m_src.download_url,
+                success = self.musilon.download_track_with_retry(
+                    track=track,
+                    source=m_src,
                     dest_path=dest_file,
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
-                    pause_wait=pause_wait
+                    pause_wait=pause_wait,
+                    max_retries=retries
                 )
                 if success and os.path.isfile(dest_file):
-                    final_file_path = dest_file
+                    is_valid, reason = is_valid_audio_file(dest_file)
+                    if is_valid:
+                        final_file_path = dest_file
+                    else:
+                        logger.warning(f"Musilon download produced an invalid audio file ({reason}) for '{track.title}'.")
+                        try:
+                            os.remove(dest_file)
+                        except Exception:
+                            pass
                 else:
-                    logger.warning(f"Musilon download did not produce a file for {track.title}.")
+                    logger.warning(f"Musilon download failed after {retries} attempts for '{track.title}'.")
             except Exception as e:
                 logger.warning(f"Musilon stream download failed ({e}).")
 
+            # Fallback to YouTube Music ONLY as last resort after all Musilon retries fail
             allow_fallback = config.get("download.allow_fallback", True) and not musilon_only
             if not final_file_path and allow_fallback:
+                logger.info(f"Musilon exhausted. Initiating last-resort safety-net fallback to YouTube Music for '{track.title}'...")
                 if status_callback:
-                    status_callback("Falling back to YTM")
+                    status_callback("Falling back to YTM (Last Resort)")
                 yt_fallback = self.ytdlp.resolve_track(track)
                 if yt_fallback:
                     resolved = ResolvedTrackSource(
                         source_type="YouTube Music",
                         quality_badge="YTM Opus",
                         source_obj=yt_fallback,
-                        file_extension="opus"
+                        file_extension=yt_fallback.audio_format or "opus"
                     )
 
         if not final_file_path and resolved.source_type == "YouTube Music":
@@ -191,16 +204,34 @@ class CascadingAudioEngine:
             )
 
         if not final_file_path or not os.path.isfile(final_file_path):
-            raise RuntimeError("Audio download failed to produce a valid file.")
+            raise RuntimeError(f"Audio download failed to produce a valid file for '{track.title}'.")
+
+        # Strict integrity check on downloaded audio
+        is_valid, reason = is_valid_audio_file(final_file_path)
+        if not is_valid:
+            if os.path.exists(final_file_path):
+                try:
+                    os.remove(final_file_path)
+                except Exception:
+                    pass
+            raise RuntimeError(f"Downloaded audio file failed integrity verification ({reason}) for '{track.title}'.")
 
         # Lyrics Processing
+        lyrics_mode = config.get("download.lyrics_mode", "embedded_only")
+        save_companion = config.get("download.save_lrc", False) or lyrics_mode in ("separate_folder", "same_folder")
+        if lyrics_mode == "embedded_only":
+            save_companion = False
+
         if status_callback:
             status_callback("Fetching Lyrics")
         lyrics_data = None
         try:
             lyrics_data = self.lyrics.fetch_lyrics(track)
-            if lyrics_data and save_lrc:
-                self.lyrics.save_companion_lrc(final_file_path, lyrics_data)
+            if lyrics_data and save_companion:
+                target_dir = None
+                if lyrics_mode == "separate_folder":
+                    target_dir = os.path.join(output_dir, "lyrics")
+                self.lyrics.save_companion_lrc(final_file_path, lyrics_data, target_dir=target_dir)
         except Exception as e:
             logger.warning(f"Failed to fetch lyrics: {e}")
 
@@ -217,6 +248,23 @@ class CascadingAudioEngine:
             )
         except Exception as e:
             logger.error(f"Error tagging audio file: {e}")
+
+        # Post-tagging Verification & Auto-Repair Safety Net
+        try:
+            from core.utils import extract_embedded_cover
+            if embed_art:
+                cov = extract_embedded_cover(final_file_path)
+                if not cov or len(cov) < 500:
+                    logger.warning(f"Cover art missing after tagging for '{track.title}'. Triggering emergency oEmbed auto-heal...")
+                    self.tagger.tag_file(
+                        file_path=final_file_path,
+                        track=track,
+                        lyrics_data=lyrics_data,
+                        embed_art=True,
+                        embed_lyrics=embed_lyrics
+                    )
+        except Exception as e_verify:
+            logger.debug(f"Post-tag verification check: {e_verify}")
 
         if status_callback:
             status_callback("Completed")

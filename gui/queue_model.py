@@ -73,6 +73,23 @@ class TrackQueueModel(QAbstractTableModel):
             item.status = status
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
+    def mark_completed(self, track_id: str, path: str):
+        if track_id in self._id_to_row:
+            row = self._id_to_row[track_id]
+            item = self.items[row]
+            item.status = "Completed"
+            item.output_path = path
+            item.progress_percent = 100.0
+            self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
+
+    def mark_failed(self, track_id: str, err: str):
+        if track_id in self._id_to_row:
+            row = self._id_to_row[track_id]
+            item = self.items[row]
+            item.status = "Failed"
+            item.error_message = err
+            self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
+
     def get_item(self, row: int) -> Optional[QueueItem]:
         if 0 <= row < len(self.items):
             return self.items[row]
@@ -86,7 +103,7 @@ class TrackQueueModel(QAbstractTableModel):
 
     def clear_completed(self):
         self.beginResetModel()
-        self.items = [it for it in self.items if it.status not in ("Completed", "Cancelled", "Failed")]
+        self.items = [it for it in self.items if it.status != "Completed"]
         self._id_to_row = {it.track.id: idx for idx, it in enumerate(self.items)}
         self.endResetModel()
 

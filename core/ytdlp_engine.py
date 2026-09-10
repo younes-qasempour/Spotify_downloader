@@ -43,17 +43,24 @@ class YtdlpEngine:
 
     def resolve_track(self, track: TrackMetadata) -> Optional[YtdlpSource]:
         """
-        Queries YouTube for matching audio tracks within tolerance.
+        Queries YouTube for matching audio tracks within duration tolerance.
         Returns YtdlpSource with prioritized candidate URLs.
         """
-        clean_title = clean_watermarks(track.title)
+        clean_title = clean_watermarks(track.title).strip()
         clean_title_lower = clean_title.lower()
-        artist = track.primary_artist
+        artist = track.primary_artist.strip()
+        clean_artist = re.sub(r'^(?:the|a)\s+', '', artist, flags=re.IGNORECASE).strip()
+
         queries = [
-            f"ytsearch8:{artist} - {clean_title} official audio",
-            f"ytsearch8:{artist} - {clean_title} topic",
-            f"ytsearch8:{artist} - {clean_title}"
+            f"ytsearch10:{artist} - {clean_title} official audio",
+            f"ytsearch10:{artist} - {clean_title} topic",
+            f"ytsearch10:{artist} - {clean_title}",
+            f"ytsearch10:{artist} {clean_title} audio",
+            f"ytsearch10:{artist} {clean_title} music video",
+            f"ytsearch10:{artist} {clean_title}",
         ]
+        if clean_artist != artist:
+            queries.append(f"ytsearch10:{clean_artist} {clean_title}")
 
         node_path = shutil.which("node")
         ydl_opts = {
@@ -66,9 +73,9 @@ class YtdlpEngine:
         if node_path:
             ydl_opts["js_runtimes"] = {"node": {"path": node_path}}
 
-        matched_candidates = []
-        seen_ids = set()
         target_sec = track.duration_sec
+        candidates: Dict[str, Dict[str, Any]] = {}
+        unwanted_keywords = ["instrumental", "karaoke", "cover", "workout", "slowed", "reverb"]
 
         for query in queries:
             try:
@@ -81,9 +88,8 @@ class YtdlpEngine:
                     if not entry:
                         continue
                     cand_id = entry.get("id")
-                    if not cand_id or cand_id in seen_ids:
+                    if not cand_id or cand_id in candidates:
                         continue
-                    seen_ids.add(cand_id)
 
                     cand_dur = entry.get("duration")
                     cand_title = entry.get("title", "")
@@ -94,69 +100,70 @@ class YtdlpEngine:
                     # Filter out unwanted version modifiers if not in track title
                     unwanted = any(
                         m in cand_lower
-                        for m in ["instrumental", "karaoke", "cover", "workout", "slowed", "reverb"]
+                        for m in unwanted_keywords
                         if m not in clean_title_lower
                     )
+                    if unwanted:
+                        continue
 
                     diff = abs(cand_dur - target_sec)
-                    if diff <= self.DURATION_TOLERANCE_SEC:
-                        effective_score = diff + (50.0 if unwanted else 0.0)
-                        if "official audio" in cand_lower or "topic" in cand_lower:
-                            effective_score -= 1.0
-                        matched_candidates.append((effective_score, cand_id, cand_title, int(cand_dur)))
+                    # Exclude videos with extreme duration mismatch (> 22 seconds)
+                    if diff > 22.0:
+                        continue
 
-                if matched_candidates:
+                    # Score candidate
+                    # Duration component: closer is better
+                    if diff <= 3.0:
+                        score = 100.0 - (diff * 2.0)
+                    elif diff <= 6.0:
+                        score = 85.0 - (diff * 2.0)
+                    elif diff <= 12.0:
+                        score = 70.0 - (diff * 1.5)
+                    else:
+                        score = 50.0 - diff
+
+                    # Title relevance
+                    if "official audio" in cand_lower or "topic" in cand_lower:
+                        score += 20.0
+                    elif "official video" in cand_lower or "music video" in cand_lower:
+                        score += 15.0
+
+                    # Artist name in candidate title
+                    if clean_artist.lower() in cand_lower or artist.lower() in cand_lower:
+                        score += 15.0
+
+                    candidates[cand_id] = {
+                        "score": score,
+                        "id": cand_id,
+                        "title": cand_title,
+                        "duration": int(cand_dur),
+                        "diff": diff
+                    }
+
+                # If we found an ideal match (diff <= 3s and high confidence), stop searching further queries
+                best_so_far = max(candidates.values(), key=lambda x: x["score"]) if candidates else None
+                if best_so_far and best_so_far["score"] >= 100.0 and best_so_far["diff"] <= 3.0:
+                    logger.info(f"Found immediate high-confidence YouTube candidate: '{best_so_far['title']}'")
                     break
 
             except Exception as e:
                 logger.error(f"Error querying YouTube for '{query}': {e}")
 
-        # Fallback pass with ±10s tolerance if strict ±5s found nothing
-        if not matched_candidates:
-            logger.info(f"Strict ±5s tolerance found no matches for '{track.title}'. Trying ±10s tolerance...")
-            for query in [f"ytsearch8:{artist} - {clean_title} topic", f"ytsearch8:{artist} - {clean_title} official audio"]:
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        res = ydl.extract_info(query, download=False)
-                        entries = res.get("entries", []) if res else []
-                    for entry in entries:
-                        if not entry:
-                            continue
-                        cand_id = entry.get("id")
-                        if not cand_id or cand_id in seen_ids:
-                            continue
-                        seen_ids.add(cand_id)
-                        cand_dur = entry.get("duration")
-                        cand_title = entry.get("title", "")
-                        if cand_dur is None:
-                            continue
-                        cand_lower = cand_title.lower()
-                        unwanted = any(m in cand_lower for m in ["instrumental", "karaoke", "cover"] if m not in clean_title_lower)
-                        if unwanted:
-                            continue
-                        diff = abs(cand_dur - target_sec)
-                        if diff <= 10.0:
-                            matched_candidates.append((diff, cand_id, cand_title, int(cand_dur)))
-                    if matched_candidates:
-                        break
-                except Exception:
-                    pass
-
-        if not matched_candidates:
+        if not candidates:
             logger.warning(f"No YouTube candidate met tolerance for '{track.title}'")
             return None
 
-        # Sort by candidate score (duration difference + modifiers)
-        matched_candidates.sort(key=lambda x: x[0])
-        best_score, best_id, best_title, best_dur = matched_candidates[0]
-        candidate_urls = [f"https://www.youtube.com/watch?v={c[1]}" for c in matched_candidates]
+        # Sort by candidate score descending
+        sorted_candidates = sorted(candidates.values(), key=lambda x: x["score"], reverse=True)
+        best = sorted_candidates[0]
+        candidate_urls = [f"https://www.youtube.com/watch?v={c['id']}" for c in sorted_candidates]
 
-        logger.info(f"Found {len(matched_candidates)} YouTube candidate(s). Best: '{best_title}' (ID: {best_id})")
+        logger.info(f"Found {len(sorted_candidates)} YouTube candidate(s). Best: '{best['title']}' (ID: {best['id']}, dur: {best['duration']}s, diff: {best['diff']:.1f}s, score: {best['score']:.1f})")
         return YtdlpSource(
-            video_id=best_id,
-            title=best_title,
-            duration=best_dur,
-            url=f"https://www.youtube.com/watch?v={best_id}",
+            video_id=best["id"],
+            title=best["title"],
+            duration=best["duration"],
+            url=f"https://www.youtube.com/watch?v={best['id']}",
             audio_format="m4a",
             candidate_urls=candidate_urls
         )

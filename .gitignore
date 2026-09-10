@@ -30,7 +30,8 @@ Music/
 *.opus
 *.wav
 
-# Scratch & Temporary Testing
+# Scratch, Cache & Temporary Testing
+cache/
 scratch/
 *.log
 *.tmp

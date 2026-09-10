@@ -168,6 +168,23 @@ d:\Spotify-Downloader\
   - `CollectionCard` displays a rounded 54×54 cover thumbnail and handles full-card mouse clicks (`mousePressEvent`) with pointing hand cursor.
   - Clicking any playlist or album card opens the collection view with a navigation banner (`[ ← Back to Playlists ]`, thumbnail, title, stats, and Explorer button), displaying only that collection's songs while strictly preserving individual song cover art.
 
+### 21. Musilon VIP Expiration, Paywall Rejection & Auto-Reauth Retries
+- **Symptom:** Downloads were completing with tiny ~207 KB files that could not play.
+- **Cause:** When session cookies expired, Musilon returned an HTML warning webpage (`اخطار دانلود - موزیلون`) with HTTP 200 OK. The downloader streamed this HTML into audio files without inspecting `Content-Type` or magic bytes, skipping YouTube fallback and recording corrupt records in `archive.db`. Additionally, `test_connection()` evaluated `is_vip = True` purely if the cookie *name* existed in the jar.
+- **Fix:**
+  - Implemented `detect_audio_header()` and `is_valid_audio_file()` in `core/utils.py` checking magic bytes (`fLaC`, `ID3`, `OggS`, `ftyp`).
+  - In `core/musilon.py`, `download_file()` rejects non-audio `Content-Type` and initial HTML bytes (`MusilonVipError`).
+  - Added `ensure_vip_session(force=True)` and `download_track_with_retry()`: immediately re-authenticates VIP session with username/password, refreshes download nonce/URL, and retries up to 5-10 attempts before falling back to YouTube Music.
+  - In `core/archive.py`, `find_track()` validates audio integrity and purges corrupt HTML files.
+
+### 22. Pure Song Folders & Isolated Cache Storage
+- **Problem:** Music folders were cluttered with `cover.jpg`, hidden `.cover_synced` marker files, and `.lrc` lyrics files.
+- **Fix:**
+  - Relocated collection covers to a dedicated app cache directory: `cache/covers/{folder_name}.jpg`.
+  - Completely eliminated `.cover_synced` marker files.
+  - In `core/config.py`, added `download.lyrics_mode` defaulting to `"embedded_only"`, embedding lyrics directly into audio tags so ZERO extra files exist in the song folder.
+  - Added `purge_corrupt_and_cleanup_library()` in `core/archive.py` to purge corrupt files, relocate existing covers, and clean `.cover_synced` files.
+
 ---
 
 ## 4. Verification History

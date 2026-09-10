@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
     LineEdit, PrimaryPushButton, PushButton, ToolButton, SwitchButton,
-    CardWidget, InfoBar, InfoBarPosition, FluentIcon, Slider
+    CardWidget, InfoBar, InfoBarPosition, FluentIcon, Slider, ComboBox
 )
 
 from core.config import config
@@ -326,6 +326,26 @@ class SettingsView(QScrollArea):
         fb_row.addWidget(self.fallback_switch)
         d_layout.addLayout(fb_row)
 
+        # Library Clean & Repair Row
+        clean_row = QHBoxLayout()
+        clean_info = QVBoxLayout()
+        clean_title = BodyLabel("Clean Library & Purge Corrupted Files", down_card)
+        clean_title.setStyleSheet("font-weight: bold;")
+        clean_desc = CaptionLabel(
+            "Purges unplayable HTML files (<500KB), relocates cover artwork to cache, and removes marker files.",
+            down_card
+        )
+        clean_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        clean_info.addWidget(clean_title)
+        clean_info.addWidget(clean_desc)
+
+        self.clean_lib_btn = PushButton(FluentIcon.DELETE, "Clean Library", down_card)
+        self.clean_lib_btn.clicked.connect(self._clean_library)
+
+        clean_row.addLayout(clean_info, 1)
+        clean_row.addWidget(self.clean_lib_btn)
+        d_layout.addLayout(clean_row)
+
         main_layout.addWidget(down_card)
 
         # =====================================================================
@@ -338,22 +358,33 @@ class SettingsView(QScrollArea):
         t_layout.setContentsMargins(20, 18, 20, 20)
         t_layout.setSpacing(14)
 
-        # Sync LRC switch
+        # Lyrics Storage Mode Row
         lrc_row = QHBoxLayout()
         lrc_info = QVBoxLayout()
-        lrc_title = BodyLabel("Save Synchronized .lrc Companion File", tag_card)
+        lrc_title = BodyLabel("Lyrics Storage Location", tag_card)
         lrc_title.setStyleSheet("font-weight: bold;")
-        lrc_desc = CaptionLabel("Generates a timestamped .lrc lyrics file in the download directory.", tag_card)
+        lrc_desc = CaptionLabel(
+            "Embedded-Only keeps your music folders 100% clean with ONLY songs (lyrics are embedded in audio tags).\n"
+            "Dedicated Subfolder saves .lrc files inside a separate 'lyrics/' subfolder.",
+            tag_card
+        )
         lrc_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
         lrc_info.addWidget(lrc_title)
         lrc_info.addWidget(lrc_desc)
 
-        self.lrc_switch = SwitchButton(tag_card)
-        self.lrc_switch.setChecked(config.get("download.save_lrc", True))
-        self.lrc_switch.checkedChanged.connect(lambda v: config.set("download.save_lrc", v))
+        self.lyrics_combo = ComboBox(tag_card)
+        self.lyrics_combo.addItems([
+            "Embedded in Audio Only (Cleanest - No .lrc files)",
+            "Dedicated Subfolder (lyrics/)",
+            "Same Folder as Audio (.lrc)"
+        ])
+        current_lrc_mode = config.get("download.lyrics_mode", "embedded_only")
+        lrc_map = {"embedded_only": 0, "separate_folder": 1, "same_folder": 2}
+        self.lyrics_combo.setCurrentIndex(lrc_map.get(current_lrc_mode, 0))
+        self.lyrics_combo.currentIndexChanged.connect(self._on_lyrics_mode_changed)
 
         lrc_row.addLayout(lrc_info, 1)
-        lrc_row.addWidget(self.lrc_switch)
+        lrc_row.addWidget(self.lyrics_combo)
         t_layout.addLayout(lrc_row)
 
         # Embed lyrics switch
@@ -445,6 +476,44 @@ class SettingsView(QScrollArea):
         ff_layout.addLayout(ff_action_row)
 
         main_layout.addWidget(ffmpeg_card)
+
+        # =====================================================================
+        # 6. Library Maintenance & Auto-Repair Section
+        # =====================================================================
+        main_layout.addWidget(StrongBodyLabel("Library Maintenance & Auto-Repair", self.container))
+
+        maint_card = CardWidget(self.container)
+        maint_layout = QVBoxLayout(maint_card)
+        maint_layout.setContentsMargins(20, 18, 20, 20)
+        maint_layout.setSpacing(14)
+
+        maint_desc = CaptionLabel(
+            "Audit all downloaded songs in your library, auto-resolve any missing high-resolution album artwork "
+            "or embedded lyrics, and clean/reorganize corrupt files.",
+            maint_card
+        )
+        maint_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        maint_layout.addWidget(maint_desc)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+
+        self.repair_lib_btn = PushButton(FluentIcon.SYNC, "Scan & Auto-Repair All Tracks", maint_card)
+        self.repair_lib_btn.clicked.connect(self._repair_library)
+
+        self.clean_lib_btn = PushButton(FluentIcon.DELETE, "Clean Corrupt Files & Cache", maint_card)
+        self.clean_lib_btn.clicked.connect(self._clean_library)
+
+        btn_row.addWidget(self.repair_lib_btn)
+        btn_row.addWidget(self.clean_lib_btn)
+        btn_row.addStretch(1)
+        maint_layout.addLayout(btn_row)
+
+        self.maint_status_label = CaptionLabel("", maint_card)
+        self.maint_status_label.setStyleSheet("font-size: 11px;")
+        maint_layout.addWidget(self.maint_status_label)
+
+        main_layout.addWidget(maint_card)
         main_layout.addStretch(1)
 
         # Check initial status
@@ -662,4 +731,81 @@ class SettingsView(QScrollArea):
             InfoBar.success("FFmpeg Installed", msg, duration=4000, parent=self)
         else:
             InfoBar.error("FFmpeg Download Error", msg, duration=5000, parent=self)
+
+    def _on_lyrics_mode_changed(self, idx: int):
+        rev_map = {
+            0: "embedded_only",
+            1: "separate_folder",
+            2: "same_folder"
+        }
+        mode = rev_map.get(idx, "embedded_only")
+        config.set("download.lyrics_mode", mode)
+        config.set("download.save_lrc", mode != "embedded_only")
+        desc_map = {
+            "embedded_only": "Lyrics will be embedded directly in songs (no .lrc files).",
+            "separate_folder": "Lyrics will be saved to a 'lyrics/' subfolder.",
+            "same_folder": "Lyrics will be saved alongside songs as .lrc files."
+        }
+        InfoBar.info("Lyrics Setting Updated", desc_map.get(mode, ""), duration=3000, parent=self)
+
+    def _clean_library(self):
+        from core.archive import ArchiveManager
+        self.clean_lib_btn.setEnabled(False)
+        self.clean_lib_btn.setText("Cleaning...")
+
+        def worker():
+            try:
+                arc = ArchiveManager()
+                stats = arc.purge_corrupt_and_cleanup_library()
+                msg = (
+                    f"Purged {stats['purged_corrupt_files']} corrupt HTML files, "
+                    f"relocated {stats['relocated_covers']} covers to cache, "
+                    f"reorganized {stats['reorganized_lyrics']} lyrics files."
+                )
+                QTimer.singleShot(0, lambda: self._on_clean_finished(True, msg))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: self._on_clean_finished(False, str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_clean_finished(self, success: bool, msg: str):
+        self.clean_lib_btn.setEnabled(True)
+        self.clean_lib_btn.setText("Clean Corrupt Files & Cache")
+        if success:
+            InfoBar.success("Library Cleaned", msg, duration=5000, parent=self)
+        else:
+            InfoBar.error("Cleanup Error", f"Failed to clean library: {msg}", duration=5000, parent=self)
+
+    def _repair_library(self):
+        from core.archive import ArchiveManager
+        self.repair_lib_btn.setEnabled(False)
+        self.repair_lib_btn.setText("Scanning & Repairing...")
+        self.maint_status_label.setText("Starting library scan across downloads...")
+
+        def progress_cb(cur: int, total: int, msg: str):
+            QTimer.singleShot(0, lambda: self.maint_status_label.setText(f"[{cur}/{total}] {msg}"))
+
+        def worker():
+            try:
+                arc = ArchiveManager()
+                stats = arc.repair_library(progress_callback=progress_cb)
+                msg = (
+                    f"Audit complete: {stats['scanned']} files scanned. "
+                    f"Healed {stats['healed_covers']} covers, "
+                    f"embedded {stats['healed_lyrics']} lyrics."
+                )
+                QTimer.singleShot(0, lambda: self._on_repair_finished(True, msg))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: self._on_repair_finished(False, str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_repair_finished(self, success: bool, msg: str):
+        self.repair_lib_btn.setEnabled(True)
+        self.repair_lib_btn.setText("Scan & Auto-Repair All Tracks")
+        self.maint_status_label.setText(msg)
+        if success:
+            InfoBar.success("Library Repaired", msg, duration=5000, parent=self)
+        else:
+            InfoBar.error("Repair Error", f"Failed to repair library: {msg}", duration=5000, parent=self)
 

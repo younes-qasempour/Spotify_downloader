@@ -2,41 +2,69 @@ import os
 import sqlite3
 import threading
 import logging
-from typing import Optional, List, Dict, Any
+import shutil
+from typing import Optional, List, Dict, Any, Callable
 from pathlib import Path
 
 from core.spotify_client import TrackMetadata
-from core.utils import extract_embedded_cover
+from core.utils import extract_embedded_cover, is_valid_audio_file, sanitize_filename
 
 logger = logging.getLogger("core.archive")
 
 
 def resolve_collection_cover(folder_path: str, sample_file: str = "") -> str:
     """
-    Checks if a collection folder has a cover image (cover.jpg, cover.png, etc.).
-    If not, extracts embedded artwork from sample_file (or first audio file found in folder)
-    and saves it to folder_path/cover.jpg so it can be displayed as the collection's thumbnail.
-    Returns the path to the cover image if found/created, or empty string.
+    Resolves or extracts collection cover artwork into the dedicated app cache directory:
+    cache/covers/{folder_name}.jpg.
+    Never writes cover.jpg or any image files inside the user's music folder.
+    Returns the path to the cached cover image if found/created, or empty string.
     """
-    if not folder_path or not os.path.isdir(folder_path):
+    if not folder_path:
         return ""
 
-    for ext in (".jpg", ".jpeg", ".png", ".webp"):
-        candidate = os.path.join(folder_path, f"cover{ext}")
-        if os.path.isfile(candidate):
-            return candidate
-        candidate_f = os.path.join(folder_path, f"folder{ext}")
-        if os.path.isfile(candidate_f):
-            return candidate_f
+    folder_name = os.path.basename(os.path.normpath(folder_path))
+    safe_name = sanitize_filename(folder_name, max_length=50)
 
-    # If no cover image exists, attempt extraction from sample_file or first audio file
+    from core.config import config
+    cache_dir = config.get("download.cache_dir", "")
+    if not cache_dir:
+        cache_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache"))
+    covers_dir = os.path.join(cache_dir, "covers")
+    os.makedirs(covers_dir, exist_ok=True)
+
+    # 1. Check if cached cover exists in app cache
+    cached_cover = os.path.join(covers_dir, f"{safe_name}.jpg")
+    if os.path.isfile(cached_cover) and os.path.getsize(cached_cover) > 500:
+        return cached_cover
+
+    # Also check playlist_ / album_ prefixed cache files
+    for prefix in ("playlist_", "album_"):
+        candidate = os.path.join(covers_dir, f"{prefix}{safe_name}.jpg")
+        if os.path.isfile(candidate) and os.path.getsize(candidate) > 500:
+            return candidate
+
+    # 2. Check if a cover image exists in folder to migrate to cache
+    if os.path.isdir(folder_path):
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            old_cov = os.path.join(folder_path, f"cover{ext}")
+            if os.path.isfile(old_cov) and os.path.getsize(old_cov) > 500:
+                try:
+                    shutil.copy2(old_cov, cached_cover)
+                    return cached_cover
+                except Exception:
+                    pass
+
+    # 3. If no cover image exists, attempt extraction from sample_file or first audio file
     target_audio = sample_file if (sample_file and os.path.isfile(sample_file)) else None
-    if not target_audio:
+    if not target_audio and os.path.isdir(folder_path):
         try:
             for fname in os.listdir(folder_path):
                 if os.path.splitext(fname)[1].lower() in (".flac", ".mp3", ".opus", ".m4a", ".ogg"):
-                    target_audio = os.path.join(folder_path, fname)
-                    break
+                    candidate_p = os.path.join(folder_path, fname)
+                    is_valid, _ = is_valid_audio_file(candidate_p)
+                    if is_valid:
+                        target_audio = candidate_p
+                        break
         except Exception:
             pass
 
@@ -44,11 +72,10 @@ def resolve_collection_cover(folder_path: str, sample_file: str = "") -> str:
         try:
             art_bytes = extract_embedded_cover(target_audio)
             if art_bytes and len(art_bytes) > 500:
-                cover_out = os.path.join(folder_path, "cover.jpg")
-                with open(cover_out, "wb") as f:
+                with open(cached_cover, "wb") as f:
                     f.write(art_bytes)
-                logger.info(f"Generated collection cover from audio track: {cover_out}")
-                return cover_out
+                logger.info(f"Cached collection cover in app cache: {cached_cover}")
+                return cached_cover
         except Exception as e:
             logger.debug(f"Could not extract collection cover from audio file: {e}")
 
@@ -237,7 +264,18 @@ class ArchiveManager:
                 data = dict(row)
                 file_path = data.get("file_path", "")
                 if file_path and os.path.isfile(file_path):
-                    return data
+                    is_valid, reason = is_valid_audio_file(file_path)
+                    if is_valid:
+                        return data
+                    else:
+                        logger.warning(f"Archived file '{file_path}' failed integrity check ({reason}). Purging corrupt record.")
+                        try:
+                            os.remove(file_path)
+                        except Exception:
+                            pass
+                        with conn:
+                            conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (data["spotify_id"],))
+                        return None
                 else:
                     # File was deleted from disk; remove stale record
                     logger.info(f"Archived file deleted from disk: {file_path}. Cleaning record.")
@@ -247,6 +285,28 @@ class ArchiveManager:
 
             except Exception as e:
                 logger.error(f"Error querying archive: {e}")
+                return None
+            finally:
+                conn.close()
+
+    def get_track_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """Queries archive for a track by its absolute or normalized file_path."""
+        if not file_path:
+            return None
+        norm_p = os.path.normpath(file_path).lower()
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.execute("SELECT * FROM downloaded_tracks WHERE LOWER(file_path) = ? LIMIT 1", (norm_p,))
+                row = cur.fetchone()
+                if not row:
+                    # Also try matching by basename
+                    bname = os.path.basename(file_path)
+                    cur = conn.execute("SELECT * FROM downloaded_tracks WHERE file_path LIKE ? LIMIT 1", (f"%{bname}%",))
+                    row = cur.fetchone()
+                return dict(row) if row else None
+            except Exception as e:
+                logger.debug(f"Error finding track by path: {e}")
                 return None
             finally:
                 conn.close()
@@ -548,6 +608,9 @@ class ArchiveManager:
                     continue
 
                 full_path = os.path.normpath(os.path.join(dirpath, fname))
+                is_valid, _ = is_valid_audio_file(full_path)
+                if not is_valid:
+                    continue
 
                 # Check if already indexed by path (case-insensitive on Windows)
                 with self._db_lock:
@@ -692,3 +755,315 @@ class ArchiveManager:
         if indexed_count > 0:
             logger.info(f"Scanned {root_dir} and indexed {indexed_count} existing tracks into Archive.")
         return indexed_count
+
+    def purge_corrupt_and_cleanup_library(self, downloads_dir: Optional[str] = None) -> Dict[str, int]:
+        """
+        Comprehensive library cleaner and integrity restorer:
+        1. Purges all unplayable/corrupt HTML files (< 500KB with HTML header) from disk and archive.db.
+        2. Eliminates all hidden .cover_synced marker files.
+        3. Migrates folder cover.jpg files to cache/covers/ and removes them from the music folder.
+        4. Reorganizes .lrc files into a dedicated lyrics/ subfolder if present.
+        Returns a dict of counts for each action performed.
+        """
+        from core.config import config
+        target_dir = downloads_dir or config.get("download.output_dir", "")
+        if not target_dir or not os.path.isdir(target_dir):
+            return {"purged_corrupt_files": 0, "purged_db_records": 0, "removed_marker_files": 0, "relocated_covers": 0, "reorganized_lyrics": 0}
+
+        cache_dir = config.get("download.cache_dir", "")
+        if not cache_dir:
+            cache_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache"))
+        covers_dir = os.path.join(cache_dir, "covers")
+        os.makedirs(covers_dir, exist_ok=True)
+
+        stats = {
+            "purged_corrupt_files": 0,
+            "purged_db_records": 0,
+            "removed_marker_files": 0,
+            "relocated_covers": 0,
+            "reorganized_lyrics": 0
+        }
+
+        purged_paths = set()
+
+        # 1. Walk downloads_dir to clean files
+        for root, dirs, files in os.walk(target_dir):
+            for fname in files:
+                fpath = os.path.join(root, fname)
+                ext = os.path.splitext(fname)[1].lower()
+
+                # Check for .cover_synced
+                if fname == ".cover_synced":
+                    try:
+                        os.remove(fpath)
+                        stats["removed_marker_files"] += 1
+                        logger.info(f"Removed marker file: {fpath}")
+                    except Exception as e:
+                        logger.warning(f"Could not remove marker file {fpath}: {e}")
+                    continue
+
+                # Check for cover.jpg / cover.png
+                if fname.lower() in ("cover.jpg", "cover.jpeg", "cover.png", "folder.jpg"):
+                    folder_name = os.path.basename(root)
+                    safe_folder = sanitize_filename(folder_name, max_length=50)
+                    cached_dest = os.path.join(covers_dir, f"{safe_folder}.jpg")
+                    try:
+                        if not os.path.isfile(cached_dest) and os.path.getsize(fpath) > 500:
+                            shutil.copy2(fpath, cached_dest)
+                        os.remove(fpath)
+                        stats["relocated_covers"] += 1
+                        logger.info(f"Relocated cover art from {fpath} to {cached_dest}")
+                    except Exception as e:
+                        logger.warning(f"Could not relocate cover {fpath}: {e}")
+                    continue
+
+                # Check audio files for HTML corruption
+                if ext in (".flac", ".mp3", ".opus", ".m4a", ".ogg"):
+                    valid, reason = is_valid_audio_file(fpath)
+                    if not valid:
+                        try:
+                            os.remove(fpath)
+                            purged_paths.add(os.path.normpath(fpath).lower())
+                            stats["purged_corrupt_files"] += 1
+                            logger.info(f"Purged corrupt non-audio file ({reason}): {fpath}")
+                        except Exception as e:
+                            logger.warning(f"Could not remove corrupt file {fpath}: {e}")
+                    continue
+
+                # Check .lrc files if separate_folder mode is preferred
+                if ext == ".lrc" and os.path.basename(root).lower() != "lyrics":
+                    lyrics_mode = config.get("download.lyrics_mode", "embedded_only")
+                    if lyrics_mode in ("separate_folder", "embedded_only"):
+                        # Move to a clean lyrics/ subfolder so user's main song folder is purely audio
+                        lyrics_sub = os.path.join(root, "lyrics")
+                        os.makedirs(lyrics_sub, exist_ok=True)
+                        dest_lrc = os.path.join(lyrics_sub, fname)
+                        try:
+                            shutil.move(fpath, dest_lrc)
+                            stats["reorganized_lyrics"] += 1
+                            logger.info(f"Moved .lrc to lyrics subfolder: {dest_lrc}")
+                        except Exception as e:
+                            logger.warning(f"Could not move .lrc file {fpath}: {e}")
+
+        # 2. Clean database records for purged or non-existent files
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.execute("SELECT spotify_id, file_path FROM downloaded_tracks")
+                rows = cur.fetchall()
+                for r in rows:
+                    p = r["file_path"]
+                    norm_p = os.path.normpath(p).lower()
+                    if norm_p in purged_paths or not os.path.isfile(p):
+                        with conn:
+                            conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (r["spotify_id"],))
+                        stats["purged_db_records"] += 1
+                    else:
+                        valid, _ = is_valid_audio_file(p)
+                        if not valid:
+                            try:
+                                os.remove(p)
+                            except Exception:
+                                pass
+                            with conn:
+                                conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (r["spotify_id"],))
+                            stats["purged_db_records"] += 1
+            except Exception as e:
+                logger.error(f"Error cleaning database records: {e}")
+            finally:
+                conn.close()
+
+        logger.info(f"Cleanup finished: {stats}")
+        return stats
+
+    def repair_library(
+        self,
+        root_dir: str = "",
+        progress_callback: Optional[Callable[[int, int, str], None]] = None
+    ) -> Dict[str, int]:
+        """
+        Deep scan and auto-repair across user music folders.
+        Detects any tracks missing embedded album artwork or lyrics,
+        resolves them via multi-tier fallback (including Spotify oEmbed and LRCLIB),
+        and safely embeds them into the audio containers without loss.
+        """
+        from core.config import config
+        from core.tagger import AudioTagger
+        from core.lyrics import LyricsEngine
+        from core.spotify_client import TrackMetadata
+
+        if not root_dir:
+            root_dir = config.get("download.path", "downloads")
+            if not os.path.isabs(root_dir):
+                root_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), root_dir))
+
+        stats = {
+            "scanned": 0,
+            "missing_covers_found": 0,
+            "missing_lyrics_found": 0,
+            "healed_covers": 0,
+            "healed_lyrics": 0,
+            "errors": 0
+        }
+
+        if not os.path.isdir(root_dir):
+            return stats
+
+        tagger = AudioTagger()
+        lyrics_engine = LyricsEngine()
+
+        audio_files = []
+        for root, dirs, files in os.walk(root_dir):
+            if os.path.basename(root).lower() in ("lyrics", "cache", "logs", "bin"):
+                continue
+            for fname in files:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in (".flac", ".opus", ".mp3", ".m4a", ".ogg"):
+                    audio_files.append(os.path.join(root, fname))
+
+        total_files = len(audio_files)
+        logger.info(f"Starting Library Repair across {total_files} audio files in: {root_dir}")
+
+        for idx, fpath in enumerate(audio_files, 1):
+            stats["scanned"] += 1
+            bname = os.path.basename(fpath)
+            if progress_callback:
+                progress_callback(idx, total_files, f"Checking {bname}")
+
+            # Check cover
+            cov = extract_embedded_cover(fpath)
+            has_cover = bool(cov and len(cov) > 500)
+
+            # Check lyrics
+            ext = os.path.splitext(fpath)[1].lower()
+            has_lyrics = False
+            has_synced_lyrics = False
+            has_crlf = False
+            existing_lyr_text = ""
+            try:
+                if ext == ".flac":
+                    from mutagen.flac import FLAC
+                    aud = FLAC(fpath)
+                    for k in ["LYRICS", "lyrics", "SYNCEDLYRICS", "UNSYNCEDLYRICS"]:
+                        if k in aud and aud[k][0].strip():
+                            existing_lyr_text = aud[k][0]
+                            has_lyrics = True
+                            has_synced_lyrics = "[" in existing_lyr_text and "]" in existing_lyr_text
+                            has_crlf = "\r\n" in existing_lyr_text
+                            break
+                elif ext in (".opus", ".ogg"):
+                    from mutagen.oggopus import OggOpus
+                    aud = OggOpus(fpath)
+                    for k in ["LYRICS", "lyrics", "SYNCEDLYRICS", "UNSYNCEDLYRICS"]:
+                        if k in aud and aud[k][0].strip():
+                            existing_lyr_text = aud[k][0]
+                            has_lyrics = True
+                            has_synced_lyrics = "[" in existing_lyr_text and "]" in existing_lyr_text
+                            has_crlf = "\r\n" in existing_lyr_text
+                            break
+                elif ext == ".mp3":
+                    from mutagen.mp3 import MP3
+                    aud = MP3(fpath)
+                    for k in aud.keys():
+                        if k.startswith("USLT") or k.startswith("SYLT"):
+                            existing_lyr_text = str(aud[k])
+                            has_lyrics = True
+                            has_synced_lyrics = "[" in existing_lyr_text and "]" in existing_lyr_text
+                            has_crlf = "\r\n" in existing_lyr_text
+                            break
+                elif ext == ".m4a":
+                    from mutagen.mp4 import MP4
+                    aud = MP4(fpath)
+                    lyr = aud.get("\xa9lyr", [""])[0] if aud.get("\xa9lyr") else ""
+                    if lyr and lyr.strip():
+                        existing_lyr_text = lyr
+                        has_lyrics = True
+                        has_synced_lyrics = "[" in existing_lyr_text and "]" in existing_lyr_text
+                        has_crlf = "\r\n" in existing_lyr_text
+            except Exception:
+                pass
+
+            needs_lyric_healing = (not has_lyrics) or (not has_synced_lyrics) or (not has_crlf)
+
+            if has_cover and not needs_lyric_healing:
+                continue
+
+            if not has_cover:
+                stats["missing_covers_found"] += 1
+            if needs_lyric_healing:
+                stats["missing_lyrics_found"] += 1
+
+            # Resolve track metadata from archive.db or file tags
+            meta = self.get_track_by_path(fpath)
+            track_meta = None
+            if meta:
+                track_meta = TrackMetadata(
+                    id=meta.get("spotify_id", ""),
+                    title=meta.get("title", ""),
+                    artists=[meta.get("artist", "")],
+                    album=meta.get("album", ""),
+                    release_date="",
+                    duration_ms=meta.get("duration_ms", 0),
+                    track_number=meta.get("track_number", 1),
+                    disc_number=meta.get("disc_number", 1),
+                    isrc=meta.get("isrc", ""),
+                    collection_name=meta.get("collection_name", "")
+                )
+            else:
+                raw_name = os.path.splitext(bname)[0]
+                art = ""
+                tit = raw_name
+                if " - " in raw_name:
+                    art, tit = raw_name.split(" - ", 1)
+                track_meta = TrackMetadata(
+                    id="",
+                    title=tit.strip(),
+                    artists=[art.strip()] if art else ["Unknown Artist"],
+                    album=os.path.basename(os.path.dirname(fpath)),
+                    release_date="",
+                    duration_ms=0
+                )
+
+            # Fetch lyrics if needed
+            lyr_data = None
+            if needs_lyric_healing:
+                # If track does not have synced lyrics, query LRCLIB for synchronized timestamps
+                if not has_synced_lyrics:
+                    try:
+                        if progress_callback:
+                            progress_callback(idx, total_files, f"Fetching synced lyrics for {bname}")
+                        lyr_data = lyrics_engine.fetch_lyrics(track_meta)
+                    except Exception as e_lyr:
+                        logger.debug(f"Lyrics lookup error during repair for {bname}: {e_lyr}")
+
+                # If we have existing lyrics (already synced or LRCLIB had none), preserve and normalize
+                if not lyr_data and existing_lyr_text:
+                    from core.lyrics import LyricsData
+                    if "[" in existing_lyr_text and "]" in existing_lyr_text:
+                        lyr_data = LyricsData(synced_lyrics=existing_lyr_text)
+                    else:
+                        lyr_data = LyricsData(plain_lyrics=existing_lyr_text)
+
+            try:
+                if progress_callback:
+                    progress_callback(idx, total_files, f"Healing metadata for {bname}")
+                success = tagger.tag_file(
+                    file_path=fpath,
+                    track=track_meta,
+                    lyrics_data=lyr_data,
+                    embed_art=not has_cover,
+                    embed_lyrics=needs_lyric_healing
+                )
+                if success:
+                    if not has_cover:
+                        stats["healed_covers"] += 1
+                    if needs_lyric_healing and lyr_data:
+                        stats["healed_lyrics"] += 1
+                else:
+                    stats["errors"] += 1
+            except Exception as e_tag:
+                logger.error(f"Error healing file {fpath}: {e_tag}")
+                stats["errors"] += 1
+
+        logger.info(f"Library repair completed: {stats}")
+        return stats

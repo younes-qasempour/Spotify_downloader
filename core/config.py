@@ -21,11 +21,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "download": {
         "output_dir": os.path.normpath(os.path.expanduser("~/Music/Spotify Downloads")),
+        "cache_dir": os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")),
         "naming_template": "{artist} - {title}",
-        "save_lrc": True,
+        "save_lrc": False,
+        "lyrics_mode": "embedded_only",
         "embed_lyrics": True,
         "embed_cover_art": True,
         "allow_fallback": True,
+        "musilon_max_retries": 5,
         "quality_priority": [
             "musilon_flac_16",
             "musilon_flac_24",

@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import logging
 from pathlib import Path
+from typing import Optional, Tuple, Callable
 
 logger = logging.getLogger("core.utils")
 
@@ -246,5 +247,70 @@ def extract_embedded_cover(file_path: str) -> Optional[bytes]:
     except Exception:
         pass
     return None
+
+
+def detect_audio_header(header: bytes) -> Optional[str]:
+    """
+    Inspects the initial bytes of a stream or file to determine if it is a genuine audio stream.
+    Rejects HTML, JSON, or plain text error pages.
+    """
+    if not header or len(header) < 4:
+        return None
+
+    h_low = header[:256].lower()
+    if b"<!doctype html" in h_low or b"<html" in h_low or b"<head" in h_low or b"<body" in h_low:
+        return None
+    if h_low.startswith(b"{\"") or h_low.startswith(b"[{\""):
+        return None
+
+    if header.startswith(b"fLaC"):
+        return "flac"
+    if header.startswith(b"ID3") or (len(header) > 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
+        return "mp3"
+    if header.startswith(b"OggS"):
+        return "opus"
+    if b"ftyp" in header[:16]:
+        return "m4a"
+    if header.startswith(b"RIFF"):
+        return "wav"
+
+    return None
+
+
+def is_valid_audio_file(file_path: str, min_size: int = 150 * 1024) -> Tuple[bool, str]:
+    """
+    Verifies that a local file exists, meets minimum audio size threshold,
+    possesses genuine audio container headers, and contains no HTML error text.
+    """
+    if not file_path or not os.path.isfile(file_path):
+        return False, "File does not exist"
+
+    try:
+        sz = os.path.getsize(file_path)
+        if sz < min_size:
+            return False, f"File size too small ({format_bytes(sz)} < {format_bytes(min_size)})"
+
+        with open(file_path, "rb") as f:
+            header = f.read(512)
+
+        fmt = detect_audio_header(header)
+        if not fmt:
+            if b"<!doctype html" in header.lower() or b"<html" in header.lower():
+                return False, "Corrupt file: HTML webpage detected instead of audio"
+            return False, "Unrecognized audio header"
+
+        # Additional mutagen verification
+        try:
+            import mutagen
+            m = mutagen.File(file_path)
+            if m is None and fmt != "flac":
+                pass
+        except Exception as e:
+            return False, f"Mutagen audio verification failed: {e}"
+
+        return True, fmt
+
+    except Exception as e:
+        return False, f"Integrity check error: {e}"
 
 
