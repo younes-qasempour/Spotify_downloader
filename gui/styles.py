@@ -46,6 +46,8 @@ STATUS_COLORS = {
     "Stopped": (QColor(249, 115, 22, 40), QColor("#F97316")),
     "Failed": (QColor(239, 68, 68, 40), QColor("#F87171")),
     "Cancelled": (QColor(107, 114, 128, 40), QColor("#9CA3AF")),
+    "Pending": (QColor(107, 114, 128, 40), QColor("#9CA3AF")),
+    "Saved": (QColor(107, 114, 128, 40), QColor("#9CA3AF")),
 }
 
 # Progress Bar

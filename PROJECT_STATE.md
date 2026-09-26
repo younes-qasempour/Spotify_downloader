@@ -274,6 +274,29 @@ d:\Spotify-Downloader\
   5. **Post-Processor Hooks in `download_track()`:** Added `ydl_pp_hook` on `postprocessor_hooks` to capture the final post-processed audio file path directly (`.opus` or `.m4a`), with fallback to valid candidate URLs.
   6. **Hardened `detect_audio_header()`:** Extended in `core/utils.py` to accept either raw bytes or file paths safely.
 
+### 30. Saved Playlists & Decoupled On-Demand Batch Download System
+- **Rationale & Problem:**
+  - High-tier services (e.g. Musilon VIP) impose daily download limits (~100–200 tracks/day).
+  - Users commonly import large Spotify playlists containing 500 to 5,000+ tracks.
+  - Pushing 1,000+ tracks directly into the download queue exhausts daily quotas, forces unwanted low-bitrate fallbacks, and clutters the UI.
+  - The user required a decoupled workflow: **first save the complete playlist metadata offline into a local database**, and then provide **on-demand batch audio downloading** with arbitrary batch sizes (e.g., 22, 33, 50, 100, 200).
+- **Implementation:**
+  1. **SQLite Storage Layer (`core/archive.py`):**
+     - Tables: `saved_playlists` (id, name, spotify_url, cover_url, total_tracks, created_at, updated_at) and `saved_playlist_tracks` (id, playlist_id, spotify_id, title, artist, album, duration_ms, track_number, disc_number, isrc, cover_url, status, file_path, added_at).
+     - Composite indexes on `(playlist_id, status)` and `spotify_id` for fast query performance across 10,000+ records.
+     - Methods: `save_playlist()`, `get_saved_playlists()`, `get_saved_playlist()`, `get_saved_playlist_tracks()`, `delete_saved_playlist()`, `mark_saved_track_downloaded()`, `mark_saved_tracks_queued()`, `update_saved_track_status()`.
+     - Made `_db_lock = threading.RLock()` to prevent reentrant deadlocks during nested query calls.
+     - Made cover art caching fully asynchronous in a background daemon thread so saving is instantaneous.
+  2. **Download Queue Synchronization (`core/queue_manager.py`):**
+     - In `_process_item()`, upon track download completion, calls `self.archive.mark_saved_track_downloaded(track.id, file_path)`.
+  3. **Dedicated Presentation View (`gui/views/playlists_view.py`):**
+     - Level 0 (Playlists Overview): URL input card ("Save Playlist"), metric summary cards (Saved Playlists, Total Tracks, Downloaded, Pending), search bar, and sleek `SavedPlaylistCard`s with thumbnails, stats, and progress bars.
+     - Level 1 (Playlist Detail View): Back button, playlist banner, batch download controls with `SpinBox` (arbitrary batch size 1–5000), quick presets (`[25]`, `[50]`, `[100]`, `[200]`, `[All Pending]`), "Download Next Batch", and "Download Selected".
+     - TableView: Virtualized list showing track title, artist, duration, album art, and status badges (`Pending`, `Queued`, `Completed`).
+     - Real-time Qt signal bridge integration to dynamically update progress bars and badges.
+  4. **Sidebar Navigation Integration (`gui/main_window.py`):**
+     - Registered `PlaylistsView` as a dedicated top-level sidebar view: `Playlists` (`FluentIcon.ALBUM`).
+
 ---
 
 ## 4. Verification History

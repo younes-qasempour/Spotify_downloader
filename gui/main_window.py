@@ -21,6 +21,7 @@ from core.utils import resource_path
 
 from gui.bridge import EngineSignalBridge
 from gui.views.queue_view import QueueView
+from gui.views.playlists_view import PlaylistsView
 from gui.views.completed_view import CompletedView
 from gui.views.settings_view import SettingsView
 
@@ -93,6 +94,14 @@ class MainWindow(FluentWindow):
         self.queue_view = QueueView(self.queue_manager, self.bridge, self)
         self.queue_view.setObjectName("queue_view")
 
+        self.playlists_view = PlaylistsView(
+            archive_manager=self.archive_manager,
+            queue_manager=self.queue_manager,
+            bridge=self.bridge,
+            parent=self
+        )
+        self.playlists_view.setObjectName("playlists_view")
+
         self.completed_view = CompletedView(self.bridge, archive_manager=self.archive_manager, parent=self)
         self.completed_view.setObjectName("completed_view")
 
@@ -129,6 +138,12 @@ class MainWindow(FluentWindow):
             self.queue_view,
             FluentIcon.DOWNLOAD,
             "Queue",
+            NavigationItemPosition.TOP
+        )
+        self.addSubInterface(
+            self.playlists_view,
+            FluentIcon.ALBUM,
+            "Playlists",
             NavigationItemPosition.TOP
         )
         self.addSubInterface(

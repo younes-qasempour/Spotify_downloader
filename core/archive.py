@@ -110,7 +110,7 @@ class ArchiveManager:
             # Default to archive.db in the project root directory
             self.db_path = Path(__file__).resolve().parent.parent / "archive.db"
 
-        self._db_lock = threading.Lock()
+        self._db_lock = threading.RLock()
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -146,6 +146,41 @@ class ArchiveManager:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_artist_title ON downloaded_tracks (artist, title);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_isrc ON downloaded_tracks (isrc);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_downloaded_at ON downloaded_tracks (downloaded_at DESC);")
+
+                    # Saved Playlists & Tracks Metadata Store (Decoupled ingestion from downloading)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS saved_playlists (
+                            id TEXT PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            spotify_url TEXT,
+                            cover_url TEXT,
+                            total_tracks INTEGER DEFAULT 0,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS saved_playlist_tracks (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            playlist_id TEXT NOT NULL,
+                            spotify_id TEXT NOT NULL,
+                            title TEXT NOT NULL,
+                            artist TEXT NOT NULL,
+                            album TEXT,
+                            duration_ms INTEGER DEFAULT 0,
+                            track_number INTEGER DEFAULT 1,
+                            disc_number INTEGER DEFAULT 1,
+                            isrc TEXT,
+                            cover_url TEXT,
+                            status TEXT DEFAULT 'pending',
+                            file_path TEXT DEFAULT '',
+                            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(playlist_id, spotify_id)
+                        );
+                    """)
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_playlist_id ON saved_playlist_tracks (playlist_id);")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_playlist_status ON saved_playlist_tracks (playlist_id, status);")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_spotify_id ON saved_playlist_tracks (spotify_id);")
 
                     # Migrations for existing databases
                     try:
@@ -1093,3 +1128,300 @@ class ArchiveManager:
 
         logger.info(f"Library repair completed: {stats}")
         return stats
+
+    # -------------------------------------------------------------------------
+    # Saved Playlists & Tracks Management (Decoupled Metadata Storing & On-Demand Batching)
+    # -------------------------------------------------------------------------
+    def save_playlist(
+        self,
+        name: str,
+        spotify_url: str,
+        cover_url: str,
+        tracks: List[TrackMetadata],
+        playlist_id: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Saves a playlist and all its track metadata into SQLite without starting audio downloads.
+        Automatically checks downloaded_tracks to tag tracks that are already downloaded locally.
+        """
+        if not playlist_id:
+            from core.spotify_client import SpotifyClient
+            parsed = SpotifyClient.parse_url(spotify_url)
+            playlist_id = parsed[1] if parsed else sanitize_filename(name, max_length=40)
+
+        # Cache cover if remote URL exists
+        safe_name = sanitize_filename(name, max_length=50)
+        from core.config import config
+        cache_dir = config.get("download.cache_dir", "")
+        if not cache_dir:
+            cache_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache"))
+        covers_dir = os.path.join(cache_dir, "covers")
+        os.makedirs(covers_dir, exist_ok=True)
+        local_cover = os.path.join(covers_dir, f"playlist_{safe_name}.jpg")
+        if cover_url and not os.path.isfile(local_cover):
+            def _fetch_cover():
+                try:
+                    import requests
+                    r = requests.get(cover_url, timeout=5)
+                    if r.status_code == 200 and len(r.content) > 500:
+                        with open(local_cover, "wb") as f:
+                            f.write(r.content)
+                except Exception as e:
+                    logger.debug(f"Could not cache playlist cover: {e}")
+            threading.Thread(target=_fetch_cover, daemon=True, name="CoverFetcher").start()
+
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    # 1. Upsert playlist record
+                    conn.execute("""
+                        INSERT INTO saved_playlists (id, name, spotify_url, cover_url, total_tracks, updated_at)
+                        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(id) DO UPDATE SET
+                            name = excluded.name,
+                            spotify_url = excluded.spotify_url,
+                            cover_url = excluded.cover_url,
+                            total_tracks = excluded.total_tracks,
+                            updated_at = CURRENT_TIMESTAMP
+                    """, (playlist_id, name, spotify_url, cover_url, len(tracks)))
+
+                    # 2. Query already downloaded tracks map: spotify_id -> file_path
+                    downloaded_map: Dict[str, str] = {}
+                    rows = conn.execute("SELECT spotify_id, file_path FROM downloaded_tracks").fetchall()
+                    for r in rows:
+                        fpath = r["file_path"]
+                        if fpath and os.path.isfile(fpath):
+                            downloaded_map[r["spotify_id"]] = fpath
+
+                    # 3. Batch insert/update tracks
+                    track_rows = []
+                    for t in tracks:
+                        existing_fp = downloaded_map.get(t.id, "")
+                        status = "downloaded" if existing_fp else "pending"
+                        track_rows.append((
+                            playlist_id,
+                            t.id,
+                            t.title,
+                            t.artist_str,
+                            t.album or "",
+                            t.duration_ms,
+                            t.track_number,
+                            getattr(t, "disc_number", 1) or 1,
+                            t.isrc or "",
+                            t.cover_url or "",
+                            status,
+                            existing_fp
+                        ))
+
+                    conn.executemany("""
+                        INSERT INTO saved_playlist_tracks (
+                            playlist_id, spotify_id, title, artist, album,
+                            duration_ms, track_number, disc_number, isrc,
+                            cover_url, status, file_path
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(playlist_id, spotify_id) DO UPDATE SET
+                            title = excluded.title,
+                            artist = excluded.artist,
+                            album = excluded.album,
+                            duration_ms = excluded.duration_ms,
+                            track_number = excluded.track_number,
+                            disc_number = excluded.disc_number,
+                            isrc = excluded.isrc,
+                            cover_url = excluded.cover_url,
+                            status = CASE WHEN saved_playlist_tracks.status = 'downloaded' THEN 'downloaded' ELSE excluded.status END,
+                            file_path = CASE WHEN saved_playlist_tracks.file_path != '' THEN saved_playlist_tracks.file_path ELSE excluded.file_path END
+                    """, track_rows)
+
+                logger.info(f"Saved playlist '{name}' ({len(tracks)} tracks) into database.")
+                return self.get_saved_playlist(playlist_id) or {}
+            except Exception as e:
+                logger.error(f"Failed to save playlist '{name}': {e}")
+                return {}
+            finally:
+                conn.close()
+
+    def get_saved_playlists(self) -> List[Dict[str, Any]]:
+        """Returns all saved playlists with aggregate statistics."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                query = """
+                    SELECT 
+                        p.id, p.name, p.spotify_url, p.cover_url, p.total_tracks, p.created_at, p.updated_at,
+                        COUNT(t.id) as track_count,
+                        SUM(CASE WHEN t.status = 'downloaded' THEN 1 ELSE 0 END) as downloaded_count,
+                        SUM(CASE WHEN t.status != 'downloaded' THEN 1 ELSE 0 END) as pending_count
+                    FROM saved_playlists p
+                    LEFT JOIN saved_playlist_tracks t ON p.id = t.playlist_id
+                    GROUP BY p.id
+                    ORDER BY p.updated_at DESC
+                """
+                rows = conn.execute(query).fetchall()
+                results = []
+                for r in rows:
+                    tot = r["total_tracks"] or r["track_count"] or 0
+                    down = r["downloaded_count"] or 0
+                    pend = r["pending_count"] or 0
+                    pct = round((down / tot * 100.0), 1) if tot > 0 else 0.0
+
+                    local_cover = resolve_collection_cover(r["name"])
+                    
+                    results.append({
+                        "id": r["id"],
+                        "name": r["name"],
+                        "spotify_url": r["spotify_url"],
+                        "cover_url": r["cover_url"],
+                        "local_cover": local_cover,
+                        "total_tracks": tot,
+                        "downloaded_count": down,
+                        "pending_count": pend,
+                        "progress_percent": pct,
+                        "created_at": r["created_at"],
+                        "updated_at": r["updated_at"]
+                    })
+                return results
+            finally:
+                conn.close()
+
+    def get_saved_playlist(self, playlist_id: str) -> Optional[Dict[str, Any]]:
+        """Returns metadata and statistics for a specific playlist."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                query = """
+                    SELECT 
+                        p.id, p.name, p.spotify_url, p.cover_url, p.total_tracks, p.created_at, p.updated_at,
+                        COUNT(t.id) as track_count,
+                        SUM(CASE WHEN t.status = 'downloaded' THEN 1 ELSE 0 END) as downloaded_count,
+                        SUM(CASE WHEN t.status != 'downloaded' THEN 1 ELSE 0 END) as pending_count
+                    FROM saved_playlists p
+                    LEFT JOIN saved_playlist_tracks t ON p.id = t.playlist_id
+                    WHERE p.id = ?
+                    GROUP BY p.id
+                """
+                r = conn.execute(query, (playlist_id,)).fetchone()
+                if not r:
+                    return None
+                tot = r["total_tracks"] or r["track_count"] or 0
+                down = r["downloaded_count"] or 0
+                pend = r["pending_count"] or 0
+                pct = round((down / tot * 100.0), 1) if tot > 0 else 0.0
+
+                local_cover = resolve_collection_cover(r["name"])
+
+                return {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "spotify_url": r["spotify_url"],
+                    "cover_url": r["cover_url"],
+                    "local_cover": local_cover,
+                    "total_tracks": tot,
+                    "downloaded_count": down,
+                    "pending_count": pend,
+                    "progress_percent": pct,
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"]
+                }
+            finally:
+                conn.close()
+
+    def get_saved_playlist_tracks(
+        self,
+        playlist_id: str,
+        status: Optional[str] = None,
+        search_query: str = "",
+        limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Returns all tracks for a saved playlist, optionally filtered by status, search, and limit."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                base_sql = "SELECT * FROM saved_playlist_tracks WHERE playlist_id = ?"
+                params: List[Any] = [playlist_id]
+                if status:
+                    base_sql += " AND status = ?"
+                    params.append(status)
+                if search_query:
+                    base_sql += " AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)"
+                    q = f"%{search_query}%"
+                    params.extend([q, q, q])
+                base_sql += " ORDER BY track_number ASC, id ASC"
+                if limit and limit > 0:
+                    base_sql += " LIMIT ?"
+                    params.append(limit)
+
+                rows = conn.execute(base_sql, tuple(params)).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+
+    def update_saved_track_status(self, playlist_id: str, spotify_id: str, new_status: str):
+        """Updates the status of a specific track in a saved playlist."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute("""
+                        UPDATE saved_playlist_tracks
+                        SET status = ?
+                        WHERE playlist_id = ? AND spotify_id = ?
+                    """, (new_status, playlist_id, spotify_id))
+            except Exception as e:
+                logger.debug(f"Failed to update status for {spotify_id}: {e}")
+            finally:
+                conn.close()
+
+    def delete_saved_playlist(self, playlist_id: str) -> bool:
+        """Deletes a saved playlist and all its associated track records."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute("DELETE FROM saved_playlist_tracks WHERE playlist_id = ?", (playlist_id,))
+                    conn.execute("DELETE FROM saved_playlists WHERE id = ?", (playlist_id,))
+                logger.info(f"Deleted saved playlist: {playlist_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to delete playlist {playlist_id}: {e}")
+                return False
+            finally:
+                conn.close()
+
+    def mark_saved_track_downloaded(self, spotify_id: str, file_path: str):
+        """Marks a track as downloaded across all saved playlists when download succeeds."""
+        if not spotify_id:
+            return
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute("""
+                        UPDATE saved_playlist_tracks
+                        SET status = 'downloaded', file_path = ?
+                        WHERE spotify_id = ?
+                    """, (file_path, spotify_id))
+            except Exception as e:
+                logger.debug(f"Failed to mark track {spotify_id} downloaded in saved playlists: {e}")
+            finally:
+                conn.close()
+
+    def mark_saved_tracks_queued(self, playlist_id: str, spotify_ids: List[str]):
+        """Marks specific tracks as 'queued' when sent to the download manager."""
+        if not spotify_ids:
+            return
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    placeholders = ",".join("?" for _ in spotify_ids)
+                    conn.execute(f"""
+                        UPDATE saved_playlist_tracks
+                        SET status = 'queued'
+                        WHERE playlist_id = ? AND spotify_id IN ({placeholders}) AND status = 'pending'
+                    """, (playlist_id, *spotify_ids))
+            except Exception as e:
+                logger.debug(f"Failed to mark tracks queued: {e}")
+            finally:
+                conn.close()
+

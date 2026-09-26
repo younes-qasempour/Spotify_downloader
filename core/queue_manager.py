@@ -510,6 +510,7 @@ class DownloadQueueManager:
             # Record in Archive
             if file_path and os.path.isfile(file_path):
                 self.archive.add_track(track, file_path, item.quality_badge, item.source_type)
+                self.archive.mark_saved_track_downloaded(track.id, file_path)
 
             if self.on_track_completed:
                 self.on_track_completed(track_id, item.output_path)

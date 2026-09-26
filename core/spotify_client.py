@@ -25,8 +25,8 @@ class TrackMetadata:
     title: str
     artists: List[str]
     album: str
-    release_date: str
-    duration_ms: int
+    release_date: str = ""
+    duration_ms: int = 0
     track_number: int = 1
     disc_number: int = 1
     isrc: str = ""
