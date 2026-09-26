@@ -293,7 +293,11 @@ class DownloadQueueManager:
                 output_dir = os.path.join(base_output_dir, subfolder)
             else:
                 output_dir = base_output_dir
-            naming_tmpl = config.get("download.naming_template", "{artist} - {title}")
+            is_album = (getattr(track, "collection_type", "track") == "album")
+            if is_album and getattr(track, "track_number", 0) > 0:
+                naming_tmpl = config.get("download.album_naming_template", "{track_num}. {artist} - {title}")
+            else:
+                naming_tmpl = config.get("download.naming_template", "{artist} - {title}")
 
             # Save collection (playlist / album) cover art to dedicated app cache directory
             coll_cover_url = getattr(track, "collection_cover_url", "")
@@ -339,17 +343,24 @@ class DownloadQueueManager:
                 file_ext = os.path.splitext(src_file)[1]
                 artist_clean = sanitize_filename(track.primary_artist, max_length=40)
                 title_clean = sanitize_filename(track.title, max_length=40)
+                track_num_str = f"{track.track_number:02d}"
+                disc_num_str = f"{getattr(track, 'disc_number', 1) or 1:02d}"
                 try:
                     base_name = naming_tmpl.format(
                         artist=artist_clean,
                         title=title_clean,
                         album=sanitize_filename(track.album, max_length=40),
-                        track_num=f"{track.track_number:02d}",
-                        track_number=f"{track.track_number:02d}",
-                        track=f"{track.track_number:02d}"
+                        track_num=track_num_str,
+                        track_number=track_num_str,
+                        track=track_num_str,
+                        disc_num=disc_num_str,
+                        disc_number=disc_num_str
                     )
                 except Exception:
-                    base_name = f"{artist_clean} - {title_clean}"
+                    if is_album and getattr(track, "track_number", 0) > 0:
+                        base_name = f"{track_num_str}. {artist_clean} - {title_clean}"
+                    else:
+                        base_name = f"{artist_clean} - {title_clean}"
                 base_name = sanitize_filename(base_name, max_length=120)
                 target_dest = os.path.normpath(os.path.join(output_dir, f"{base_name}{file_ext}"))
 
@@ -384,6 +395,19 @@ class DownloadQueueManager:
                                 target_lrc = os.path.splitext(target_dest)[0] + ".lrc"
                             if os.path.isfile(src_lrc):
                                 shutil.copy2(src_lrc, target_lrc)
+
+                        # Retag copied file if it was copied into an album, ensuring proper track numbers
+                        if is_album and getattr(track, "track_number", 0) > 0:
+                            try:
+                                from core.tagger import AudioTagger
+                                AudioTagger().tag_file(
+                                    file_path=target_dest,
+                                    track=track,
+                                    embed_lyrics=config.get("download.embed_lyrics", True),
+                                    embed_art=config.get("download.embed_cover_art", True)
+                                )
+                            except Exception as e_tag:
+                                logger.debug(f"Retagging archived track for album failed: {e_tag}")
 
                         item.output_path = target_dest
                         item.quality_badge = archived.get("quality_badge", "FLAC 16")

@@ -413,6 +413,7 @@ class CompletedView(QWidget):
             return sorted(rows, key=lambda r: (r.get("title") or "").strip().lower())
         elif idx == 1:  # Track Number
             return sorted(rows, key=lambda r: (
+                r.get("disc_number", 1) or 1,
                 r.get("track_number") if (r.get("track_number") is not None and r.get("track_number") > 0) else 9999,
                 (r.get("title") or "").strip().lower()
             ))

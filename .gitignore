@@ -12,6 +12,8 @@ bin/
 # Config & Credentials (NEVER commit secrets or session tokens)
 config.json
 cookies.json
+cookies.txt
+*cookies*.txt
 *.session
 *.env
 archive.db

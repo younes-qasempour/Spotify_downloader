@@ -249,11 +249,23 @@ def extract_embedded_cover(file_path: str) -> Optional[bytes]:
     return None
 
 
-def detect_audio_header(header: bytes) -> Optional[str]:
+def detect_audio_header(header_or_path: bytes | str | Path) -> Optional[str]:
     """
     Inspects the initial bytes of a stream or file to determine if it is a genuine audio stream.
+    Supports either raw bytes or a file path string/Path.
     Rejects HTML, JSON, or plain text error pages.
     """
+    if isinstance(header_or_path, (str, Path)):
+        if not os.path.isfile(str(header_or_path)):
+            return None
+        try:
+            with open(str(header_or_path), "rb") as f:
+                header = f.read(512)
+        except Exception:
+            return None
+    else:
+        header = header_or_path
+
     if not header or len(header) < 4:
         return None
 

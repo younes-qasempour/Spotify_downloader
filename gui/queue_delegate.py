@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import base64
 import threading
 from typing import Dict, Optional
@@ -329,6 +330,9 @@ class TrackCardDelegate(QStyledItemDelegate):
         fm_title = QFontMetrics(font_title)
 
         display_title = item.track.title
+        if getattr(item.track, "collection_type", "") == "album" and getattr(item.track, "track_number", 0) > 0:
+            if not re.match(r"^\d{1,3}[\s.\-_]+", display_title):
+                display_title = f"{item.track.track_number:02d}. {display_title}"
         elided_title = fm_title.elidedText(display_title, Qt.TextElideMode.ElideRight, int(text_w))
         painter.drawText(int(text_x), int(card_rect.y() + 25), elided_title)
 

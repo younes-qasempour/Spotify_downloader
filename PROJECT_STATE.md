@@ -205,6 +205,75 @@ d:\Spotify-Downloader\
   - Deep scan queries LRCLIB for synchronized lyrics, updates tags with CRLF, and extracts/heals cover art in-place without re-downloading audio streams.
   - Added visual "Deep Scan & Repair" card with live progress bar and status log in `gui/views/settings_view.py`.
 
+### 25. Cover / Collaborative Version False Positives & Station Duration Validation
+- **Symptom:** Downloading Kavinsky's *Nightcall* fetched the 2024 Olympic remake sung by Angèle & Phoenix (2:59) instead of the original 2010 song (4:18).
+- **Cause:**
+  - `_score_candidate()` rewarded any candidate containing the artist name token without penalizing unrequested collaborator/cover artists, tying both at 140.0.
+  - Musilon engine did not inspect candidate track duration against the Spotify metadata (`258,413` ms).
+- **Fix:**
+  - Added exact artist match bonus (+35.0) and unrequested collaborator penalty (-45.0) in `_score_candidate()`.
+  - Added heavy cover/tribute penalty (-90.0).
+  - Added station duration validation in `_extract_source()` against target duration with strict tolerance (>20s & >10% mismatch rejected).
+  - Implemented configurable preferred quality (defaulting to 320 kbps MP3 with GUI toggle to Lossless FLAC).
+
+### 26. Track False Positives & Mismatches in YtdlpEngine and MusilonEngine
+- **Symptoms:**
+  - Creepy Nuts – *Running Wheel* downloaded as Creepy Nuts – *Mirage* (YTM fallback).
+  - Drowning Pool – *Bodies* downloaded as Offset – *Bodies* (album *KIARIOFFSET*, Musilon VIP).
+- **Causes:**
+  1. `YtdlpEngine.resolve_track()` scored candidates on duration proximity ($\le 3$s = 100) and artist name in title, but **never verified that the candidate title matched the track title**. A popular video by the same artist with similar duration (*Mirage*, 139s vs 137s) scored 126.2 and triggered early break.
+  2. `MusilonEngine._score_candidate()` ignored the station host slug (`url_artist_slug`) and allowed sampling/featured artist credits to satisfy `art_match = True`. Offset's station `/station/offset/bodies-8/` scored 95.0 (> 70) despite being hosted by a foreign lead artist.
+- **Fixes:**
+  1. In `core/ytdlp_engine.py`: Added strict anti-false-positive title matching requiring variant or token overlap (0-overlap candidates disqualified with `continue`), channel/uploader artist validation, quoted and auto-generated search queries, expanded unwanted keywords, and safe early termination requiring confirmed title and artist match.
+  2. In `core/musilon.py`: Added station host slug validation in `_score_candidate()`. If `url_artist_slug` belongs to a foreign artist not present in `target_artists`, the station is rejected with `-999.0`.
+  3. Re-downloaded and repaired both audio files and their records in `archive.db`.
+
+### 27. Karaoke / Fan Lyrics False Positive & Title Sub-Variant Query Decomposition (YtdlpEngine)
+- **Symptom:** Creepy Nuts – *よふかしのうた - Yofukashino Uta* downloaded as a fan-made karaoke lyric video (`Creepy Nuts【よふかしのうた】＊カラオケ字幕＊歌詞動画＊日本語字幕＊`, ID `9OMJl4EJFsE`, uploaded by `あめり。`).
+- **Causes:**
+  1. `unwanted_keywords` lacked Japanese keywords (`カラオケ`, `ニコカラ`, `歌詞動画`, `字幕`, `練習用`, `インスト`, `オフボーカル`, `カバー`, etc.).
+  2. The bilingual hyphenated title (`"よふかしのうた - Yofukashino Uta"`) was searched only as a full combined string in auto-generated/topic queries, which failed to match the official YouTube Music studio release titled `"Yofukashino Uta"` (`zArhnXbh3Yc`, Sony Music Labels).
+  3. `YtdlpEngine` credited +20.0 artist points simply for having the artist name in the candidate title, even when uploaded by an unrelated third-party channel (`あめり。`), and allowed early termination on third-party uploads.
+  4. Foreign Topic channels (such as `Yoshiaki Dewa - Topic`) were not disqualified when matching soundtrack titles.
+- **Fixes:**
+  1. Expanded `unwanted_keywords` with Japanese, Korean, and fan-upload terms.
+  2. Decomposed bilingual/hyphenated titles into individual sub-variants for auto-generated, topic, and official audio search queries.
+  3. Enforced strict artist channel validation: disqualified candidates lacking the artist in both title and channel; disqualified foreign artist Topic channels; boosted verified official/Topic channels (+35.0) while heavily penalizing third-party channels (-25.0).
+  4. Restricted early search termination strictly to verified official/Topic channels with exact title match and duration proximity <= 3.0s.
+  5. Updated `YtdlpEngine.download_track()` to verify timestamps of newly extracted audio and automatically scrub conflicting stale format files.
+  6. Re-downloaded and tagged the authentic studio track (`zArhnXbh3Yc`, 240s, 3.91 MB) with synchronized lyrics and album art across library collections (`This Is Creepy Nuts`, `On Repeat`, `Mirage Radio`) and updated `archive.db`.
+
+### 28. Album Track Numbering, Dual Naming Patterns & Collection Order Preservation
+- **Symptom:** Album downloads lacked song numbers in their filenames (e.g. `Nirvana - Smells Like Teen Spirit.mp3`), causing Windows Explorer and media players to sort them alphabetically (e.g. `Breed` appearing before `Smells Like Teen Spirit`) rather than in album track order. Furthermore, local deduplication copying previously downloaded songs into an album folder retained unnumbered playlist tags without `TRACKNUMBER`.
+- **Fix:**
+  1. Implemented configurable `download.album_naming_template` (default: `"{track_num}. {artist} - {title}"`) alongside `download.naming_template` (`"{artist} - {title}"` for playlists and singles) in `core/config.py`, `config.json`, and Settings GUI.
+  2. Updated `DownloadQueueManager` and `CascadingAudioEngine` to dynamically route album tracks with `track_number > 0` through the album naming template.
+  3. Added automatic retagging when copying archived tracks into album folders so that deduplicated files receive genuine `TRACKNUMBER` tags, disc numbers, and album metadata.
+  4. Updated `ArchiveManager.scan_local_directory()` and `repair_library()` to detect track numbers from leading digits in filenames (`01. ...`, `01 - ...`) if tags are stripped.
+  5. Enhanced `TrackCardDelegate` to display track numbers (`01. Title`) on album track cards in the UI and updated `CompletedView` sort to account for `disc_number`.
+### 29. YouTube High-Precision Matcher, Query Optimization & Fake Cover Disqualification
+- **Symptom:** YouTube download was broken and returning mismatched songs:
+  - Nirvana *Smells Like Teen Spirit* resolved to *(Butch Vig Mix)*.
+  - Post Malone *Sunflower* resolved to a fake cover by `Jaco - Topic` (*Originally Performed by...*).
+  - Tracks with subtitles or remasters (e.g. *Radio Edit*, *2020 Remaster*) caused the search engine to execute separate queries for the subtitle alone (e.g. `ytsearch10:Artist "Radio Edit" auto-generated`), matching completely different songs by the same artist and prematurely halting search due to a false-positive `score >= 90.0` early-break.
+  - Search queries included `- "{qv}"` which YouTube interpreted as a negation operator (NOT title), actively suppressing the target song.
+  - Excessive duration tolerance (22s) combined with weak partial-word title matching allowed wrong songs from the same album to match.
+  - Temporary `.webm` files were checked before FFmpeg post-processing completed, causing post-processed `.opus` files to be missed or misdetected.
+- **Fix:**
+  1. **Structured Title Cleaning & Parsing (`_clean_title_for_search`):** Separates core song title from feature artists (`feat.`, `with`), remaster/anniversary dates, and movie/soundtrack tags. Tracks boolean flags (`is_remaster`, `is_live`, `is_acoustic`, `is_remix`, `is_instrumental`, `is_radio_edit`).
+  2. **Targeted Search Queries:** Eliminated broken `- ""` negation and messy quote fragments. Produces 3–5 targeted queries per track (`auto-generated`, `Topic`, `official audio`, clean artist + core title) executed sequentially in a single `YoutubeDL` session.
+  3. **Multi-Factor Anti-False-Positive Candidate Scoring (`_score_candidate`):**
+     - Levenshtein SequenceMatcher ratio + word token overlap + exact match bonus.
+     - Significant missing word penalty (-15.0 per missing word) and extraneous word penalty (-8.0 per extra word not in target or artist).
+     - Disqualifies known cover/tribute/karaoke markers (`originally performed by`, `in the style of`, `as made famous by`, `tribute to`, `vocal version`, `piano version`, `instrumental version`, `karaoke`, `cover by`, etc.).
+     - Foreign Topic Channel Disqualification: Strictly disqualifies any `* - Topic` channel unless it matches the target artist or is `Various Artists - Topic`.
+     - Strict Version Matching: -35.0 penalty for unexpected mixes/remixes, -40.0 penalty for unexpected live recordings, -30.0 for unexpected acoustic tracks.
+     - Official delivery bonus: +45.0 for artist Topic channels, +35.0 for official artist channels, +15.0 for description auto-generated markers.
+     - Proximity scoring based on duration (diff <= 1.5s receives +32..35 points).
+  4. **Strict Early-Stop Guard:** Requires `score >= 120.0`, `diff <= 2.5s`, Topic/official channel delivery, and `version_penalty == 0.0`.
+  5. **Post-Processor Hooks in `download_track()`:** Added `ydl_pp_hook` on `postprocessor_hooks` to capture the final post-processed audio file path directly (`.opus` or `.m4a`), with fallback to valid candidate URLs.
+  6. **Hardened `detect_audio_header()`:** Extended in `core/utils.py` to accept either raw bytes or file paths safely.
+
 ---
 
 ## 4. Verification History
@@ -218,6 +287,9 @@ d:\Spotify-Downloader\
 | 2026-09-08 | Standalone FFmpeg Engine | `bin/ffmpeg.exe` | ✅ Success (100%) | Verified `ffmpeg version 6.1.1` |
 | 2026-09-10 | Synchronized CRLF Lyrics & Vorbis Tagging | LRCLIB + Mutagen FLAC/Opus | ✅ Success (100%) | Verified CRLF line breaks and multi-tag mapping across downloaded tracks |
 | 2026-09-10 | Deep Scan Library Auto-Repair | `ArchiveManager.repair_library()` | ✅ Success (100%) | Healed plain tracks to synchronized lyrics and regenerated covers |
+| 2026-09-13 | Kavinsky — *Nightcall* | Musilon 320k (Anti-Cover + Duration Filter) | ✅ Success (100%) | Resolved `nightcall-2` (4:18, 320kbps MP3) vs cover (2:59 rejected) |
+| 2026-09-15 | Creepy Nuts — *よふかしのうた* | YTM Auto-Generated (Sony Music) | ✅ Success (100%) | `downloads/This Is Creepy Nuts/Creepy Nuts - よふかしのうた - Yofukashino Uta.m4a` (240s, Sony Music) |
+| 2026-09-17 | Album Song Numbering & Ordering | Mutagen FLAC/MP3 + Dual Naming | ✅ Success (100%) | All 13 Nevermind and 15 LEGION tracks renamed `01..N`, tagged, and ordered |
 
 ## 5. Development Cheat Sheet
 

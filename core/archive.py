@@ -219,7 +219,7 @@ class ArchiveManager:
 
     def find_track(
         self,
-        spotify_id: str = "",
+        spotify_id: Any = "",
         isrc: str = "",
         title: str = "",
         artist: str = ""
@@ -233,6 +233,13 @@ class ArchiveManager:
 
         Verifies that the target file exists on disk. If missing, cleans the record.
         """
+        if hasattr(spotify_id, "id"):
+            track_obj = spotify_id
+            spotify_id = getattr(track_obj, "id", "") or ""
+            isrc = isrc or getattr(track_obj, "isrc", "") or ""
+            title = title or getattr(track_obj, "title", "") or ""
+            artist = artist or getattr(track_obj, "primary_artist", "") or ""
+
         with self._db_lock:
             conn = self._get_connection()
             try:
@@ -541,8 +548,9 @@ class ArchiveManager:
                 if collection_type == "album":
                     cur = conn.execute("""
                         SELECT * FROM downloaded_tracks
-                        WHERE LOWER(album) = LOWER(?) OR LOWER(collection_name) = LOWER(?)
-                        ORDER BY track_number ASC, title ASC
+                        WHERE (LOWER(album) = LOWER(?) OR LOWER(collection_name) = LOWER(?))
+                          AND (collection_type = 'album' OR collection_type IS NULL)
+                        ORDER BY disc_number ASC, track_number ASC, title ASC
                     """, (collection_name, collection_name))
                 else:
                     cur = conn.execute("""
@@ -725,6 +733,14 @@ class ArchiveManager:
 
                 if is_album:
                     c_type = "album"
+                    if track_num == 0:
+                        import re
+                        m_num = re.match(r"^(\d{1,3})[\s.\-_]+", fname)
+                        if m_num:
+                            try:
+                                track_num = int(m_num.group(1))
+                            except Exception:
+                                pass
                 elif folder_name in ("Singles", "downloads"):
                     c_type = "track"
                     track_num = 0
@@ -1011,6 +1027,15 @@ class ArchiveManager:
                 )
             else:
                 raw_name = os.path.splitext(bname)[0]
+                import re
+                extracted_track = 1
+                m_num = re.match(r"^(\d{1,3})[\s.\-_]+(.*)$", raw_name)
+                if m_num:
+                    try:
+                        extracted_track = int(m_num.group(1))
+                        raw_name = m_num.group(2).strip()
+                    except Exception:
+                        pass
                 art = ""
                 tit = raw_name
                 if " - " in raw_name:
@@ -1021,7 +1046,8 @@ class ArchiveManager:
                     artists=[art.strip()] if art else ["Unknown Artist"],
                     album=os.path.basename(os.path.dirname(fpath)),
                     release_date="",
-                    duration_ms=0
+                    duration_ms=0,
+                    track_number=extracted_track
                 )
 
             # Fetch lyrics if needed

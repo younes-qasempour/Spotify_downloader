@@ -103,6 +103,7 @@ class MusilonEngine:
     def login_with_credentials(self, username: str = "", password: str = "") -> Tuple[bool, str]:
         """
         Attempts direct login to Musilon using username/password via Digits 2-step AJAX.
+        Uses a clean session state to avoid reload:true rejection and solves ArvanCloud challenges.
         Returns: (success: bool, message: str)
         """
         user = (username or self.username).strip()
@@ -113,8 +114,32 @@ class MusilonEngine:
 
         try:
             self._rate_limit_shield()
-            # 1. Fetch login page to extract nonce, tokens, and form hidden fields
-            r_page = self._request("GET", f"{self.BASE_URL}/?login=true")
+
+            # Create an unauthenticated login session to prevent Digits {"reload": true} rejection
+            login_session = requests.Session()
+            login_session.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": f"{self.BASE_URL}/?login=true",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8"
+            })
+
+            # Copy existing Cloud/Arvan challenge cookies if present
+            for c in self.session.cookies:
+                if "__arcsjs" in c.name or "cf_" in c.name:
+                    login_session.cookies.set(c.name, c.value, domain="musilon.com")
+
+            # 1. Fetch login page
+            r_page = login_session.get(f"{self.BASE_URL}/?login=true", timeout=15)
+
+            # Check for ArvanCloud challenge
+            if r_page.status_code == 200 and "__arcsjs" in r_page.text and "<script" in r_page.text:
+                logger.info("Solving ArvanCloud challenge on login page...")
+                if self._solve_arvancloud_challenge(r_page.text):
+                    for c in self.session.cookies:
+                        if "__arcsjs" in c.name:
+                            login_session.cookies.set(c.name, c.value, domain="musilon.com")
+                    r_page = login_session.get(f"{self.BASE_URL}/?login=true", timeout=15)
+
             soup = BeautifulSoup(r_page.text, "html.parser")
             login_form = soup.find("form", class_="digloginpage")
             if not login_form:
@@ -138,7 +163,7 @@ class MusilonEngine:
 
             # Step 1: Submit email to request password step
             self._rate_limit_shield()
-            r_step1 = self.session.post(
+            r_step1 = login_session.post(
                 f"{self.BASE_URL}/wp-admin/admin-ajax.php",
                 data=form_data,
                 headers=ajax_headers,
@@ -155,7 +180,7 @@ class MusilonEngine:
             form_data["password"] = pwd
 
             self._rate_limit_shield()
-            r_step2 = self.session.post(
+            r_step2 = login_session.post(
                 f"{self.BASE_URL}/wp-admin/admin-ajax.php",
                 data=form_data,
                 headers=ajax_headers,
@@ -166,6 +191,10 @@ class MusilonEngine:
                 logger.info("Successfully authenticated with Musilon Digits VIP.")
                 self.username = user
                 self.password = pwd
+
+                # Transfer all authenticated cookies to self.session
+                for k, v in login_session.cookies.items():
+                    self.session.cookies.set(k, v, domain="musilon.com")
 
                 # Save session cookies to config if possible
                 try:
@@ -395,32 +424,42 @@ class MusilonEngine:
         """Queries artist taxonomy term and retrieves all stations by artist."""
         try:
             clean_art = re.sub(r'^(?:the|a)\s+', '', artist_name, flags=re.IGNORECASE).strip()
-            url = f"{self.BASE_URL}/wp-json/wp/v2/artist?search={quote_plus(clean_art)}"
-            r = self._request("GET", url, timeout=15, allow_404=True)
-            if r.status_code != 200:
-                return []
-            terms = r.json()
-            if not isinstance(terms, list):
-                return []
+            names_to_try = [clean_art]
+            if artist_name.strip().lower() != clean_art.lower():
+                names_to_try.append(artist_name.strip())
+
             results = []
-            for t in terms:
-                term_id = t.get("id")
-                term_name = t.get("name", "")
-                count = t.get("count", 0)
-                if count > 0 and (clean_art.lower() in term_name.lower() or term_name.lower() in clean_art.lower()):
-                    st_url = f"{self.BASE_URL}/wp-json/wp/v2/station?artist={term_id}&per_page=100"
-                    r_st = self._request("GET", st_url, timeout=15, allow_404=True)
-                    if r_st.status_code == 200:
-                        for it in r_st.json():
-                            u = it.get("link", "")
-                            tit = it.get("title", {}).get("rendered", "")
-                            results.append({
-                                "id": str(it.get("id")),
-                                "title": clean_watermarks(tit),
-                                "artist": term_name,
-                                "url": u,
-                                "method": "artist_taxonomy"
-                            })
+            seen_ids = set()
+            for art_query in names_to_try:
+                url = f"{self.BASE_URL}/wp-json/wp/v2/artist?search={quote_plus(art_query)}"
+                r = self._request("GET", url, timeout=15, allow_404=True)
+                if r.status_code != 200:
+                    continue
+                terms = r.json()
+                if not isinstance(terms, list):
+                    continue
+                for t in terms:
+                    term_id = t.get("id")
+                    term_name = t.get("name", "")
+                    count = t.get("count", 0)
+                    if count > 0 and (art_query.lower() in term_name.lower() or term_name.lower() in art_query.lower() or clean_art.lower() in term_name.lower()):
+                        st_url = f"{self.BASE_URL}/wp-json/wp/v2/station?artist={term_id}&per_page=100"
+                        r_st = self._request("GET", st_url, timeout=15, allow_404=True)
+                        if r_st.status_code == 200:
+                            for it in r_st.json():
+                                it_id = str(it.get("id"))
+                                if it_id in seen_ids:
+                                    continue
+                                seen_ids.add(it_id)
+                                u = it.get("link", "")
+                                tit = it.get("title", {}).get("rendered", "")
+                                results.append({
+                                    "id": it_id,
+                                    "title": clean_watermarks(tit),
+                                    "artist": term_name,
+                                    "url": u,
+                                    "method": "artist_taxonomy"
+                                })
             return results
         except Exception as e:
             logger.debug(f"artist_taxonomy search failed for '{artist_name}': {e}")
@@ -509,7 +548,46 @@ class MusilonEngine:
         if check_authors and not art_match:
             return -999.0
 
+        # If url_artist_slug is present, it represents the primary station artist on Musilon.
+        # If the station's host artist slug does not match any target artist, this station belongs
+        # to a different lead artist (e.g. /station/offset/ when target is Drowning Pool).
+        # Reject stations hosted under foreign artists unless it's a generic compilation/various artists.
+        if url_artist_slug and url_artist_slug not in ("va", "various artists"):
+            slug_clean = re.sub(r'[^\w\s]', ' ', url_artist_slug)
+            slug_tokens = set(slug_clean.split())
+            slug_matched = any(tok in slug_tokens for tok in target_art_tokens) or any(
+                clean_a in url_artist_slug or url_artist_slug in clean_a
+                for clean_a in [re.sub(r'^(?:the|a)\s+', '', a.lower()).strip() for a in target_artists]
+            )
+            if not slug_matched:
+                return -999.0
+
         score = 50.0 if art_match else 0.0
+
+        # Exact artist match vs. extraneous artist penalty
+        if cand_author and art_match:
+            # Strip connector words
+            author_clean = re.sub(r'\b(?:and|feat|ft|featuring|with|prod|the|a)\b', ' ', cand_author, flags=re.IGNORECASE)
+            author_tokens = set(w for w in re.sub(r'[^\w\s]', ' ', author_clean).split() if len(w) > 1)
+            target_set = set(target_art_tokens)
+
+            # Check if all author tokens match target tokens (exact artist match)
+            if author_tokens and author_tokens.issubset(target_set):
+                score += 35.0  # Exact artist match bonus
+            else:
+                # Find extra tokens that don't belong to target artists
+                extra_tokens = author_tokens - target_set
+                # Check if these extra tokens are in target title (e.g. "feat. Someone" in title)
+                title_clean = re.sub(r'[^\w\s]', ' ', target_title)
+                title_words = set(title_clean.split())
+                unrequested_extra = [w for w in extra_tokens if w not in title_words]
+                if unrequested_extra:
+                    score -= 45.0  # Penalty for unrequested collaborator / cover singer
+        elif url_artist_slug and art_match:
+            slug_clean = re.sub(r'\b(?:and|the|a)\b', ' ', url_artist_slug, flags=re.IGNORECASE)
+            slug_tokens = set(w for w in slug_clean.split() if len(w) > 1)
+            if slug_tokens and slug_tokens.issubset(set(target_art_tokens)):
+                score += 20.0
 
         # 2. Title Matching
         # Strip featuring/with/prod clauses
@@ -560,14 +638,22 @@ class MusilonEngine:
             if v_score > best_title_score:
                 best_title_score = v_score
 
+        # Strict Title Requirement: A candidate MUST match the requested title.
+        # This prevents returning a completely different song by the same artist.
+        if best_title_score < 40.0:
+            return -999.0
+
         score += best_title_score
 
         # 3. Version Modifier Penalties & Bonuses
         for mod in self.UNWANTED_VERSION_MODIFIERS:
-            has_in_cand = (mod in cand_title) or (mod in cand_url)
+            has_in_cand = (mod in cand_title) or (mod in cand_url) or (cand_author and mod in cand_author)
             has_in_target = (mod in target_title)
             if has_in_cand and not has_in_target:
-                score -= 70.0
+                if mod in ("cover", "tribute", "karaoke", "like a version", "parody"):
+                    score -= 90.0  # Extra heavy penalty for covers/tributes
+                else:
+                    score -= 70.0
             elif has_in_cand and has_in_target:
                 score += 30.0
 
@@ -616,8 +702,11 @@ class MusilonEngine:
         clean_title = clean_watermarks(track.title).strip()
         primary_artist = track.primary_artist.strip()
 
-        # Simplify artist: e.g. "The Black Eyed Peas" -> "Black Eyed Peas"
+        # Simplified and full artist names (e.g. "The 1975" and "1975")
         simplified_artist = re.sub(r'^(?:the|a)\s+', '', primary_artist, flags=re.IGNORECASE).strip()
+        artists_to_search = [simplified_artist]
+        if primary_artist.lower() != simplified_artist.lower():
+            artists_to_search.append(primary_artist)
 
         # 1. Clean feature clauses: [with ...], (feat. ...), etc.
         clean_feat_title = re.sub(r'[\(\[]\s*(?:feat\.?|ft\.?|with|prod\.?|featuring)\b[^\]\)]*[\)\]]', '', clean_title, flags=re.IGNORECASE).strip()
@@ -654,19 +743,25 @@ class MusilonEngine:
                     candidate_pool.append(c)
 
         # Stage 1: Play JSON REST Search with artist + base title (and feature title / sub-variants)
-        if simplified_artist and norm_base:
-            add_candidates(self._search_play_rest(f"{simplified_artist} {norm_base}"))
-        if simplified_artist and norm_feat and norm_feat != norm_base:
-            add_candidates(self._search_play_rest(f"{simplified_artist} {norm_feat}"))
-        for sub_v in title_sub_variants:
-            if simplified_artist:
-                add_candidates(self._search_play_rest(f"{simplified_artist} {sub_v}"))
+        for art in artists_to_search:
+            if art and norm_base:
+                add_candidates(self._search_play_rest(f"{art} {norm_base}"))
+                add_candidates(self._search_play_rest(f"{norm_base} {art}"))
+            if art and norm_feat and norm_feat != norm_base:
+                add_candidates(self._search_play_rest(f"{art} {norm_feat}"))
+            for sub_v in title_sub_variants:
+                if art:
+                    add_candidates(self._search_play_rest(f"{art} {sub_v}"))
 
-        # Early exit if high-confidence match found
-        best = self._find_best_candidate(track, candidate_pool)
-        if best and self._score_candidate(track, best) >= 100.0:
-            logger.info(f"Found immediate high-confidence Musilon candidate: {best.get('title')}")
-            return self._extract_source(best["url"], best.get("id"))
+        # Early check if high-confidence match found in Stage 1
+        scored_stage1 = [(self._score_candidate(track, c), c) for c in candidate_pool]
+        scored_stage1.sort(key=lambda x: x[0], reverse=True)
+        for s, c in scored_stage1:
+            if s >= 100.0:
+                logger.info(f"Trying high-confidence Musilon candidate (score {s:.1f}): {c.get('title')}")
+                src = self._extract_source(c["url"], c.get("id"), target_duration_ms=track.duration_ms)
+                if src:
+                    return src
 
         # Stage 2: Play JSON REST Search with base title alone
         if norm_base and len(norm_base) >= 3:
@@ -674,33 +769,40 @@ class MusilonEngine:
         if norm_feat and norm_feat != norm_base and len(norm_feat) >= 3:
             add_candidates(self._search_play_rest(norm_feat))
 
-        best = self._find_best_candidate(track, candidate_pool)
-        if best and self._score_candidate(track, best) >= 100.0:
-            return self._extract_source(best["url"], best.get("id"))
+        scored_stage2 = [(self._score_candidate(track, c), c) for c in candidate_pool]
+        scored_stage2.sort(key=lambda x: x[0], reverse=True)
+        for s, c in scored_stage2:
+            if s >= 100.0:
+                src = self._extract_source(c["url"], c.get("id"), target_duration_ms=track.duration_ms)
+                if src:
+                    return src
 
         # Stage 3: Play JSON REST Search with full title
-        if norm_title != norm_base and norm_title != norm_feat:
-            add_candidates(self._search_play_rest(f"{simplified_artist} {norm_title}"))
+        for art in artists_to_search:
+            if norm_title != norm_base and norm_title != norm_feat:
+                add_candidates(self._search_play_rest(f"{art} {norm_title}"))
 
         # Stage 4: Artist Taxonomy Discography Archive
-        if simplified_artist:
-            add_candidates(self._search_artist_taxonomy(simplified_artist))
+        for art in artists_to_search:
+            add_candidates(self._search_artist_taxonomy(art))
 
         # Stage 5: WordPress Station Search
         if not candidate_pool:
-            if simplified_artist and norm_base:
-                add_candidates(self._search_station_wp(f"{simplified_artist} {norm_base}"))
-            if simplified_artist and norm_feat and norm_feat != norm_base:
-                add_candidates(self._search_station_wp(f"{simplified_artist} {norm_feat}"))
+            for art in artists_to_search:
+                if art and norm_base:
+                    add_candidates(self._search_station_wp(f"{art} {norm_base}"))
+                if art and norm_feat and norm_feat != norm_base:
+                    add_candidates(self._search_station_wp(f"{art} {norm_feat}"))
             if norm_base:
                 add_candidates(self._search_station_wp(norm_base))
 
         # Stage 6: HTML Search fallback
         if not candidate_pool:
-            if simplified_artist and norm_base:
-                add_candidates(self._search(f"{simplified_artist} {norm_base}"))
-            if simplified_artist and norm_feat and norm_feat != norm_base:
-                add_candidates(self._search(f"{simplified_artist} {norm_feat}"))
+            for art in artists_to_search:
+                if art and norm_base:
+                    add_candidates(self._search(f"{art} {norm_base}"))
+                if art and norm_feat and norm_feat != norm_base:
+                    add_candidates(self._search(f"{art} {norm_feat}"))
             if norm_base:
                 add_candidates(self._search(norm_base))
 
@@ -708,21 +810,48 @@ class MusilonEngine:
             logger.info(f"No candidates found on Musilon across all vectors for '{track.title}'")
             return None
 
-        best_match = self._find_best_candidate(track, candidate_pool)
-        if not best_match:
-            logger.info(f"No candidate met strict criteria (threshold 70.0) for '{track.title}'")
+        # Sort all pooled candidates by score descending and evaluate
+        scored = [(self._score_candidate(track, c), c) for c in candidate_pool]
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        for best_score, best_match in scored:
+            if best_score < 70.0:
+                break
+            logger.info(f"Evaluating Musilon candidate (score {best_score:.1f}): '{best_match.get('title')}' -> {best_match.get('url')}")
+            src = self._extract_source(best_match["url"], best_match.get("id"), target_duration_ms=track.duration_ms)
+            if src:
+                logger.info(f"Selected best Musilon candidate (score {best_score:.1f}): '{best_match.get('title')}' -> {best_match.get('url')}")
+                return src
+
+        logger.info(f"No candidate met strict criteria or duration validation for '{track.title}'")
+        return None
+
+    @staticmethod
+    def parse_time_str(time_str: str) -> Optional[int]:
+        """Parses MM:SS or HH:MM:SS into milliseconds."""
+        if not time_str:
             return None
+        parts = time_str.strip().split(":")
+        try:
+            if len(parts) == 2:
+                return (int(parts[0]) * 60 + int(parts[1])) * 1000
+            elif len(parts) == 3:
+                return (int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])) * 1000
+        except ValueError:
+            pass
+        return None
 
-        best_score = self._score_candidate(track, best_match)
-        logger.info(f"Selected best Musilon candidate (score {best_score:.1f}): '{best_match.get('title')}' -> {best_match.get('url')}")
-
-        return self._extract_source(best_match["url"], best_match.get("id"))
-
-    def _extract_source(self, track_url: str, post_id: Optional[str] = None) -> Optional[MusilonSource]:
+    def _extract_source(
+        self,
+        track_url: str,
+        post_id: Optional[str] = None,
+        target_duration_ms: Optional[int] = None
+    ) -> Optional[MusilonSource]:
         """
         Fetches the track station page and inspects the download popup and play endpoints
-        to extract the highest available quality tier (FLAC 16 > FLAC 24 > MP3 320k).
+        to extract the requested quality tier (respecting download.preferred_quality).
         Scopes link extraction strictly to this track station URL to prevent grabbing recommendations.
+        Validates station duration against target_duration_ms if available.
         """
         resp = self._request("GET", track_url)
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -734,6 +863,42 @@ class MusilonEngine:
             if login_ok:
                 resp = self._request("GET", track_url)
                 soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Check post_id from data-play-id
+        if not post_id:
+            m = re.search(r'data-play-id="(\d+)"', resp.text)
+            if m:
+                post_id = m.group(1)
+
+        # Duration validation against target_duration_ms
+        if target_duration_ms:
+            station_duration_ms = None
+            duration_span = soup.find(class_=re.compile(r"entry-info-duration|play-duration", re.I))
+            if duration_span:
+                station_duration_ms = self.parse_time_str(duration_span.get_text(strip=True))
+
+            if station_duration_ms is None and post_id:
+                try:
+                    r_play = self._request("GET", f"{self.BASE_URL}/wp-json/play/play/{post_id}", timeout=10)
+                    p_data = r_play.json()
+                    if isinstance(p_data, dict) and p_data.get("duration"):
+                        station_duration_ms = int(p_data["duration"])
+                except Exception:
+                    pass
+
+            if station_duration_ms:
+                diff_ms = abs(station_duration_ms - target_duration_ms)
+                # Reject if duration mismatch is greater than 20 seconds AND greater than 10%
+                if diff_ms > 20000 and (diff_ms / target_duration_ms) > 0.10:
+                    logger.warning(
+                        f"Musilon candidate '{track_url}' duration mismatch: "
+                        f"station={station_duration_ms/1000:.1f}s vs target={target_duration_ms/1000:.1f}s "
+                        f"(diff={diff_ms/1000:.1f}s). Rejecting candidate."
+                    )
+                    return None
+
+        from core.config import config
+        pref_q = str(config.get("download.preferred_quality", "320")).strip().lower()
 
         flac_16_url = None
         flac_24_url = None
@@ -767,34 +932,65 @@ class MusilonEngine:
             elif dtype == "320" or "dltype=320" in href or "320" in text or "320kbps" in text:
                 mp3_320_url = full_url
 
-        # Return highest quality available
-        if flac_16_url:
-            return MusilonSource(
-                track_id=post_id or station_slug,
-                title=soup.title.get_text(strip=True) if soup.title else "Track",
-                artist="",
-                quality_tier="Musilon FLAC 16",
-                download_url=flac_16_url,
-                file_extension="flac"
-            )
-        if flac_24_url:
-            return MusilonSource(
-                track_id=post_id or station_slug,
-                title=soup.title.get_text(strip=True) if soup.title else "Track",
-                artist="",
-                quality_tier="Musilon FLAC 24",
-                download_url=flac_24_url,
-                file_extension="flac"
-            )
-        if mp3_320_url:
-            return MusilonSource(
-                track_id=post_id or station_slug,
-                title=soup.title.get_text(strip=True) if soup.title else "Track",
-                artist="",
-                quality_tier="Musilon 320k",
-                download_url=mp3_320_url,
-                file_extension="mp3"
-            )
+        page_title = soup.title.get_text(strip=True) if soup.title else "Track"
+
+        # Return quality based on preference
+        if pref_q in ("320", "mp3", "320k", "mp3_320"):
+            if mp3_320_url:
+                return MusilonSource(
+                    track_id=post_id or station_slug,
+                    title=page_title,
+                    artist="",
+                    quality_tier="Musilon 320k",
+                    download_url=mp3_320_url,
+                    file_extension="mp3"
+                )
+            if flac_16_url:
+                return MusilonSource(
+                    track_id=post_id or station_slug,
+                    title=page_title,
+                    artist="",
+                    quality_tier="Musilon FLAC 16",
+                    download_url=flac_16_url,
+                    file_extension="flac"
+                )
+            if flac_24_url:
+                return MusilonSource(
+                    track_id=post_id or station_slug,
+                    title=page_title,
+                    artist="",
+                    quality_tier="Musilon FLAC 24",
+                    download_url=flac_24_url,
+                    file_extension="flac"
+                )
+        else:
+            if flac_16_url:
+                return MusilonSource(
+                    track_id=post_id or station_slug,
+                    title=page_title,
+                    artist="",
+                    quality_tier="Musilon FLAC 16",
+                    download_url=flac_16_url,
+                    file_extension="flac"
+                )
+            if flac_24_url:
+                return MusilonSource(
+                    track_id=post_id or station_slug,
+                    title=page_title,
+                    artist="",
+                    quality_tier="Musilon FLAC 24",
+                    download_url=flac_24_url,
+                    file_extension="flac"
+                )
+            if mp3_320_url:
+                return MusilonSource(
+                    track_id=post_id or station_slug,
+                    title=page_title,
+                    artist="",
+                    quality_tier="Musilon 320k",
+                    download_url=mp3_320_url,
+                    file_extension="mp3"
+                )
 
         # If buttons are still marked dl-not-login, VIP session was not active
         if "dl-not-login" in resp.text:
@@ -802,17 +998,12 @@ class MusilonEngine:
             return None
 
         # Inspect the REST player endpoint fallback: /wp-json/play/play/{id}
-        if not post_id:
-            m = re.search(r'data-play-id="(\d+)"', resp.text)
-            if m:
-                post_id = m.group(1)
-
         if post_id:
             try:
                 play_api = f"{self.BASE_URL}/wp-json/play/play/{post_id}"
                 r_play = self._request("GET", play_api)
                 data = r_play.json()
-                if data.get("downloadable") and data.get("download_url"):
+                if isinstance(data, dict) and data.get("downloadable") and data.get("download_url"):
                     d_url = data["download_url"]
                     if "login" not in d_url and not d_url.endswith("#"):
                         is_flac = ".flac" in d_url.lower()

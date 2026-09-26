@@ -289,8 +289,8 @@ class SettingsView(QScrollArea):
         f_row.addWidget(self.open_folder_btn)
         d_layout.addLayout(f_row)
 
-        # Naming Pattern Row
-        name_label = CaptionLabel("File Naming Pattern:", down_card)
+        # Naming Pattern Row (Playlists & Singles)
+        name_label = CaptionLabel("Playlist & Single Naming Pattern:", down_card)
         name_label.setStyleSheet("font-weight: bold;")
         d_layout.addWidget(name_label)
 
@@ -298,12 +298,54 @@ class SettingsView(QScrollArea):
         self.naming_input = LineEdit(down_card)
         self.naming_input.setText(config.get("download.naming_template", "{artist} - {title}"))
         self.naming_input.textChanged.connect(lambda t: config.set("download.naming_template", t))
-        n_desc = CaptionLabel("Supported tags: {artist}, {title}, {album}, {track_num}", down_card)
+        n_desc = CaptionLabel("Tags: {artist}, {title}, {album}", down_card)
         n_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
 
         n_row.addWidget(self.naming_input, 1)
         n_row.addWidget(n_desc)
         d_layout.addLayout(n_row)
+
+        # Album Naming Pattern Row
+        album_name_label = CaptionLabel("Album Naming Pattern:", down_card)
+        album_name_label.setStyleSheet("font-weight: bold;")
+        d_layout.addWidget(album_name_label)
+
+        an_row = QHBoxLayout()
+        self.album_naming_input = LineEdit(down_card)
+        self.album_naming_input.setText(config.get("download.album_naming_template", "{track_num}. {artist} - {title}"))
+        self.album_naming_input.textChanged.connect(lambda t: config.set("download.album_naming_template", t))
+        an_desc = CaptionLabel("Tags: {track_num}, {artist}, {title}, {album}", down_card)
+        an_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
+
+        an_row.addWidget(self.album_naming_input, 1)
+        an_row.addWidget(an_desc)
+        d_layout.addLayout(an_row)
+
+        # Preferred Audio Quality Row
+        qual_row = QHBoxLayout()
+        qual_info = QVBoxLayout()
+        qual_title = BodyLabel("Preferred Download Audio Quality", down_card)
+        qual_title.setStyleSheet("font-weight: bold;")
+        qual_desc = CaptionLabel(
+            "Select preferred format from Musilon. If unavailable, falls back gracefully to next highest tier.",
+            down_card
+        )
+        qual_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        qual_info.addWidget(qual_title)
+        qual_info.addWidget(qual_desc)
+
+        self.quality_combo = ComboBox(down_card)
+        self.quality_combo.addItems([
+            "MP3 320 kbps (High Quality MP3 - Default)",
+            "Lossless FLAC (16-bit CD / 24-bit Hi-Res)"
+        ])
+        current_pref = str(config.get("download.preferred_quality", "320")).strip().lower()
+        self.quality_combo.setCurrentIndex(0 if current_pref in ("320", "mp3", "320k", "mp3_320") else 1)
+        self.quality_combo.currentIndexChanged.connect(self._on_quality_changed)
+
+        qual_row.addLayout(qual_info, 1)
+        qual_row.addWidget(self.quality_combo)
+        d_layout.addLayout(qual_row)
 
         # Safety-Net Fallback Switch Row
         fb_row = QHBoxLayout()
@@ -326,6 +368,65 @@ class SettingsView(QScrollArea):
         fb_row.addLayout(fb_info, 1)
         fb_row.addWidget(self.fallback_switch)
         d_layout.addLayout(fb_row)
+
+        # YouTube Cookies Row
+        yt_cookie_label = CaptionLabel("YouTube Cookies File (cookies.txt):", down_card)
+        yt_cookie_label.setStyleSheet("font-weight: bold;")
+        d_layout.addWidget(yt_cookie_label)
+
+        yt_cookie_row = QHBoxLayout()
+        yt_cookie_row.setSpacing(8)
+
+        self.yt_cookie_input = LineEdit(down_card)
+        self.yt_cookie_input.setPlaceholderText("Path to cookies.txt (or place cookies.txt in app folder)")
+        self.yt_cookie_input.setText(config.get("download.cookies_file", ""))
+        self.yt_cookie_input.textChanged.connect(lambda t: config.set("download.cookies_file", t.strip()))
+
+        self.yt_cookie_browse_btn = PushButton(FluentIcon.DOCUMENT, "Browse...", down_card)
+        self.yt_cookie_browse_btn.clicked.connect(self._browse_cookies_file)
+
+        yt_cookie_row.addWidget(self.yt_cookie_input, 1)
+        yt_cookie_row.addWidget(self.yt_cookie_browse_btn)
+        d_layout.addLayout(yt_cookie_row)
+
+        # YouTube Cookies Guide Card
+        yt_guide_card = QFrame(down_card)
+        yt_guide_card.setStyleSheet("background-color: #202020; border-radius: 8px; padding: 8px;")
+        yt_g_layout = QVBoxLayout(yt_guide_card)
+        yt_g_layout.setContentsMargins(12, 10, 12, 10)
+        yt_g_layout.setSpacing(4)
+
+        yt_guide_title = CaptionLabel("💡 How to fix YouTube bot blocks with cookies.txt:", yt_guide_card)
+        yt_guide_title.setStyleSheet("font-weight: bold; color: #1DB954;")
+        yt_guide_step1 = CaptionLabel("1. Install 'Get cookies.txt LOCALLY' extension in Chrome, Edge, or Firefox.", yt_guide_card)
+        yt_guide_step2 = CaptionLabel("2. Open youtube.com and ensure you are logged into your Google account.", yt_guide_card)
+        yt_guide_step3 = CaptionLabel("3. Click the extension icon and click 'Export As cookies.txt'.", yt_guide_card)
+        yt_guide_step4 = CaptionLabel("4. Select the exported file via 'Browse...' above (or save it as 'cookies.txt' in the app folder).", yt_guide_card)
+
+        yt_g_layout.addWidget(yt_guide_title)
+        yt_g_layout.addWidget(yt_guide_step1)
+        yt_g_layout.addWidget(yt_guide_step2)
+        yt_g_layout.addWidget(yt_guide_step3)
+        yt_g_layout.addWidget(yt_guide_step4)
+        d_layout.addWidget(yt_guide_card)
+
+        # YouTube / Network Proxy Row
+        proxy_label = CaptionLabel("Network Proxy (Optional):", down_card)
+        proxy_label.setStyleSheet("font-weight: bold;")
+        d_layout.addWidget(proxy_label)
+
+        p_row = QHBoxLayout()
+        self.proxy_input = LineEdit(down_card)
+        self.proxy_input.setPlaceholderText("e.g. http://127.0.0.1:10809 or socks5://127.0.0.1:10808")
+        self.proxy_input.setText(config.get("download.proxy", ""))
+        self.proxy_input.textChanged.connect(lambda t: config.set("download.proxy", t.strip()))
+
+        p_desc = CaptionLabel("Optional proxy for YouTube requests. Leave empty for direct connection.", down_card)
+        p_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
+
+        p_row.addWidget(self.proxy_input, 1)
+        p_row.addWidget(p_desc)
+        d_layout.addLayout(p_row)
 
         # Library Clean & Repair Row
         clean_row = QHBoxLayout()
@@ -549,6 +650,26 @@ class SettingsView(QScrollArea):
         else:
             InfoBar.warning("Strict Musilon Mode", "YouTube fallback disabled. Downloads restricted strictly to Musilon.", duration=3500, parent=self)
 
+    def _on_quality_changed(self, index: int):
+        if index == 0:
+            config.set("download.preferred_quality", "320")
+            config.set("download.quality_priority", [
+                "musilon_mp3_320",
+                "musilon_flac_16",
+                "musilon_flac_24",
+                "ytm_opus"
+            ])
+            InfoBar.info("Quality Set: MP3 320k", "Musilon downloads will prioritize 320 kbps MP3 files.", duration=3000, parent=self)
+        else:
+            config.set("download.preferred_quality", "flac")
+            config.set("download.quality_priority", [
+                "musilon_flac_16",
+                "musilon_flac_24",
+                "musilon_mp3_320",
+                "ytm_opus"
+            ])
+            InfoBar.info("Quality Set: Lossless FLAC", "Musilon downloads will prioritize Lossless FLAC (16/24-bit).", duration=3000, parent=self)
+
     def _on_user_changed(self, text: str):
         val = text.strip()
         config.set("musilon.username", val)
@@ -679,6 +800,20 @@ class SettingsView(QScrollArea):
             self.folder_input.setText(norm)
             config.set("download.output_dir", norm)
             InfoBar.success("Saved", f"Download directory updated: {norm}", duration=2500, parent=self)
+
+    def _browse_cookies_file(self, *args):
+        cur = self.yt_cookie_input.text().strip() or os.getcwd()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select YouTube Cookies File",
+            cur,
+            "Cookie Files (*.txt);;All Files (*)"
+        )
+        if path:
+            norm = os.path.normpath(path)
+            self.yt_cookie_input.setText(norm)
+            config.set("download.cookies_file", norm)
+            InfoBar.success("Cookies Loaded", f"YouTube cookies: {os.path.basename(norm)}", duration=3000, parent=self)
 
     def _open_folder(self, *args):
         path = self.folder_input.text().strip()

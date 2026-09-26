@@ -80,11 +80,13 @@ class CascadingAudioEngine:
             yt_src = self.ytdlp.resolve_track(track)
             if yt_src:
                 logger.info(f"Resolved via YouTube Music fallback: {track.title}")
+                act_ext = yt_src.audio_format or "opus"
+                badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
                 return ResolvedTrackSource(
                     source_type="YouTube Music",
-                    quality_badge="YTM Opus",
+                    quality_badge=badge,
                     source_obj=yt_src,
-                    file_extension="opus"
+                    file_extension=act_ext
                 )
         except Exception as e:
             logger.error(f"YouTube Music fallback failed for {track.title}: {e}")
@@ -127,18 +129,29 @@ class CascadingAudioEngine:
         title_clean = sanitize_filename(track.title, max_length=40)
         album_clean = sanitize_filename(track.album, max_length=40)
         track_num_str = f"{track.track_number:02d}"
+        disc_num_str = f"{getattr(track, 'disc_number', 1) or 1:02d}"
+
+        is_album = (getattr(track, "collection_type", "track") == "album")
+        tmpl_to_use = naming_template
+        if is_album and getattr(track, "track_number", 0) > 0 and tmpl_to_use == "{artist} - {title}":
+            tmpl_to_use = config.get("download.album_naming_template", "{track_num}. {artist} - {title}")
 
         try:
-            base_name = naming_template.format(
+            base_name = tmpl_to_use.format(
                 artist=artist_clean,
                 title=title_clean,
                 album=album_clean,
                 track_num=track_num_str,
                 track_number=track_num_str,
-                track=track_num_str
+                track=track_num_str,
+                disc_num=disc_num_str,
+                disc_number=disc_num_str
             )
         except Exception:
-            base_name = f"{artist_clean} - {title_clean}"
+            if is_album and getattr(track, "track_number", 0) > 0:
+                base_name = f"{track_num_str}. {artist_clean} - {title_clean}"
+            else:
+                base_name = f"{artist_clean} - {title_clean}"
         base_name = sanitize_filename(base_name, max_length=120)
         base_dest_without_ext = os.path.join(output_dir, base_name)
 
@@ -184,11 +197,13 @@ class CascadingAudioEngine:
                     status_callback("Falling back to YTM (Last Resort)")
                 yt_fallback = self.ytdlp.resolve_track(track)
                 if yt_fallback:
+                    act_ext = yt_fallback.audio_format or "opus"
+                    badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
                     resolved = ResolvedTrackSource(
                         source_type="YouTube Music",
-                        quality_badge="YTM Opus",
+                        quality_badge=badge,
                         source_obj=yt_fallback,
-                        file_extension=yt_fallback.audio_format or "opus"
+                        file_extension=act_ext
                     )
 
         if not final_file_path and resolved.source_type == "YouTube Music":
@@ -202,6 +217,10 @@ class CascadingAudioEngine:
                 cancel_check=cancel_check,
                 pause_wait=pause_wait
             )
+            if final_file_path and os.path.isfile(final_file_path):
+                act_ext = os.path.splitext(final_file_path)[1].lstrip(".").lower()
+                resolved.file_extension = act_ext
+                resolved.quality_badge = "YTM M4A" if act_ext == "m4a" else "YTM Opus"
 
         if not final_file_path or not os.path.isfile(final_file_path):
             raise RuntimeError(f"Audio download failed to produce a valid file for '{track.title}'.")
