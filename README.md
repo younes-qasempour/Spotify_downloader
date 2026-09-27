@@ -195,8 +195,8 @@ All runtime settings are stored in `config.json` (excluded from git tracking):
 | `musilon.password` | String | Musilon account password | `""` |
 | `musilon.enabled` | Boolean | Enable or disable Musilon Tier 1–3 downloads | `true` |
 | `musilon_max_retries` | Integer | Max VIP download retry attempts before YouTube fallback | `5` |
-| `spotify.client_id` | String | Official Spotify Developer Client ID (optional) | `""` |
-| `spotify.client_secret`| String | Official Spotify Developer Client Secret (optional) | `""` |
+| `spotify.client_id` | String | Official Spotify Developer Client ID (required for playlists > 100 tracks) | `""` |
+| `spotify.client_secret`| String | Official Spotify Developer Client Secret (required for playlists > 100 tracks) | `""` |
 | `download.output_dir` | String | Local directory where audio files and collections are saved | `downloads` |
 | `download.naming_template` | String | File naming pattern for playlists & singles (`{artist}`, `{title}`, `{album}`) | `"{artist} - {title}"` |
 | `download.album_naming_template` | String | File naming pattern for albums (`{track_num}`, `{artist}`, `{title}`, `{album}`) | `"{track_num}. {artist} - {title}"` |

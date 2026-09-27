@@ -13,7 +13,7 @@ from qfluentwidgets import (
     TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
     FluentIcon, InfoBar, InfoBarPosition, LineEdit, CaptionLabel,
     StrongBodyLabel, BodyLabel, CardWidget, SmoothScrollArea, IconWidget,
-    SpinBox, ComboBox, ProgressBar
+    SpinBox, ComboBox, ProgressBar, MessageBoxBase
 )
 
 from core.archive import ArchiveManager
@@ -25,6 +25,44 @@ from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
 from gui.bridge import EngineSignalBridge
 from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, BG_CARD, SPOTIFY_EMERALD
+
+
+class SpotifyCredentialsDialog(MessageBoxBase):
+    """Fluent Dialog allowing users to quickly configure Spotify Developer credentials."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.titleLabel = SubtitleLabel("Configure Spotify Developer API", self)
+        self.viewLayout.addWidget(self.titleLabel)
+
+        guide_text = (
+            "Spotify requires free API credentials to retrieve playlists larger than 100 songs.\n"
+            "Without credentials, Spotify's guest embed strictly limits playlists to 100 songs.\n\n"
+            "How to get free credentials in 1 minute:\n"
+            "1. Visit developer.spotify.com/dashboard and log in with your free Spotify account.\n"
+            "2. Click 'Create App' (App Name: Downloader, Redirect URI: http://127.0.0.1:9900/).\n"
+            "3. Copy your Client ID and Client Secret below:"
+        )
+        self.guide_label = CaptionLabel(guide_text, self)
+        self.guide_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.viewLayout.addWidget(self.guide_label)
+
+        self.open_dash_btn = PushButton(FluentIcon.LINK, "Open Spotify Developer Dashboard", self)
+        self.open_dash_btn.clicked.connect(lambda: subprocess.Popen(["cmd", "/c", "start", "https://developer.spotify.com/dashboard"]))
+        self.viewLayout.addWidget(self.open_dash_btn)
+
+        self.cid_input = LineEdit(self)
+        self.cid_input.setPlaceholderText("Spotify Client ID")
+        self.cid_input.setText(config.get("spotify.client_id", ""))
+        self.viewLayout.addWidget(self.cid_input)
+
+        self.sec_input = LineEdit(self)
+        self.sec_input.setPlaceholderText("Spotify Client Secret")
+        self.sec_input.setEchoMode(LineEdit.EchoMode.Password)
+        self.sec_input.setText(config.get("spotify.client_secret", ""))
+        self.viewLayout.addWidget(self.sec_input)
+
+        self.yesButton.setText("Save Keys")
+        self.cancelButton.setText("Cancel")
 
 
 class MetricCard(CardWidget):
@@ -299,6 +337,27 @@ class PlaylistsView(QWidget):
         input_layout.addWidget(self.save_btn)
         list_layout.addWidget(input_container)
 
+        # 2b. Spotify API Mode Banner
+        self.api_banner = CardWidget(self)
+        banner_layout = QHBoxLayout(self.api_banner)
+        banner_layout.setContentsMargins(14, 8, 14, 8)
+        banner_layout.setSpacing(10)
+
+        self.banner_icon = IconWidget(self.api_banner)
+        self.banner_icon.setFixedSize(18, 18)
+
+        self.banner_label = CaptionLabel(self.api_banner)
+        self.banner_btn = PushButton(self.api_banner)
+        self.banner_btn.setFixedHeight(28)
+        self.banner_btn.clicked.connect(self._open_credentials_dialog)
+
+        banner_layout.addWidget(self.banner_icon)
+        banner_layout.addWidget(self.banner_label, 1)
+        banner_layout.addWidget(self.banner_btn)
+        list_layout.addWidget(self.api_banner)
+
+        self._update_api_banner()
+
         # 3. Metric Cards Row
         metric_layout = QHBoxLayout()
         metric_layout.setSpacing(12)
@@ -518,6 +577,52 @@ class PlaylistsView(QWidget):
         self.bridge.sig_completed.connect(self._handle_bridge_completed)
         self.bridge.sig_status_changed.connect(self._handle_bridge_status)
 
+    def _update_api_banner(self):
+        has_keys = bool(config.get("spotify.client_id", "").strip() and config.get("spotify.client_secret", "").strip())
+        if has_keys:
+            self.banner_icon.setIcon(FluentIcon.COMPLETED)
+            self.banner_label.setText("Official Spotify API Active: Full pagination enabled for large playlists (unlimited tracks).")
+            self.banner_label.setStyleSheet("color: #4ADE80; font-weight: 500;")
+            self.banner_btn.setText("Edit Keys")
+            self.api_banner.setStyleSheet("""
+                CardWidget {
+                    background-color: rgba(74, 222, 128, 0.08);
+                    border: 1px solid rgba(74, 222, 128, 0.25);
+                    border-radius: 8px;
+                }
+            """)
+        else:
+            self.banner_icon.setIcon(FluentIcon.INFO)
+            self.banner_label.setText("⚠️ Guest Mode Active (Max 100 songs/playlist). Add free Spotify API keys to download full 1,000+ song playlists.")
+            self.banner_label.setStyleSheet("color: #FBBF24; font-weight: 500;")
+            self.banner_btn.setText("Configure Free API Keys")
+            self.api_banner.setStyleSheet("""
+                CardWidget {
+                    background-color: rgba(251, 191, 36, 0.08);
+                    border: 1px solid rgba(251, 191, 36, 0.25);
+                    border-radius: 8px;
+                }
+            """)
+
+    def _open_credentials_dialog(self):
+        diag = SpotifyCredentialsDialog(self.window() or self)
+        if diag.exec():
+            cid = diag.cid_input.text().strip()
+            sec = diag.sec_input.text().strip()
+            config.set("spotify.client_id", cid)
+            config.set("spotify.client_secret", sec)
+            self.spotify_client.update_credentials(cid, sec)
+            self._update_api_banner()
+            if cid and sec:
+                InfoBar.success(
+                    title="Spotify API Keys Saved",
+                    content="Official Spotify API enabled. You can now save playlists with 1,000+ songs.",
+                    orient=Qt.Orientation.Horizontal,
+                    position=InfoBarPosition.TOP,
+                    duration=4000,
+                    parent=self
+                )
+
     def _paste_from_clipboard(self):
         text = QApplication.clipboard().text().strip()
         if text:
@@ -592,6 +697,11 @@ class PlaylistsView(QWidget):
                     tracks=tracks,
                     playlist_id=entity_id
                 )
+                is_guest = not self.spotify_client.has_credentials()
+                was_truncated = getattr(self.spotify_client, "last_was_truncated", False) or (is_guest and len(tracks) == 100)
+                saved_info["was_truncated"] = was_truncated
+                saved_info["is_guest"] = is_guest
+
                 self.sig_playlist_saved.emit(saved_info)
             except Exception as e:
                 self.sig_save_failed.emit(str(e))
@@ -608,14 +718,27 @@ class PlaylistsView(QWidget):
         down = saved_info.get("downloaded_count", 0)
         pend = saved_info.get("pending_count", total - down)
 
-        InfoBar.success(
-            title="Playlist Saved Offline",
-            content=f"'{name}' saved with {total} tracks ({down} already downloaded, {pend} pending).",
-            orient=Qt.Orientation.Horizontal,
-            position=InfoBarPosition.TOP,
-            duration=5000,
-            parent=self
-        )
+        if saved_info.get("was_truncated"):
+            InfoBar.warning(
+                title="Playlist Capped at 100 Tracks (Guest Limit)",
+                content=(
+                    f"'{name}' saved with 100 tracks. In guest mode, Spotify limits playlist embeds to 100 songs max. "
+                    "To fetch all tracks (1,000+ songs), click 'Configure Free API Keys' above."
+                ),
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=12000,
+                parent=self
+            )
+        else:
+            InfoBar.success(
+                title="Playlist Saved Offline",
+                content=f"'{name}' saved with {total} tracks ({down} already downloaded, {pend} pending).",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+                parent=self
+            )
         self.reload_playlists()
 
     def _on_save_failed(self, err_msg: str):

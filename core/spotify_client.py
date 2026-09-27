@@ -79,6 +79,9 @@ class SpotifyClient:
         self.client_id = client_id.strip()
         self.client_secret = client_secret.strip()
         self._sp: Optional[Any] = None
+        self.last_resolution_mode: str = "none"  # "api" or "guest"
+        self.last_was_truncated: bool = False
+        self.last_total_tracks: int = 0
         self._init_api()
 
         self._session = requests.Session()
@@ -87,6 +90,10 @@ class SpotifyClient:
                           '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         })
+
+    def has_credentials(self) -> bool:
+        """Returns True if valid Spotify API credentials are configured."""
+        return bool(self.client_id and self.client_secret and self._sp)
 
     def _init_api(self):
         if spotipy and self.client_id and self.client_secret:
@@ -131,12 +138,18 @@ class SpotifyClient:
         entity_type, entity_id = parsed
         logger.info(f"Resolving Spotify entity [{entity_type}] with ID: {entity_id}")
 
+        self.last_was_truncated = False
+        self.last_total_tracks = 0
+
         if self._sp:
             try:
-                return self._resolve_with_api(entity_type, entity_id)
+                tracks = self._resolve_with_api(entity_type, entity_id)
+                self.last_resolution_mode = "api"
+                return tracks
             except Exception as e:
                 logger.warning(f"Web API resolution failed: {e}. Attempting guest scrape fallback.")
 
+        self.last_resolution_mode = "guest"
         return self._resolve_with_guest(entity_type, entity_id)
 
     # -------------------------------------------------------------------------
@@ -181,19 +194,22 @@ class SpotifyClient:
         elif entity_type == "playlist":
             pl_title = "Spotify Playlist"
             pl_cover = ""
+            total_expected = 0
             try:
-                pl_meta = self._sp.playlist(entity_id, fields="name,images")
+                pl_meta = self._sp.playlist(entity_id, fields="name,images,tracks.total")
                 if pl_meta:
                     if pl_meta.get("name"):
                         pl_title = clean_watermarks(pl_meta["name"])
                     if pl_meta.get("images"):
                         pl_cover = pl_meta["images"][0].get("url", "")
+                    if pl_meta.get("tracks") and isinstance(pl_meta["tracks"], dict):
+                        total_expected = pl_meta["tracks"].get("total", 0)
             except Exception as e:
                 logger.debug(f"Could not fetch playlist metadata: {e}")
 
             tracks: List[TrackMetadata] = []
             offset = 0
-            limit = 50
+            limit = 100
             while True:
                 retries = 3
                 results = None
@@ -225,10 +241,13 @@ class SpotifyClient:
                             collection_cover_url=pl_cover
                         ))
 
+                logger.info(f"Resolved {len(tracks)}/{total_expected or '?'} tracks from playlist '{pl_title}'...")
+
                 if results.get("next"):
                     offset += limit
                 else:
                     break
+            self.last_total_tracks = len(tracks)
             return tracks
 
         elif entity_type == "artist":
@@ -349,6 +368,15 @@ class SpotifyClient:
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     list(executor.map(_resolve_cover, tracks))
 
+            if entity_type == "playlist" and len(tracks) == 100:
+                self.last_was_truncated = True
+                logger.warning(
+                    f"Playlist '{c_name}' reached Spotify guest embed ceiling of 100 tracks. "
+                    "Spotify embed limits playlists to 100 tracks max. "
+                    "Configure Spotify API credentials (client_id & client_secret) in Settings to fetch full playlists."
+                )
+
+            self.last_total_tracks = len(tracks)
             return tracks
 
     def _fetch_track_cover(self, track_id: str) -> str:

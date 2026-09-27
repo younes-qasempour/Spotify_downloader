@@ -1,4 +1,5 @@
 import os
+import subprocess
 import threading
 from typing import Optional
 from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
@@ -216,7 +217,7 @@ class SettingsView(QScrollArea):
         # =====================================================================
         # 2. Spotify Metadata Credentials Section
         # =====================================================================
-        main_layout.addWidget(StrongBodyLabel("Spotify Metadata Credentials (Optional)", self.container))
+        main_layout.addWidget(StrongBodyLabel("Spotify Metadata Credentials", self.container))
 
         spotify_card = CardWidget(self.container)
         s_layout = QVBoxLayout(spotify_card)
@@ -224,12 +225,20 @@ class SettingsView(QScrollArea):
         s_layout.setSpacing(12)
 
         s_desc = CaptionLabel(
-            "Spotify Developer Client ID and Secret for official Web API metadata extraction. "
-            "Leave blank for zero-config automatic guest scraping mode.",
+            "Spotify Developer Client ID & Secret for official Web API metadata extraction with full pagination.\n"
+            "• Required to download or save playlists with more than 100 tracks (guest embed mode is capped by Spotify at 100 songs max).\n"
+            "• Free to obtain in 1 minute: click the button below to open developer.spotify.com/dashboard, click 'Create App', and paste your keys.",
             spotify_card
         )
         s_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
         s_layout.addWidget(s_desc)
+
+        s_btn_row = QHBoxLayout()
+        self.open_sp_dash_btn = PushButton(FluentIcon.LINK, "Open Spotify Developer Dashboard", spotify_card)
+        self.open_sp_dash_btn.clicked.connect(lambda: subprocess.Popen(["cmd", "/c", "start", "https://developer.spotify.com/dashboard"]))
+        s_btn_row.addWidget(self.open_sp_dash_btn)
+        s_btn_row.addStretch(1)
+        s_layout.addLayout(s_btn_row)
 
         s_inputs = QHBoxLayout()
         s_inputs.setSpacing(10)

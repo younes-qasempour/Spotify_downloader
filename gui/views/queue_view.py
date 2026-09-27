@@ -260,14 +260,24 @@ class QueueView(QWidget):
 
         self.qm.enqueue(tracks)
 
-        InfoBar.success(
-            title="Enqueued Successfully",
-            content=f"Added {len(tracks)} track(s) to queue. Click 'Start All' to begin downloading.",
-            orient=Qt.Orientation.Horizontal,
-            position=InfoBarPosition.TOP,
-            duration=4000,
-            parent=self
-        )
+        if getattr(self.spotify_client, "last_was_truncated", False) or (not self.spotify_client.has_credentials() and len(tracks) == 100):
+            InfoBar.warning(
+                title="Playlist Capped at 100 Tracks (Guest Limit)",
+                content="Added 100 tracks. In guest mode, Spotify limits playlist embeds to 100 songs max. Add your free Spotify API keys in Settings to enqueue all 1,000+ songs.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=10000,
+                parent=self
+            )
+        else:
+            InfoBar.success(
+                title="Enqueued Successfully",
+                content=f"Added {len(tracks)} track(s) to queue. Click 'Start All' to begin downloading.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+                parent=self
+            )
         self._update_metrics()
         self.table.viewport().update()
 
