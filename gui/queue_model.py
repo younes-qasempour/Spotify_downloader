@@ -111,5 +111,5 @@ class TrackQueueModel(QAbstractTableModel):
         total = len(self.items)
         active = sum(1 for it in self.items if it.status in ("Resolving", "Downloading", "Tagging", "Fetching Lyrics"))
         completed = sum(1 for it in self.items if it.status == "Completed")
-        failed = sum(1 for it in self.items if it.status in ("Failed", "Cancelled"))
+        failed = sum(1 for it in self.items if it.status in ("Failed", "Cancelled", "Stopped"))
         return total, active, completed, failed

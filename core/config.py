@@ -14,6 +14,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "enabled": True,
         "arcsjs": "",
         "arcsjsc": "",
+        "safe_mode": True,
+        "cooldown_min_sec": 15,
+        "cooldown_max_sec": 35,
     },
     "spotify": {
         "client_id": "",

@@ -222,6 +222,8 @@ class QueueView(QWidget):
             )
             return
 
+        entity_type, entity_id = parsed
+
         self.enqueue_btn.setEnabled(False)
         self.enqueue_btn.setText("Analyzing...")
         InfoBar.info(
@@ -236,6 +238,19 @@ class QueueView(QWidget):
         def resolve_worker():
             try:
                 tracks = self.spotify_client.resolve(url)
+                if tracks and entity_type in ("playlist", "album"):
+                    try:
+                        pl_name = tracks[0].collection_name or ("Spotify Playlist" if entity_type == "playlist" else "Spotify Album")
+                        pl_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
+                        self.qm.archive.save_playlist(
+                            name=pl_name,
+                            spotify_url=url,
+                            cover_url=pl_cover,
+                            tracks=tracks,
+                            playlist_id=entity_id
+                        )
+                    except Exception as e_save:
+                        pass
                 self.sig_resolved_tracks.emit(tracks)
             except Exception as e:
                 self.sig_resolve_error.emit(str(e))
@@ -344,15 +359,15 @@ class QueueView(QWidget):
     def _on_retry_failed_clicked(self, *args):
         count = self.qm.retry_failed()
         for item in self.model.items:
-            if item.status == "Failed":
+            if item.status in ("Failed", "Stopped"):
                 item.status = "Queued"
                 item.cancelled = False
                 item.error_message = ""
         self.model.layoutChanged.emit()
         if count > 0:
-            InfoBar.success("Retrying Downloads", f"Re-queued {count} failed track(s).", duration=3000, parent=self)
+            InfoBar.success("Retrying Downloads", f"Re-queued {count} failed/stopped track(s).", duration=3000, parent=self)
         else:
-            InfoBar.info("No Failed Tracks", "There are no failed tracks to retry.", duration=2000, parent=self)
+            InfoBar.info("No Failed Tracks", "There are no failed or stopped tracks to retry.", duration=2000, parent=self)
         self._update_metrics()
         self.table.viewport().update()
 
@@ -417,7 +432,7 @@ class QueueView(QWidget):
 
         menu = QMenu(self)
         retry_act = None
-        if item.status in ("Failed", "Cancelled"):
+        if item.status in ("Failed", "Cancelled", "Stopped"):
             retry_act = menu.addAction("Retry Download")
         cancel_act = None
         if item.status in ("Queued", "Downloading", "Resolving", "Paused"):

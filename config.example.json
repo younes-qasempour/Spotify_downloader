@@ -5,7 +5,10 @@
     "password": "",
     "enabled": true,
     "arcsjs": "",
-    "arcsjsc": ""
+    "arcsjsc": "",
+    "safe_mode": true,
+    "cooldown_min_sec": 15,
+    "cooldown_max_sec": 35
   },
   "spotify": {
     "client_id": "",

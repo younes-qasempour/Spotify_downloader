@@ -192,6 +192,9 @@ class ArchiveManager:
                     except sqlite3.OperationalError:
                         pass
 
+                    # Reset any stale 'queued' or 'stopped' tracks from previous sessions back to 'pending'
+                    conn.execute("UPDATE saved_playlist_tracks SET status = 'pending' WHERE status IN ('queued', 'stopped');")
+
                 logger.info(f"Initialized Archive database at: {self.db_path}")
             except Exception as e:
                 logger.error(f"Failed to initialize Archive database: {e}")
@@ -1424,4 +1427,54 @@ class ArchiveManager:
                 logger.debug(f"Failed to mark tracks queued: {e}")
             finally:
                 conn.close()
+
+    def update_saved_track_status_by_spotify_id(self, spotify_id: str, new_status: str):
+        """Updates the status of a specific track across all saved playlists (if not already downloaded)."""
+        if not spotify_id:
+            return
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute("""
+                        UPDATE saved_playlist_tracks
+                        SET status = ?
+                        WHERE spotify_id = ? AND status != 'downloaded'
+                    """, (new_status, spotify_id))
+            except Exception as e:
+                logger.debug(f"Failed to update status for {spotify_id}: {e}")
+            finally:
+                conn.close()
+
+    def revert_queued_tracks_to_pending(self, playlist_id: Optional[str] = None) -> int:
+        """
+        Reverts any tracks marked 'queued' or 'stopped' back to 'pending'.
+        Prevents batch downloads from being permanently locked out when stopped or restarted.
+        """
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    if playlist_id:
+                        cur = conn.execute("""
+                            UPDATE saved_playlist_tracks
+                            SET status = 'pending'
+                            WHERE playlist_id = ? AND status IN ('queued', 'stopped')
+                        """, (playlist_id,))
+                    else:
+                        cur = conn.execute("""
+                            UPDATE saved_playlist_tracks
+                            SET status = 'pending'
+                            WHERE status IN ('queued', 'stopped')
+                        """)
+                    reverted = cur.rowcount
+                    if reverted > 0:
+                        logger.info(f"Reverted {reverted} queued/stopped track(s) back to pending.")
+                    return reverted
+            except Exception as e:
+                logger.debug(f"Failed to revert queued tracks to pending: {e}")
+                return 0
+            finally:
+                conn.close()
+
 

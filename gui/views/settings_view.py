@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
     LineEdit, PrimaryPushButton, PushButton, ToolButton, SwitchButton,
-    CardWidget, InfoBar, InfoBarPosition, FluentIcon, Slider, ComboBox
+    CardWidget, InfoBar, InfoBarPosition, FluentIcon, Slider, ComboBox, SpinBox
 )
 
 from core.config import config
@@ -39,6 +39,7 @@ class SettingsView(QScrollArea):
     sig_login_result = pyqtSignal(bool, str)
     sig_test_result = pyqtSignal(bool, bool, str)
     sig_spotify_result = pyqtSignal(bool, str)
+    sig_spotify_auth_result = pyqtSignal(bool, str)
     sig_ffmpeg_progress = pyqtSignal(float, str)
     sig_ffmpeg_finished = pyqtSignal(bool, str)
 
@@ -64,6 +65,7 @@ class SettingsView(QScrollArea):
         self.sig_login_result.connect(self._on_login_finished)
         self.sig_test_result.connect(self._on_test_finished)
         self.sig_spotify_result.connect(self._on_spotify_valid)
+        self.sig_spotify_auth_result.connect(self._on_spotify_auth_done)
         self.sig_ffmpeg_progress.connect(self._on_ffmpeg_progress)
         self.sig_ffmpeg_finished.connect(self._on_ffmpeg_finished)
 
@@ -212,12 +214,75 @@ class SettingsView(QScrollArea):
         toggle_row.addWidget(self.musilon_switch)
         m_layout.addLayout(toggle_row)
 
+        # VIP Stealth Rate-Limit Shield (Safe Mode) Toggle Row
+        safe_mode_row = QHBoxLayout()
+        safe_mode_info = QVBoxLayout()
+        safe_mode_title = BodyLabel("VIP Anti-Ban Stealth Shield (Safe Mode)", musilon_card)
+        safe_mode_title.setStyleSheet("font-weight: bold;")
+        safe_mode_desc = CaptionLabel(
+            "Protects your VIP account against 429 rate-limit blocks by enforcing single-stream connection, "
+            "authentic station referer headers, and human cooldown intervals between songs.",
+            musilon_card
+        )
+        safe_mode_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        safe_mode_info.addWidget(safe_mode_title)
+        safe_mode_info.addWidget(safe_mode_desc)
+
+        self.safe_mode_switch = SwitchButton(musilon_card)
+        self.safe_mode_switch.setChecked(config.get("musilon.safe_mode", True))
+        self.safe_mode_switch.checkedChanged.connect(self._on_safe_mode_changed)
+
+        safe_mode_row.addLayout(safe_mode_info, 1)
+        safe_mode_row.addWidget(self.safe_mode_switch)
+        m_layout.addLayout(safe_mode_row)
+
+        # Cooldown Duration Settings Row
+        cooldown_row = QHBoxLayout()
+        cooldown_info = QVBoxLayout()
+        cooldown_title = CaptionLabel("Musilon Song Download Cooldown (Seconds):", musilon_card)
+        cooldown_title.setStyleSheet("font-weight: bold;")
+        cooldown_desc = CaptionLabel("Randomized pause between min and max seconds mimics human listening and evades bot detection.", musilon_card)
+        cooldown_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        cooldown_info.addWidget(cooldown_title)
+        cooldown_info.addWidget(cooldown_desc)
+
+        spin_box_layout = QHBoxLayout()
+        spin_box_layout.setSpacing(10)
+
+        min_lbl = CaptionLabel("Min:", musilon_card)
+        self.cooldown_min_spin = SpinBox(musilon_card)
+        self.cooldown_min_spin.setRange(0, 300)
+        self.cooldown_min_spin.setValue(int(config.get("musilon.cooldown_min_sec", 15)))
+        self.cooldown_min_spin.setFixedWidth(85)
+        self.cooldown_min_spin.valueChanged.connect(self._on_cooldown_min_changed)
+
+        max_lbl = CaptionLabel("Max:", musilon_card)
+        self.cooldown_max_spin = SpinBox(musilon_card)
+        self.cooldown_max_spin.setRange(0, 300)
+        self.cooldown_max_spin.setValue(int(config.get("musilon.cooldown_max_sec", 35)))
+        self.cooldown_max_spin.setFixedWidth(85)
+        self.cooldown_max_spin.valueChanged.connect(self._on_cooldown_max_changed)
+
+        spin_box_layout.addWidget(min_lbl)
+        spin_box_layout.addWidget(self.cooldown_min_spin)
+        spin_box_layout.addWidget(max_lbl)
+        spin_box_layout.addWidget(self.cooldown_max_spin)
+
+        cooldown_row.addLayout(cooldown_info, 1)
+        cooldown_row.addLayout(spin_box_layout)
+        m_layout.addLayout(cooldown_row)
+
         main_layout.addWidget(musilon_card)
 
         # =====================================================================
         # 2. Spotify Metadata Credentials Section
         # =====================================================================
-        main_layout.addWidget(StrongBodyLabel("Spotify Metadata Credentials", self.container))
+        sp_header_row = QHBoxLayout()
+        sp_header_row.addWidget(StrongBodyLabel("Spotify Metadata Credentials", self.container))
+        sp_header_row.addStretch(1)
+        self.sp_status_badge = CaptionLabel(self.container)
+        sp_header_row.addWidget(self.sp_status_badge)
+        main_layout.addLayout(sp_header_row)
 
         spotify_card = CardWidget(self.container)
         s_layout = QVBoxLayout(spotify_card)
@@ -227,7 +292,8 @@ class SettingsView(QScrollArea):
         s_desc = CaptionLabel(
             "Spotify Developer Client ID & Secret for official Web API metadata extraction with full pagination.\n"
             "• Required to download or save playlists with more than 100 tracks (guest embed mode is capped by Spotify at 100 songs max).\n"
-            "• Free to obtain in 1 minute: click the button below to open developer.spotify.com/dashboard, click 'Create App', and paste your keys.",
+            "• Since late 2024, Spotify requires a 1-time user account login to fetch playlist tracks beyond 100 songs.\n"
+            "• Setup: In developer.spotify.com/dashboard, set Redirect URI to http://127.0.0.1:9900/callback, paste keys below, then click 'Authorize Spotify Account'.",
             spotify_card
         )
         s_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
@@ -246,23 +312,28 @@ class SettingsView(QScrollArea):
         self.spotify_id = LineEdit(spotify_card)
         self.spotify_id.setPlaceholderText("Spotify Client ID")
         self.spotify_id.setText(config.get("spotify.client_id", ""))
-        self.spotify_id.textChanged.connect(lambda t: config.set("spotify.client_id", t))
+        self.spotify_id.textChanged.connect(self._on_sp_id_changed)
 
         self.spotify_secret = LineEdit(spotify_card)
         self.spotify_secret.setPlaceholderText("Spotify Client Secret")
         self.spotify_secret.setEchoMode(LineEdit.EchoMode.Password)
         self.spotify_secret.setText(config.get("spotify.client_secret", ""))
-        self.spotify_secret.textChanged.connect(lambda t: config.set("spotify.client_secret", t))
+        self.spotify_secret.textChanged.connect(self._on_sp_sec_changed)
 
         self.validate_sp_btn = PushButton(FluentIcon.SEND, "Validate Keys", spotify_card)
         self.validate_sp_btn.clicked.connect(self._validate_spotify)
 
+        self.auth_sp_btn = PrimaryPushButton(FluentIcon.PEOPLE, "Authorize Spotify Account", spotify_card)
+        self.auth_sp_btn.clicked.connect(self._authorize_spotify)
+
         s_inputs.addWidget(self.spotify_id, 1)
         s_inputs.addWidget(self.spotify_secret, 1)
         s_inputs.addWidget(self.validate_sp_btn)
+        s_inputs.addWidget(self.auth_sp_btn)
         s_layout.addLayout(s_inputs)
 
         main_layout.addWidget(spotify_card)
+        self._update_spotify_badge()
 
         # =====================================================================
         # 3. Download & Organization Section
@@ -652,6 +723,27 @@ class SettingsView(QScrollArea):
         else:
             InfoBar.warning("Musilon Disabled", "Switched to direct YouTube Music high-speed mode.", duration=3000, parent=self)
 
+    def _on_safe_mode_changed(self, enabled: bool):
+        config.set("musilon.safe_mode", enabled)
+        if enabled:
+            InfoBar.info("Stealth Shield Active", "Musilon rate-limit protection and pacing active.", duration=3000, parent=self)
+        else:
+            InfoBar.warning("Stealth Shield Disabled", "Warning: Downloading without cooldown may trigger rate-limits.", duration=3500, parent=self)
+
+    def _on_cooldown_min_changed(self, val: int):
+        cur_max = int(config.get("musilon.cooldown_max_sec", 35))
+        if val > cur_max:
+            val = cur_max
+            self.cooldown_min_spin.setValue(val)
+        config.set("musilon.cooldown_min_sec", val)
+
+    def _on_cooldown_max_changed(self, val: int):
+        cur_min = int(config.get("musilon.cooldown_min_sec", 15))
+        if val < cur_min:
+            val = cur_min
+            self.cooldown_max_spin.setValue(val)
+        config.set("musilon.cooldown_max_sec", val)
+
     def _on_fallback_switch_changed(self, enabled: bool):
         config.set("download.allow_fallback", enabled)
         if enabled:
@@ -773,6 +865,85 @@ class SettingsView(QScrollArea):
                 "padding: 3px 10px; border-radius: 10px; font-weight: bold; border: 1px solid rgba(239, 68, 68, 0.4);"
             )
 
+    def _on_sp_id_changed(self, text: str):
+        config.set("spotify.client_id", text.strip())
+        self._update_spotify_badge()
+
+    def _on_sp_sec_changed(self, text: str):
+        config.set("spotify.client_secret", text.strip())
+        self._update_spotify_badge()
+
+    def _update_spotify_badge(self):
+        cid = self.spotify_id.text().strip()
+        sec = self.spotify_secret.text().strip()
+        if not cid or not sec:
+            self.sp_status_badge.setText("Guest Mode (Capped at 100 tracks)")
+            self.sp_status_badge.setStyleSheet(
+                "background-color: rgba(148, 163, 184, 0.15); color: #94A3B8; "
+                "padding: 3px 10px; border-radius: 10px; font-weight: bold; border: 1px solid rgba(148, 163, 184, 0.3);"
+            )
+            self.auth_sp_btn.setEnabled(False)
+            return
+
+        self.auth_sp_btn.setEnabled(True)
+        try:
+            client = SpotifyClient(client_id=cid, client_secret=sec)
+            if client.has_user_auth():
+                user_name = client.get_current_user_name()
+                user_str = f" as @{user_name}" if user_name else ""
+                self.sp_status_badge.setText(f"Authorized{user_str} (Full Access Active)")
+                self.sp_status_badge.setStyleSheet(
+                    "background-color: rgba(29, 185, 84, 0.2); color: #1ED760; "
+                    "padding: 3px 10px; border-radius: 10px; font-weight: bold; border: 1px solid #1DB954;"
+                )
+                self.auth_sp_btn.setText("Switch Account / Re-Authorize")
+            else:
+                self.sp_status_badge.setText("Keys Set — Authorization Needed for >100 Tracks")
+                self.sp_status_badge.setStyleSheet(
+                    "background-color: rgba(234, 179, 8, 0.2); color: #EAB308; "
+                    "padding: 3px 10px; border-radius: 10px; font-weight: bold; border: 1px solid rgba(234, 179, 8, 0.4);"
+                )
+                self.auth_sp_btn.setText("Authorize Spotify Account")
+        except Exception:
+            self.sp_status_badge.setText("Configuration Error")
+            self.sp_status_badge.setStyleSheet(
+                "background-color: rgba(239, 68, 68, 0.15); color: #F87171; "
+                "padding: 3px 10px; border-radius: 10px; font-weight: bold; border: 1px solid rgba(239, 68, 68, 0.4);"
+            )
+
+    def _authorize_spotify(self, *args):
+        cid = self.spotify_id.text().strip()
+        sec = self.spotify_secret.text().strip()
+        if not cid or not sec:
+            InfoBar.warning("Missing Keys", "Please enter both Client ID and Client Secret before authorizing.", parent=self)
+            return
+
+        self.auth_sp_btn.setEnabled(False)
+        self.auth_sp_btn.setText("Authorizing in browser...")
+        InfoBar.info("Spotify Login", "Opening Spotify authorization in your web browser. Click 'Agree' or switch accounts.", duration=7000, parent=self)
+
+        def worker():
+            try:
+                client = SpotifyClient(client_id=cid, client_secret=sec)
+                ok = client.authorize_user(force_new=True)
+                if ok:
+                    user_name = client.get_current_user_name()
+                    msg = f"Logged in as @{user_name}! Full playlist access unlocked." if user_name else "Spotify account successfully authorized!"
+                    self.sig_spotify_auth_result.emit(True, msg)
+                else:
+                    self.sig_spotify_auth_result.emit(False, "Authorization was cancelled or did not return tokens.")
+            except Exception as e:
+                self.sig_spotify_auth_result.emit(False, str(e))
+
+        threading.Thread(target=worker, daemon=True, name="SettingsSpotifyAuthWorker").start()
+
+    def _on_spotify_auth_done(self, success: bool, msg: str):
+        self._update_spotify_badge()
+        if success:
+            InfoBar.success("Authorization Successful", msg, duration=5000, parent=self)
+        else:
+            InfoBar.error("Authorization Failed", msg, duration=6000, parent=self)
+
     def _validate_spotify(self, *args):
         cid = self.spotify_id.text().strip()
         sec = self.spotify_secret.text().strip()
@@ -787,7 +958,8 @@ class SettingsView(QScrollArea):
             try:
                 client = SpotifyClient(client_id=cid, client_secret=sec)
                 res = client.resolve("https://open.spotify.com/track/3AJwUDP919kvQ9QcozQPxg")
-                self.sig_spotify_result.emit(True, f"API Verified: '{res[0].title}'")
+                auth_status = "User Authorized (Full Library Access)" if client.has_user_auth() else "Keys Valid (Click 'Authorize' to unlock >100 songs)"
+                self.sig_spotify_result.emit(True, f"API Verified: '{res[0].title}' — {auth_status}")
             except Exception as e:
                 self.sig_spotify_result.emit(False, str(e))
 
@@ -796,8 +968,9 @@ class SettingsView(QScrollArea):
     def _on_spotify_valid(self, success: bool, msg: str):
         self.validate_sp_btn.setEnabled(True)
         self.validate_sp_btn.setText("Validate Keys")
+        self._update_spotify_badge()
         if success:
-            InfoBar.success("Spotify API Valid", msg, duration=4000, parent=self)
+            InfoBar.success("Spotify API Valid", msg, duration=4500, parent=self)
         else:
             InfoBar.error("Spotify Error", msg, duration=5000, parent=self)
 

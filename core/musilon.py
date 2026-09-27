@@ -22,6 +22,11 @@ class MusilonVipError(Exception):
     pass
 
 
+class MusilonRateLimitExceededError(MusilonVipError):
+    """Raised when Musilon rejects a download due to rate limit or daily quota exceeded."""
+    pass
+
+
 @dataclass
 class MusilonSource:
     track_id: str
@@ -30,6 +35,7 @@ class MusilonSource:
     quality_tier: str  # "FLAC 16-bit", "FLAC 24-bit", "MP3 320kbps", "Stream 128k"
     download_url: str
     file_extension: str  # "flac" or "mp3"
+    station_url: str = ""
 
 
 class MusilonEngine:
@@ -48,7 +54,7 @@ class MusilonEngine:
     BASE_URL = "https://musilon.com"
     USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     )
 
     def __init__(self, session_cookie: str = "", username: str = "", password: str = "", enabled: bool = True):
@@ -62,8 +68,16 @@ class MusilonEngine:
         self.session.headers.update({
             "User-Agent": self.USER_AGENT,
             "Referer": "https://musilon.com/",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
+            "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
         })
 
         self._last_request_time = 0.0
@@ -118,9 +132,13 @@ class MusilonEngine:
             # Create an unauthenticated login session to prevent Digits {"reload": true} rejection
             login_session = requests.Session()
             login_session.headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": self.USER_AGENT,
                 "Referer": f"{self.BASE_URL}/?login=true",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8"
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8",
+                "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
+                "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
             })
 
             # Copy existing Cloud/Arvan challenge cookies if present
@@ -676,7 +694,11 @@ class MusilonEngine:
 
         return None
 
-    def resolve_track(self, track: TrackMetadata) -> Optional[MusilonSource]:
+    def resolve_track(
+        self,
+        track: TrackMetadata,
+        cancel_check: Optional[Callable[[], bool]] = None
+    ) -> Optional[MusilonSource]:
         """
         Searches Musilon for a track across 4 complementary search engines:
         1. Live /wp-json/play/search REST API
@@ -685,8 +707,12 @@ class MusilonEngine:
         4. HTML Search fallback
         Extracts the highest quality tier (FLAC 16 > FLAC 24 > MP3 320k).
         Strict Quality Rule: Rejects 128k preview streams.
+        Respects cancel_check to abort immediately if download is stopped.
         """
         if not self.enabled:
+            return None
+
+        if cancel_check and cancel_check():
             return None
 
         # Check / verify VIP session
@@ -698,6 +724,9 @@ class MusilonEngine:
         if not has_vip and self.username and self.password:
             logger.info("Auto-authenticating VIP session in resolve_track...")
             self.login_with_credentials(self.username, self.password)
+
+        if cancel_check and cancel_check():
+            return None
 
         clean_title = clean_watermarks(track.title).strip()
         primary_artist = track.primary_artist.strip()
@@ -744,6 +773,8 @@ class MusilonEngine:
 
         # Stage 1: Play JSON REST Search with artist + base title (and feature title / sub-variants)
         for art in artists_to_search:
+            if cancel_check and cancel_check():
+                return None
             if art and norm_base:
                 add_candidates(self._search_play_rest(f"{art} {norm_base}"))
                 add_candidates(self._search_play_rest(f"{norm_base} {art}"))
@@ -753,15 +784,23 @@ class MusilonEngine:
                 if art:
                     add_candidates(self._search_play_rest(f"{art} {sub_v}"))
 
+        if cancel_check and cancel_check():
+            return None
+
         # Early check if high-confidence match found in Stage 1
         scored_stage1 = [(self._score_candidate(track, c), c) for c in candidate_pool]
         scored_stage1.sort(key=lambda x: x[0], reverse=True)
         for s, c in scored_stage1:
+            if cancel_check and cancel_check():
+                return None
             if s >= 100.0:
                 logger.info(f"Trying high-confidence Musilon candidate (score {s:.1f}): {c.get('title')}")
                 src = self._extract_source(c["url"], c.get("id"), target_duration_ms=track.duration_ms)
                 if src:
                     return src
+
+        if cancel_check and cancel_check():
+            return None
 
         # Stage 2: Play JSON REST Search with base title alone
         if norm_base and len(norm_base) >= 3:
@@ -769,42 +808,70 @@ class MusilonEngine:
         if norm_feat and norm_feat != norm_base and len(norm_feat) >= 3:
             add_candidates(self._search_play_rest(norm_feat))
 
+        if cancel_check and cancel_check():
+            return None
+
         scored_stage2 = [(self._score_candidate(track, c), c) for c in candidate_pool]
         scored_stage2.sort(key=lambda x: x[0], reverse=True)
         for s, c in scored_stage2:
+            if cancel_check and cancel_check():
+                return None
             if s >= 100.0:
                 src = self._extract_source(c["url"], c.get("id"), target_duration_ms=track.duration_ms)
                 if src:
                     return src
 
+        if cancel_check and cancel_check():
+            return None
+
         # Stage 3: Play JSON REST Search with full title
         for art in artists_to_search:
+            if cancel_check and cancel_check():
+                return None
             if norm_title != norm_base and norm_title != norm_feat:
                 add_candidates(self._search_play_rest(f"{art} {norm_title}"))
 
+        if cancel_check and cancel_check():
+            return None
+
         # Stage 4: Artist Taxonomy Discography Archive
         for art in artists_to_search:
+            if cancel_check and cancel_check():
+                return None
             add_candidates(self._search_artist_taxonomy(art))
+
+        if cancel_check and cancel_check():
+            return None
 
         # Stage 5: WordPress Station Search
         if not candidate_pool:
             for art in artists_to_search:
+                if cancel_check and cancel_check():
+                    return None
                 if art and norm_base:
                     add_candidates(self._search_station_wp(f"{art} {norm_base}"))
                 if art and norm_feat and norm_feat != norm_base:
                     add_candidates(self._search_station_wp(f"{art} {norm_feat}"))
-            if norm_base:
+            if norm_base and not (cancel_check and cancel_check()):
                 add_candidates(self._search_station_wp(norm_base))
+
+        if cancel_check and cancel_check():
+            return None
 
         # Stage 6: HTML Search fallback
         if not candidate_pool:
             for art in artists_to_search:
+                if cancel_check and cancel_check():
+                    return None
                 if art and norm_base:
                     add_candidates(self._search(f"{art} {norm_base}"))
                 if art and norm_feat and norm_feat != norm_base:
                     add_candidates(self._search(f"{art} {norm_feat}"))
-            if norm_base:
+            if norm_base and not (cancel_check and cancel_check()):
                 add_candidates(self._search(norm_base))
+
+        if cancel_check and cancel_check():
+            return None
 
         if not candidate_pool:
             logger.info(f"No candidates found on Musilon across all vectors for '{track.title}'")
@@ -815,6 +882,8 @@ class MusilonEngine:
         scored.sort(key=lambda x: x[0], reverse=True)
 
         for best_score, best_match in scored:
+            if cancel_check and cancel_check():
+                return None
             if best_score < 70.0:
                 break
             logger.info(f"Evaluating Musilon candidate (score {best_score:.1f}): '{best_match.get('title')}' -> {best_match.get('url')}")
@@ -943,7 +1012,8 @@ class MusilonEngine:
                     artist="",
                     quality_tier="Musilon 320k",
                     download_url=mp3_320_url,
-                    file_extension="mp3"
+                    file_extension="mp3",
+                    station_url=track_url
                 )
             if flac_16_url:
                 return MusilonSource(
@@ -952,7 +1022,8 @@ class MusilonEngine:
                     artist="",
                     quality_tier="Musilon FLAC 16",
                     download_url=flac_16_url,
-                    file_extension="flac"
+                    file_extension="flac",
+                    station_url=track_url
                 )
             if flac_24_url:
                 return MusilonSource(
@@ -961,7 +1032,8 @@ class MusilonEngine:
                     artist="",
                     quality_tier="Musilon FLAC 24",
                     download_url=flac_24_url,
-                    file_extension="flac"
+                    file_extension="flac",
+                    station_url=track_url
                 )
         else:
             if flac_16_url:
@@ -971,7 +1043,8 @@ class MusilonEngine:
                     artist="",
                     quality_tier="Musilon FLAC 16",
                     download_url=flac_16_url,
-                    file_extension="flac"
+                    file_extension="flac",
+                    station_url=track_url
                 )
             if flac_24_url:
                 return MusilonSource(
@@ -980,7 +1053,8 @@ class MusilonEngine:
                     artist="",
                     quality_tier="Musilon FLAC 24",
                     download_url=flac_24_url,
-                    file_extension="flac"
+                    file_extension="flac",
+                    station_url=track_url
                 )
             if mp3_320_url:
                 return MusilonSource(
@@ -989,7 +1063,8 @@ class MusilonEngine:
                     artist="",
                     quality_tier="Musilon 320k",
                     download_url=mp3_320_url,
-                    file_extension="mp3"
+                    file_extension="mp3",
+                    station_url=track_url
                 )
 
         # If buttons are still marked dl-not-login, VIP session was not active
@@ -1016,7 +1091,8 @@ class MusilonEngine:
                                 artist=data.get("artist", ""),
                                 quality_tier=tier,
                                 download_url=d_url,
-                                file_extension="flac" if is_flac else "mp3"
+                                file_extension="flac" if is_flac else "mp3",
+                                station_url=track_url
                             )
             except Exception as e:
                 logger.debug(f"Could not fetch play rest API: {e}")
@@ -1031,6 +1107,7 @@ class MusilonEngine:
         self,
         url: str,
         dest_path: str,
+        station_url: str = "",
         progress_callback: Optional[Callable[[float, str, str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
         pause_wait: Optional[Callable[[], None]] = None
@@ -1043,12 +1120,29 @@ class MusilonEngine:
         temp_path = dest_path + ".part"
         os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
 
-        resp = self.session.get(url, stream=True, timeout=(20, 90), headers={"Referer": "https://musilon.com/"}, allow_redirects=True)
+        download_headers = {
+            "Referer": station_url if station_url else "https://musilon.com/",
+            "Accept": "*/*",
+            "Sec-Fetch-Dest": "audio",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Site": "same-site",
+        }
+        resp = self.session.get(url, stream=True, timeout=(20, 90), headers=download_headers, allow_redirects=True)
+        if resp.status_code == 429:
+            raise MusilonRateLimitExceededError("Musilon download rate limit exceeded (HTTP 429 Too Many Requests).")
+
         resp.raise_for_status()
 
         content_type = resp.headers.get("content-type", "").lower()
         if "text/html" in content_type or "text/plain" in content_type:
             logger.warning(f"Musilon returned non-audio content-type '{content_type}' for {url}")
+            initial_text = resp.text[:4000].lower() if hasattr(resp, "text") else ""
+            if any(k in initial_text for k in [
+                "سقف دانلود", "محدودیت دانلود", "حداکثر دانلود", "تعداد مجاز", "سقف مجاز",
+                "پایان اعتبار", "دانلود روزانه", "محدودیت دسترسی", "اعتبار دانلود",
+                "rate limit", "quota", "daily limit", "too many requests", "limit reached"
+            ]):
+                raise MusilonRateLimitExceededError("Musilon download limit or daily quota reached.")
             raise MusilonVipError(f"Musilon returned HTML page ({content_type}) instead of audio stream.")
 
         total_size = int(resp.headers.get("content-length", 0))
@@ -1074,10 +1168,21 @@ class MusilonEngine:
                         if not header_verified:
                             fmt = detect_audio_header(chunk)
                             if not fmt:
-                                h_low = chunk[:300].lower()
+                                h_low = chunk[:4000].lower()
+                                text_chunk = chunk[:4000].decode("utf-8", errors="ignore").lower()
                                 f.close()
                                 if os.path.exists(temp_path):
                                     os.remove(temp_path)
+
+                                is_limit = any(k in text_chunk for k in [
+                                    "سقف دانلود", "محدودیت دانلود", "حداکثر دانلود", "تعداد مجاز", "سقف مجاز",
+                                    "پایان اعتبار", "دانلود روزانه", "محدودیت دسترسی", "اعتبار دانلود",
+                                    "rate limit", "quota", "daily limit", "too many requests", "limit reached"
+                                ])
+                                if is_limit:
+                                    logger.warning(f"Musilon download limit reached in stream bytes for {url}")
+                                    raise MusilonRateLimitExceededError("Musilon download limit or daily quota reached.")
+
                                 if b"<!doctype html" in h_low or b"<html" in h_low or b"\xd8\xa7\xd8\xae\xd8\xb7\xd8\xa7\xd8\xb1" in chunk:
                                     logger.warning(f"Musilon VIP error page detected in initial bytes for {url}")
                                     raise MusilonVipError("Musilon VIP paywall or warning page received instead of audio stream.")
@@ -1154,10 +1259,14 @@ class MusilonEngine:
                 success = self.download_file(
                     url=current_source.download_url,
                     dest_path=dest_path,
+                    station_url=getattr(current_source, "station_url", ""),
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
                     pause_wait=pause_wait
                 )
+                if cancel_check and cancel_check():
+                    return False
+
                 if success and os.path.isfile(dest_path):
                     valid, reason = is_valid_audio_file(dest_path)
                     if valid:
@@ -1166,29 +1275,43 @@ class MusilonEngine:
                     else:
                         logger.warning(f"Musilon file failed validation on attempt {attempt}: {reason}")
 
+            except MusilonRateLimitExceededError as e_limit:
+                if cancel_check and cancel_check():
+                    return False
+                logger.warning(f"Musilon rate limit / daily quota exceeded for '{track.title}': {e_limit}")
+                raise e_limit
+
             except MusilonVipError as e_vip:
+                if cancel_check and cancel_check():
+                    return False
                 logger.warning(f"Musilon attempt {attempt}/{max_retries} encountered VIP issue: {e_vip}")
                 # Auto-authenticate VIP session
                 if self.username and self.password:
                     logger.info("Renewing Musilon VIP session credentials...")
                     login_ok = self.ensure_vip_session(force=True)
-                    if login_ok:
+                    if login_ok and not (cancel_check and cancel_check()):
                         # Re-resolve track source to obtain a fresh nonce
                         time.sleep(random.uniform(1.0, 2.0))
-                        fresh_src = self.resolve_track(track)
+                        fresh_src = self.resolve_track(track, cancel_check=cancel_check)
                         if fresh_src:
                             current_source = fresh_src
                             continue
 
             except Exception as e:
+                if cancel_check and cancel_check():
+                    return False
                 logger.warning(f"Musilon attempt {attempt}/{max_retries} error: {e}")
                 if "403" in str(e) or "login" in str(e).lower() or "forbidden" in str(e).lower():
                     self.ensure_vip_session(force=True)
-                    time.sleep(random.uniform(1.0, 2.0))
-                    fresh_src = self.resolve_track(track)
-                    if fresh_src:
-                        current_source = fresh_src
-                        continue
+                    if not (cancel_check and cancel_check()):
+                        time.sleep(random.uniform(1.0, 2.0))
+                        fresh_src = self.resolve_track(track, cancel_check=cancel_check)
+                        if fresh_src:
+                            current_source = fresh_src
+                            continue
+
+            if cancel_check and cancel_check():
+                return False
 
             time.sleep(random.uniform(1.5, 3.0))
 

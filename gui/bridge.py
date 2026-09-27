@@ -10,6 +10,7 @@ class EngineSignalBridge(QObject):
     sig_status_changed = pyqtSignal(str, str)             # track_id, status_string
     sig_completed = pyqtSignal(str, str)                  # track_id, output_path
     sig_failed = pyqtSignal(str, str)                     # track_id, error_message
+    sig_musilon_limit_reached = pyqtSignal(object, object, object)  # track, item, decision_callback
 
     def bind_queue_manager(self, qm):
         """Binds queue manager callback hooks to emit these Qt signals."""
@@ -19,3 +20,4 @@ class EngineSignalBridge(QObject):
         qm.on_track_status_changed = lambda tid, st: self.sig_status_changed.emit(tid, st)
         qm.on_track_completed = lambda tid, path: self.sig_completed.emit(tid, path)
         qm.on_track_failed = lambda tid, err: self.sig_failed.emit(tid, err)
+        qm.on_musilon_limit_reached = lambda trk, itm, cb: self.sig_musilon_limit_reached.emit(trk, itm, cb)

@@ -13,7 +13,7 @@ from qfluentwidgets import (
     TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
     FluentIcon, InfoBar, InfoBarPosition, LineEdit, CaptionLabel,
     StrongBodyLabel, BodyLabel, CardWidget, SmoothScrollArea, IconWidget,
-    SpinBox, ComboBox, ProgressBar, MessageBoxBase
+    SpinBox, CompactSpinBox, ComboBox, ProgressBar, MessageBoxBase
 )
 
 from core.archive import ArchiveManager
@@ -25,6 +25,40 @@ from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
 from gui.bridge import EngineSignalBridge
 from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, BG_CARD, SPOTIFY_EMERALD
+
+PRESET_NORMAL_STYLE = """
+    PushButton {
+        background-color: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: #CCCCCC;
+        border-radius: 6px;
+        font-weight: 500;
+        font-size: 12px;
+        padding: 4px 6px;
+    }
+    PushButton:hover {
+        background-color: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        color: #FFFFFF;
+    }
+"""
+
+PRESET_ACTIVE_STYLE = """
+    PushButton {
+        background-color: rgba(29, 185, 84, 0.22);
+        border: 1.5px solid #1DB954;
+        color: #1ED760;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 12px;
+        padding: 4px 6px;
+    }
+    PushButton:hover {
+        background-color: rgba(29, 185, 84, 0.32);
+        border: 1.5px solid #1ED760;
+        color: #FFFFFF;
+    }
+"""
 
 
 class SpotifyCredentialsDialog(MessageBoxBase):
@@ -38,9 +72,10 @@ class SpotifyCredentialsDialog(MessageBoxBase):
             "Spotify requires free API credentials to retrieve playlists larger than 100 songs.\n"
             "Without credentials, Spotify's guest embed strictly limits playlists to 100 songs.\n\n"
             "How to get free credentials in 1 minute:\n"
-            "1. Visit developer.spotify.com/dashboard and log in with your free Spotify account.\n"
-            "2. Click 'Create App' (App Name: Downloader, Redirect URI: http://127.0.0.1:9900/).\n"
-            "3. Copy your Client ID and Client Secret below:"
+            "1. Visit developer.spotify.com/dashboard and open your app.\n"
+            "2. Go to 'Settings' -> 'Basic Information' -> 'Redirect URIs'.\n"
+            "3. Add: http://127.0.0.1:9900/callback (click Add, then click Save at bottom!).\n"
+            "4. Copy your Client ID and Client Secret below:"
         )
         self.guide_label = CaptionLabel(guide_text, self)
         self.guide_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
@@ -255,6 +290,7 @@ class PlaylistsView(QWidget):
 
     sig_playlist_saved = pyqtSignal(dict)
     sig_save_failed = pyqtSignal(str)
+    sig_auth_done = pyqtSignal(bool, str)
 
     def __init__(
         self,
@@ -349,7 +385,7 @@ class PlaylistsView(QWidget):
         self.banner_label = CaptionLabel(self.api_banner)
         self.banner_btn = PushButton(self.api_banner)
         self.banner_btn.setFixedHeight(28)
-        self.banner_btn.clicked.connect(self._open_credentials_dialog)
+        self.banner_btn.clicked.connect(self._on_banner_btn_clicked)
 
         banner_layout.addWidget(self.banner_icon)
         banner_layout.addWidget(self.banner_label, 1)
@@ -476,34 +512,71 @@ class PlaylistsView(QWidget):
         self.batch_spinbox = SpinBox(self)
         self.batch_spinbox.setRange(1, 5000)
         self.batch_spinbox.setValue(50)
-        self.batch_spinbox.setFixedWidth(100)
+        self.batch_spinbox.setFixedWidth(135)
+        self.batch_spinbox.setStyleSheet("""
+            SpinBox {
+                color: #FFFFFF;
+                font-weight: 600;
+                font-size: 13px;
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.18);
+                border-radius: 6px;
+                padding-left: 10px;
+                padding-right: 68px;
+            }
+            SpinBox:hover {
+                background-color: rgba(255, 255, 255, 0.14);
+                border: 1px solid rgba(255, 255, 255, 0.3);
+            }
+            SpinBox:focus {
+                border: 1px solid #1DB954;
+                background-color: rgba(255, 255, 255, 0.12);
+            }
+        """)
+        self.batch_spinbox.valueChanged.connect(self._on_batch_size_changed)
 
         # Preset buttons
         self.preset_25 = PushButton("25", self)
-        self.preset_25.setFixedWidth(48)
-        self.preset_25.clicked.connect(lambda: self.batch_spinbox.setValue(25))
+        self.preset_25.setFixedWidth(46)
+        self.preset_25.setStyleSheet(PRESET_NORMAL_STYLE)
+        self.preset_25.clicked.connect(lambda: self._select_batch_preset(25))
 
         self.preset_50 = PushButton("50", self)
-        self.preset_50.setFixedWidth(48)
-        self.preset_50.clicked.connect(lambda: self.batch_spinbox.setValue(50))
+        self.preset_50.setFixedWidth(46)
+        self.preset_50.setStyleSheet(PRESET_NORMAL_STYLE)
+        self.preset_50.clicked.connect(lambda: self._select_batch_preset(50))
 
         self.preset_100 = PushButton("100", self)
-        self.preset_100.setFixedWidth(54)
-        self.preset_100.clicked.connect(lambda: self.batch_spinbox.setValue(100))
+        self.preset_100.setFixedWidth(52)
+        self.preset_100.setStyleSheet(PRESET_NORMAL_STYLE)
+        self.preset_100.clicked.connect(lambda: self._select_batch_preset(100))
 
         self.preset_200 = PushButton("200", self)
-        self.preset_200.setFixedWidth(54)
-        self.preset_200.clicked.connect(lambda: self.batch_spinbox.setValue(200))
+        self.preset_200.setFixedWidth(52)
+        self.preset_200.setStyleSheet(PRESET_NORMAL_STYLE)
+        self.preset_200.clicked.connect(lambda: self._select_batch_preset(200))
 
         self.preset_all = PushButton("All Pending", self)
+        self.preset_all.setFixedWidth(92)
+        self.preset_all.setStyleSheet(PRESET_NORMAL_STYLE)
         self.preset_all.clicked.connect(self._set_batch_to_all_pending)
 
         # Main Download Button
-        self.download_batch_btn = PrimaryPushButton(FluentIcon.DOWNLOAD, "Download Next Batch", self)
+        self.download_batch_btn = PrimaryPushButton(FluentIcon.DOWNLOAD, "Download Next Batch (50)", self)
         self.download_batch_btn.clicked.connect(self._on_download_batch_clicked)
 
         self.download_selected_btn = PushButton(FluentIcon.CHECKBOX, "Download Selected", self)
         self.download_selected_btn.clicked.connect(self._on_download_selected_clicked)
+
+        self.pause_btn = PushButton(FluentIcon.PAUSE, "Pause", self)
+        self.pause_btn.clicked.connect(self._on_pause_clicked)
+
+        self.stop_btn = PushButton(FluentIcon.CLOSE, "Stop", self)
+        self.stop_btn.clicked.connect(self._on_stop_clicked)
+
+        self.reset_btn = ToolButton(FluentIcon.SYNC, self)
+        self.reset_btn.setToolTip("Reset queued & failed tracks in this playlist back to pending")
+        self.reset_btn.clicked.connect(self._on_reset_queued_clicked)
 
         self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Folder", self)
         self.open_folder_btn.clicked.connect(self._open_download_folder)
@@ -515,9 +588,12 @@ class PlaylistsView(QWidget):
         batch_ctrl_layout.addWidget(self.preset_100)
         batch_ctrl_layout.addWidget(self.preset_200)
         batch_ctrl_layout.addWidget(self.preset_all)
-        batch_ctrl_layout.addSpacing(12)
+        batch_ctrl_layout.addSpacing(10)
         batch_ctrl_layout.addWidget(self.download_batch_btn)
         batch_ctrl_layout.addWidget(self.download_selected_btn)
+        batch_ctrl_layout.addWidget(self.pause_btn)
+        batch_ctrl_layout.addWidget(self.stop_btn)
+        batch_ctrl_layout.addWidget(self.reset_btn)
         batch_ctrl_layout.addWidget(self.open_folder_btn)
         batch_ctrl_layout.addStretch(1)
 
@@ -572,22 +648,50 @@ class PlaylistsView(QWidget):
     def _connect_signals(self):
         self.sig_playlist_saved.connect(self._on_playlist_saved)
         self.sig_save_failed.connect(self._on_save_failed)
+        self.sig_auth_done.connect(self._on_auth_done)
 
         # Live bridging from download queue
         self.bridge.sig_completed.connect(self._handle_bridge_completed)
         self.bridge.sig_status_changed.connect(self._handle_bridge_status)
+        self.bridge.sig_progress.connect(self._handle_bridge_progress)
+        self.bridge.sig_source_resolved.connect(self._handle_bridge_source_resolved)
+        self.bridge.sig_failed.connect(self._handle_bridge_failed)
+
+    def _on_banner_btn_clicked(self):
+        has_keys = bool(config.get("spotify.client_id", "").strip() and config.get("spotify.client_secret", "").strip())
+        has_auth = self.spotify_client.has_user_auth()
+        if has_keys:
+            self._start_user_authorization()
+        else:
+            self._open_credentials_dialog()
 
     def _update_api_banner(self):
         has_keys = bool(config.get("spotify.client_id", "").strip() and config.get("spotify.client_secret", "").strip())
-        if has_keys:
+        has_auth = self.spotify_client.has_user_auth()
+
+        if has_auth:
+            user_name = self.spotify_client.get_current_user_name()
+            user_str = f" as @{user_name}" if user_name else ""
             self.banner_icon.setIcon(FluentIcon.COMPLETED)
-            self.banner_label.setText("Official Spotify API Active: Full pagination enabled for large playlists (unlimited tracks).")
+            self.banner_label.setText(f"Spotify API Connected{user_str}: Full pagination enabled for playlists you own/collaborate on.")
             self.banner_label.setStyleSheet("color: #4ADE80; font-weight: 500;")
-            self.banner_btn.setText("Edit Keys")
+            self.banner_btn.setText("Switch Account")
             self.api_banner.setStyleSheet("""
                 CardWidget {
                     background-color: rgba(74, 222, 128, 0.08);
                     border: 1px solid rgba(74, 222, 128, 0.25);
+                    border-radius: 8px;
+                }
+            """)
+        elif has_keys:
+            self.banner_icon.setIcon(FluentIcon.PEOPLE)
+            self.banner_label.setText("Spotify API Keys Set — Account Authorization needed to access playlists > 100 songs.")
+            self.banner_label.setStyleSheet("color: #60A5FA; font-weight: 500;")
+            self.banner_btn.setText("🔑 Authorize Spotify Account")
+            self.api_banner.setStyleSheet("""
+                CardWidget {
+                    background-color: rgba(96, 165, 250, 0.08);
+                    border: 1px solid rgba(96, 165, 250, 0.25);
                     border-radius: 8px;
                 }
             """)
@@ -604,6 +708,49 @@ class PlaylistsView(QWidget):
                 }
             """)
 
+    def _start_user_authorization(self):
+        InfoBar.info(
+            title="Connecting to Spotify",
+            content="Opening your browser. Please log in or click 'Agree' on Spotify to grant playlist access...",
+            orient=Qt.Orientation.Horizontal,
+            position=InfoBarPosition.TOP,
+            duration=7000,
+            parent=self
+        )
+        def worker():
+            try:
+                success = self.spotify_client.authorize_user(force_new=True)
+                if success:
+                    user_name = self.spotify_client.get_current_user_name()
+                    msg = f"Connected as @{user_name}!" if user_name else "Successfully connected to Spotify account!"
+                    self.sig_auth_done.emit(True, msg)
+                else:
+                    self.sig_auth_done.emit(False, "Could not complete Spotify authorization.")
+            except Exception as e:
+                self.sig_auth_done.emit(False, str(e))
+        threading.Thread(target=worker, daemon=True, name="SpotifyAuthWorker").start()
+
+    def _on_auth_done(self, success: bool, msg: str):
+        self._update_api_banner()
+        if success:
+            InfoBar.success(
+                title="Spotify Connected!",
+                content="Your Spotify account is now connected. Full pagination is unlocked for all playlists.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=6000,
+                parent=self
+            )
+        else:
+            InfoBar.error(
+                title="Authorization Failed",
+                content=msg,
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=6000,
+                parent=self
+            )
+
     def _open_credentials_dialog(self):
         diag = SpotifyCredentialsDialog(self.window() or self)
         if diag.exec():
@@ -616,10 +763,10 @@ class PlaylistsView(QWidget):
             if cid and sec:
                 InfoBar.success(
                     title="Spotify API Keys Saved",
-                    content="Official Spotify API enabled. You can now save playlists with 1,000+ songs.",
+                    content="Keys updated. Click 'Authorize Spotify Account' to enable large playlist downloads.",
                     orient=Qt.Orientation.Horizontal,
                     position=InfoBarPosition.TOP,
-                    duration=4000,
+                    duration=5000,
                     parent=self
                 )
 
@@ -697,10 +844,13 @@ class PlaylistsView(QWidget):
                     tracks=tracks,
                     playlist_id=entity_id
                 )
-                is_guest = not self.spotify_client.has_credentials()
+                is_guest = getattr(self.spotify_client, "last_resolution_mode", "api") == "guest"
                 was_truncated = getattr(self.spotify_client, "last_was_truncated", False) or (is_guest and len(tracks) == 100)
                 saved_info["was_truncated"] = was_truncated
                 saved_info["is_guest"] = is_guest
+                saved_info["api_error"] = getattr(self.spotify_client, "last_api_error", "")
+                saved_info["owner_name"] = getattr(self.spotify_client, "last_owner_name", "")
+                saved_info["auth_user"] = self.spotify_client.get_current_user_name()
 
                 self.sig_playlist_saved.emit(saved_info)
             except Exception as e:
@@ -718,7 +868,37 @@ class PlaylistsView(QWidget):
         down = saved_info.get("downloaded_count", 0)
         pend = saved_info.get("pending_count", total - down)
 
-        if saved_info.get("was_truncated"):
+        api_err = saved_info.get("api_error")
+        owner_name = saved_info.get("owner_name")
+        auth_user = saved_info.get("auth_user")
+
+        if api_err == "not_registered":
+            InfoBar.error(
+                title="Account Not in Developer Allowlist",
+                content=(
+                    f"Spotify returned: 'The user is not registered for this application'. "
+                    f"Go to developer.spotify.com/dashboard -> your app -> 'User Management', "
+                    f"click 'Add User' and enter your Spotify account email to unlock full access."
+                ),
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=16000,
+                parent=self
+            )
+        elif api_err == "403_not_owner":
+            InfoBar.warning(
+                title="Playlist Capped at 100 Tracks (Spotify Ownership Policy)",
+                content=(
+                    f"'{name}' is owned by '{owner_name}', but your app is authorized as '{auth_user}'. "
+                    f"In 2026, Spotify requires you to own or collaborate on the playlist to fetch beyond 100 tracks. "
+                    f"Click 'Switch Account' above to log in as '{owner_name}', or make it collaborative in Spotify."
+                ),
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=15000,
+                parent=self
+            )
+        elif saved_info.get("was_truncated"):
             InfoBar.warning(
                 title="Playlist Capped at 100 Tracks (Guest Limit)",
                 content=(
@@ -871,9 +1051,10 @@ class PlaylistsView(QWidget):
             icon_lay.setContentsMargins(0, 0, 0, 0)
             icon_lay.addWidget(icon_w, 0, Qt.AlignmentFlag.AlignCenter)
 
-        # Batch spinbox maximum
-        self.batch_spinbox.setMaximum(max(1, tot))
-        self.batch_spinbox.setValue(min(50, pend if pend > 0 else 50))
+        # Batch spinbox setup (unclamped up to 5000)
+        self.batch_spinbox.setRange(1, 5000)
+        self.batch_spinbox.setValue(50)
+        self._on_batch_size_changed(self.batch_spinbox.value())
 
         # Reset search and combo
         self.track_search_input.clear()
@@ -888,13 +1069,54 @@ class PlaylistsView(QWidget):
         self.current_playlist_data = None
         self.reload_playlists()
 
+    def _select_batch_preset(self, count: int):
+        self.batch_spinbox.setValue(count)
+        self._on_batch_size_changed(count)
+
+    def _on_batch_size_changed(self, val: int):
+        pend = 0
+        if self.current_playlist_data:
+            pend = self.current_playlist_data.get("pending_count", 0)
+
+        # 1. Update preset button active highlight states
+        self._update_preset_buttons_style(val, pend)
+
+        # 2. Update dynamic text and state of download batch button
+        if pend <= 0:
+            self.download_batch_btn.setEnabled(False)
+            self.download_batch_btn.setText("All Tracks Downloaded")
+        else:
+            self.download_batch_btn.setEnabled(True)
+            if val <= pend:
+                self.download_batch_btn.setText(f"Download Next Batch ({val})")
+            else:
+                self.download_batch_btn.setText(f"Download Batch ({val}) • {pend} Remaining")
+
+        if hasattr(self, "pause_btn"):
+            if self.qm.is_paused():
+                self.pause_btn.setText("Resume")
+                self.pause_btn.setIcon(FluentIcon.PLAY)
+            else:
+                self.pause_btn.setText("Pause")
+                self.pause_btn.setIcon(FluentIcon.PAUSE)
+
+    def _update_preset_buttons_style(self, val: int, pend: int):
+        self.preset_25.setStyleSheet(PRESET_ACTIVE_STYLE if val == 25 else PRESET_NORMAL_STYLE)
+        self.preset_50.setStyleSheet(PRESET_ACTIVE_STYLE if val == 50 else PRESET_NORMAL_STYLE)
+        self.preset_100.setStyleSheet(PRESET_ACTIVE_STYLE if val == 100 else PRESET_NORMAL_STYLE)
+        self.preset_200.setStyleSheet(PRESET_ACTIVE_STYLE if val == 200 else PRESET_NORMAL_STYLE)
+        self.preset_all.setStyleSheet(PRESET_ACTIVE_STYLE if (pend > 0 and val == pend) else PRESET_NORMAL_STYLE)
+
     def _set_batch_to_all_pending(self):
         if not self.current_playlist_id:
             return
         pl = self.archive.get_saved_playlist(self.current_playlist_id)
         if pl:
+            self.current_playlist_data = pl
             pend = pl.get("pending_count", 0)
-            self.batch_spinbox.setValue(max(1, pend))
+            target = max(1, pend)
+            self.batch_spinbox.setValue(target)
+            self._on_batch_size_changed(target)
 
     def _on_track_filter_changed(self):
         self._load_detail_tracks()
@@ -980,6 +1202,7 @@ class PlaylistsView(QWidget):
         spotify_ids: List[str] = []
 
         pl_name = self.current_playlist_data.get("name", "Playlist") if self.current_playlist_data else "Playlist"
+        pl_cover = self.current_playlist_data.get("cover_url", "") if self.current_playlist_data else ""
 
         for r in pending_rows:
             t = TrackMetadata(
@@ -993,7 +1216,8 @@ class PlaylistsView(QWidget):
                 isrc=r.get("isrc", "") or "",
                 cover_url=r.get("cover_url", "") or "",
                 collection_name=pl_name,
-                collection_type="playlist"
+                collection_type="playlist",
+                collection_cover_url=pl_cover
             )
             tracks_to_queue.append(t)
             spotify_ids.append(t.id)
@@ -1005,9 +1229,14 @@ class PlaylistsView(QWidget):
         self.qm.enqueue(tracks_to_queue)
         self.qm.start_all()
 
+        if len(tracks_to_queue) < batch_size:
+            msg_content = f"Queued all {len(tracks_to_queue)} remaining tracks in playlist (batch requested: {batch_size})."
+        else:
+            msg_content = f"Queued {len(tracks_to_queue)} track(s) for downloading. You can monitor progress in the Queue tab."
+
         InfoBar.success(
             title="Batch Enqueued",
-            content=f"Queued {len(tracks_to_queue)} track(s) for downloading. You can monitor progress in the Queue tab.",
+            content=msg_content,
             orient=Qt.Orientation.Horizontal,
             position=InfoBarPosition.TOP,
             duration=4500,
@@ -1037,6 +1266,7 @@ class PlaylistsView(QWidget):
         tracks_to_queue: List[TrackMetadata] = []
         spotify_ids: List[str] = []
         pl_name = self.current_playlist_data.get("name", "Playlist") if self.current_playlist_data else "Playlist"
+        pl_cover = self.current_playlist_data.get("cover_url", "") if self.current_playlist_data else ""
 
         for idx in indexes:
             item = self.model.get_item(idx.row())
@@ -1044,6 +1274,7 @@ class PlaylistsView(QWidget):
                 t = item.track
                 t.collection_name = pl_name
                 t.collection_type = "playlist"
+                t.collection_cover_url = pl_cover
                 tracks_to_queue.append(t)
                 spotify_ids.append(t.id)
 
@@ -1074,6 +1305,62 @@ class PlaylistsView(QWidget):
         self._load_detail_tracks()
         self._refresh_detail_header()
 
+    def _on_pause_clicked(self):
+        if self.qm.is_paused():
+            self.qm.resume()
+            self.pause_btn.setText("Pause")
+            self.pause_btn.setIcon(FluentIcon.PAUSE)
+            InfoBar.info(
+                title="Resumed",
+                content="Download queue resumed.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=2000,
+                parent=self
+            )
+        else:
+            self.qm.pause()
+            self.pause_btn.setText("Resume")
+            self.pause_btn.setIcon(FluentIcon.PLAY)
+            InfoBar.info(
+                title="Paused",
+                content="Download queue paused.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=2000,
+                parent=self
+            )
+
+    def _on_stop_clicked(self):
+        self.qm.stop()
+        self.pause_btn.setText("Pause")
+        self.pause_btn.setIcon(FluentIcon.PAUSE)
+        InfoBar.warning(
+            title="Downloads Stopped",
+            content="Active downloads and pending items have been stopped immediately.",
+            orient=Qt.Orientation.Horizontal,
+            position=InfoBarPosition.TOP,
+            duration=3500,
+            parent=self
+        )
+        self._load_detail_tracks()
+        self._refresh_detail_header()
+
+    def _on_reset_queued_clicked(self):
+        if not self.current_playlist_id:
+            return
+        reverted = self.archive.revert_queued_tracks_to_pending(self.current_playlist_id)
+        self._load_detail_tracks()
+        self._refresh_detail_header()
+        InfoBar.success(
+            title="Reset Completed",
+            content=f"Reverted {reverted} queued/stopped track(s) back to pending.",
+            orient=Qt.Orientation.Horizontal,
+            position=InfoBarPosition.TOP,
+            duration=3500,
+            parent=self
+        )
+
     def _refresh_detail_header(self):
         if not self.current_playlist_id:
             return
@@ -1087,7 +1374,7 @@ class PlaylistsView(QWidget):
 
             self.detail_stats_label.setText(f"{tot} Total Tracks  •  {down} Downloaded  •  {pend} Pending ({pct}%)")
             self.detail_progress_bar.setValue(int(pct))
-            self.batch_spinbox.setValue(min(self.batch_spinbox.value(), pend if pend > 0 else 1))
+            self._on_batch_size_changed(self.batch_spinbox.value())
 
     def _open_download_folder(self):
         out_dir = config.get("download.output_dir", "downloads")
@@ -1114,6 +1401,7 @@ class PlaylistsView(QWidget):
             if self.current_playlist_data:
                 t.collection_name = self.current_playlist_data.get("name", "Playlist")
                 t.collection_type = "playlist"
+                t.collection_cover_url = self.current_playlist_data.get("cover_url", "") or ""
             self.archive.mark_saved_tracks_queued(self.current_playlist_id, [t.id])
             self.qm.enqueue([t])
             self.qm.start_all()
@@ -1151,6 +1439,16 @@ class PlaylistsView(QWidget):
         act_copy_title = menu.addAction("Copy Title & Artist")
         act_copy_url = menu.addAction("Copy Spotify URL")
 
+        act_cancel = None
+        if item.status in ("Downloading", "Resolving", "Queued", "Paused"):
+            menu.addSeparator()
+            act_cancel = menu.addAction("Cancel / Stop Download")
+
+        act_retry = None
+        if item.status in ("Failed", "Stopped"):
+            menu.addSeparator()
+            act_retry = menu.addAction("Retry Download")
+
         act_reveal = None
         if item.output_path and os.path.isfile(item.output_path):
             menu.addSeparator()
@@ -1167,11 +1465,30 @@ class PlaylistsView(QWidget):
             if self.current_playlist_data:
                 t.collection_name = self.current_playlist_data.get("name", "Playlist")
                 t.collection_type = "playlist"
+                t.collection_cover_url = self.current_playlist_data.get("cover_url", "") or ""
             self.archive.mark_saved_tracks_queued(self.current_playlist_id, [t.id])
             self.qm.enqueue([t])
             self.qm.start_all()
             item.status = "Queued"
             self.model.update_status(t.id, "Queued")
+        elif act_cancel and action == act_cancel:
+            self.qm.cancel_track(item.track.id)
+            self.archive.update_saved_track_status(self.current_playlist_id, item.track.id, "pending")
+            item.status = "Stopped"
+            self.model.update_status(item.track.id, "Stopped")
+            self._refresh_detail_header()
+        elif act_retry and action == act_retry:
+            t = item.track
+            if self.current_playlist_data:
+                t.collection_name = self.current_playlist_data.get("name", "Playlist")
+                t.collection_type = "playlist"
+                t.collection_cover_url = self.current_playlist_data.get("cover_url", "") or ""
+            self.archive.mark_saved_tracks_queued(self.current_playlist_id, [t.id])
+            self.qm.enqueue([t])
+            self.qm.start_all()
+            item.status = "Queued"
+            self.model.update_status(t.id, "Queued")
+            self._refresh_detail_header()
         elif action == act_copy_title:
             QApplication.clipboard().setText(f"{item.track.title} - {item.track.artist_str}")
         elif action == act_copy_url:
@@ -1195,3 +1512,24 @@ class PlaylistsView(QWidget):
     def _handle_bridge_status(self, track_id: str, status: str):
         if self.current_playlist_id and self.stacked.currentIndex() == 1:
             self.model.update_status(track_id, status)
+
+    def _handle_bridge_progress(self, track_id: str, percent: float, speed_str: str, eta_str: str):
+        if self.current_playlist_id and self.stacked.currentIndex() == 1:
+            self.model.update_progress(track_id, percent, speed_str, eta_str)
+
+    def _handle_bridge_source_resolved(self, track_id: str, source_type: str, quality_badge: str):
+        if self.current_playlist_id and self.stacked.currentIndex() == 1:
+            self.model.update_source(track_id, source_type, quality_badge)
+
+    def _handle_bridge_failed(self, track_id: str, error_msg: str):
+        if self.current_playlist_id and self.stacked.currentIndex() == 1:
+            self.model.mark_failed(track_id, error_msg)
+            self._refresh_detail_header()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.stacked.currentIndex() == 1 and self.current_playlist_id:
+            self._load_detail_tracks()
+            self._refresh_detail_header()
+        elif self.stacked.currentIndex() == 0:
+            self.reload_playlists()

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Optional, Callable, Tuple, Any
 
 from core.spotify_client import TrackMetadata
-from core.musilon import MusilonEngine, MusilonSource
+from core.musilon import MusilonEngine, MusilonSource, MusilonRateLimitExceededError
 from core.ytdlp_engine import YtdlpEngine, YtdlpSource
 from core.lyrics import LyricsEngine
 from core.tagger import AudioTagger
@@ -43,16 +43,27 @@ class CascadingAudioEngine:
         self.lyrics = lyrics_engine or LyricsEngine()
         self.tagger = tagger or AudioTagger()
 
-    def resolve_source(self, track: TrackMetadata, musilon_only: bool = False) -> Optional[ResolvedTrackSource]:
+    def resolve_source(
+        self,
+        track: TrackMetadata,
+        musilon_only: bool = False,
+        cancel_check: Optional[Callable[[], bool]] = None
+    ) -> Optional[ResolvedTrackSource]:
         """
         Executes cascading resolution ladder for a track.
         Prioritizes Musilon across all 4 search vectors and strict anti-false-positive scoring.
         Only falls back to YouTube Music if Musilon catalog is completely exhausted and fallback is enabled.
+        Strictly respects cancel_check to abort immediately if the user stops the download.
         """
+        if cancel_check and cancel_check():
+            return None
+
         # 1. Try Musilon Tiers 1-3 across all multi-vector search stages
         if self.musilon.enabled:
             try:
-                m_src = self.musilon.resolve_track(track)
+                m_src = self.musilon.resolve_track(track, cancel_check=cancel_check)
+                if cancel_check and cancel_check():
+                    return None
                 if m_src:
                     valid_tier = any(q in m_src.quality_tier.lower() for q in ("flac", "320", "studio"))
                     if valid_tier:
@@ -66,7 +77,12 @@ class CascadingAudioEngine:
                     else:
                         logger.info(f"Musilon tier '{m_src.quality_tier}' rejected to satisfy FLAC/320k priority.")
             except Exception as e:
+                if cancel_check and cancel_check():
+                    return None
                 logger.warning(f"Musilon resolution failed for {track.title}: {e}")
+
+        if cancel_check and cancel_check():
+            return None
 
         # Check if fallback is disabled globally or explicitly requested
         allow_fallback = config.get("download.allow_fallback", True) and not musilon_only
@@ -77,7 +93,9 @@ class CascadingAudioEngine:
         # 2. Safety-Net Fallback to Tier 4: YouTube Music
         logger.info(f"Musilon catalog completely exhausted for '{track.title}'; activating YouTube Music fallback...")
         try:
-            yt_src = self.ytdlp.resolve_track(track)
+            yt_src = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
+            if cancel_check and cancel_check():
+                return None
             if yt_src:
                 logger.info(f"Resolved via YouTube Music fallback: {track.title}")
                 act_ext = yt_src.audio_format or "opus"
@@ -89,6 +107,8 @@ class CascadingAudioEngine:
                     file_extension=act_ext
                 )
         except Exception as e:
+            if cancel_check and cancel_check():
+                return None
             logger.error(f"YouTube Music fallback failed for {track.title}: {e}")
 
         return None
@@ -112,6 +132,9 @@ class CascadingAudioEngine:
         Downloads audio stream, queries lyrics, embeds metadata and saves companion .lrc.
         Returns final destination file path.
         """
+        if cancel_check and cancel_check():
+            return None
+
         # Automatically organize into subfolder based on collection type:
         # - Playlists: folder named after the playlist
         # - Albums: folder named after the album
@@ -158,6 +181,9 @@ class CascadingAudioEngine:
         # Download based on source type
         final_file_path: Optional[str] = None
 
+        if cancel_check and cancel_check():
+            return None
+
         if resolved.source_type == "Musilon":
             if status_callback:
                 status_callback("Downloading (Musilon VIP)")
@@ -174,6 +200,14 @@ class CascadingAudioEngine:
                     pause_wait=pause_wait,
                     max_retries=retries
                 )
+                if cancel_check and cancel_check():
+                    if os.path.exists(dest_file):
+                        try:
+                            os.remove(dest_file)
+                        except Exception:
+                            pass
+                    return None
+
                 if success and os.path.isfile(dest_file):
                     is_valid, reason = is_valid_audio_file(dest_file)
                     if is_valid:
@@ -186,16 +220,36 @@ class CascadingAudioEngine:
                             pass
                 else:
                     logger.warning(f"Musilon download failed after {retries} attempts for '{track.title}'.")
+            except MusilonRateLimitExceededError as e_limit:
+                if cancel_check and cancel_check():
+                    return None
+                if os.path.exists(dest_file):
+                    try:
+                        os.remove(dest_file)
+                    except Exception:
+                        pass
+                logger.warning(f"Musilon download limit/quota exceeded for '{track.title}'. Raising for queue pause.")
+                raise e_limit
             except Exception as e:
+                if cancel_check and cancel_check():
+                    return None
                 logger.warning(f"Musilon stream download failed ({e}).")
 
             # Fallback to YouTube Music ONLY as last resort after all Musilon retries fail
+            # AND strictly only if the user has NOT cancelled!
+            if cancel_check and cancel_check():
+                return None
+
             allow_fallback = config.get("download.allow_fallback", True) and not musilon_only
             if not final_file_path and allow_fallback:
+                if cancel_check and cancel_check():
+                    return None
                 logger.info(f"Musilon exhausted. Initiating last-resort safety-net fallback to YouTube Music for '{track.title}'...")
                 if status_callback:
                     status_callback("Falling back to YTM (Last Resort)")
-                yt_fallback = self.ytdlp.resolve_track(track)
+                yt_fallback = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
+                if cancel_check and cancel_check():
+                    return None
                 if yt_fallback:
                     act_ext = yt_fallback.audio_format or "opus"
                     badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
@@ -205,6 +259,9 @@ class CascadingAudioEngine:
                         source_obj=yt_fallback,
                         file_extension=act_ext
                     )
+
+        if cancel_check and cancel_check():
+            return None
 
         if not final_file_path and resolved.source_type == "YouTube Music":
             if status_callback:
@@ -217,12 +274,30 @@ class CascadingAudioEngine:
                 cancel_check=cancel_check,
                 pause_wait=pause_wait
             )
+            if cancel_check and cancel_check():
+                if final_file_path and os.path.exists(final_file_path):
+                    try:
+                        os.remove(final_file_path)
+                    except Exception:
+                        pass
+                return None
+
             if final_file_path and os.path.isfile(final_file_path):
                 act_ext = os.path.splitext(final_file_path)[1].lstrip(".").lower()
                 resolved.file_extension = act_ext
                 resolved.quality_badge = "YTM M4A" if act_ext == "m4a" else "YTM Opus"
 
+        if cancel_check and cancel_check():
+            if final_file_path and os.path.exists(final_file_path):
+                try:
+                    os.remove(final_file_path)
+                except Exception:
+                    pass
+            return None
+
         if not final_file_path or not os.path.isfile(final_file_path):
+            if cancel_check and cancel_check():
+                return None
             raise RuntimeError(f"Audio download failed to produce a valid file for '{track.title}'.")
 
         # Strict integrity check on downloaded audio
@@ -235,6 +310,14 @@ class CascadingAudioEngine:
                     pass
             raise RuntimeError(f"Downloaded audio file failed integrity verification ({reason}) for '{track.title}'.")
 
+        if cancel_check and cancel_check():
+            if final_file_path and os.path.exists(final_file_path):
+                try:
+                    os.remove(final_file_path)
+                except Exception:
+                    pass
+            return None
+
         # Lyrics Processing
         lyrics_mode = config.get("download.lyrics_mode", "embedded_only")
         save_companion = config.get("download.save_lrc", False) or lyrics_mode in ("separate_folder", "same_folder")
@@ -245,33 +328,43 @@ class CascadingAudioEngine:
             status_callback("Fetching Lyrics")
         lyrics_data = None
         try:
-            lyrics_data = self.lyrics.fetch_lyrics(track)
-            if lyrics_data and save_companion:
-                target_dir = None
-                if lyrics_mode == "separate_folder":
-                    target_dir = os.path.join(output_dir, "lyrics")
-                self.lyrics.save_companion_lrc(final_file_path, lyrics_data, target_dir=target_dir)
+            if not (cancel_check and cancel_check()):
+                lyrics_data = self.lyrics.fetch_lyrics(track)
+                if lyrics_data and save_companion:
+                    target_dir = None
+                    if lyrics_mode == "separate_folder":
+                        target_dir = os.path.join(output_dir, "lyrics")
+                    self.lyrics.save_companion_lrc(final_file_path, lyrics_data, target_dir=target_dir)
         except Exception as e:
             logger.warning(f"Failed to fetch lyrics: {e}")
+
+        if cancel_check and cancel_check():
+            if final_file_path and os.path.exists(final_file_path):
+                try:
+                    os.remove(final_file_path)
+                except Exception:
+                    pass
+            return None
 
         # Metadata & Cover Art Tagging
         if status_callback:
             status_callback("Tagging Metadata")
         try:
-            self.tagger.tag_file(
-                file_path=final_file_path,
-                track=track,
-                lyrics_data=lyrics_data,
-                embed_art=embed_art,
-                embed_lyrics=embed_lyrics
-            )
+            if not (cancel_check and cancel_check()):
+                self.tagger.tag_file(
+                    file_path=final_file_path,
+                    track=track,
+                    lyrics_data=lyrics_data,
+                    embed_art=embed_art,
+                    embed_lyrics=embed_lyrics
+                )
         except Exception as e:
             logger.error(f"Error tagging audio file: {e}")
 
         # Post-tagging Verification & Auto-Repair Safety Net
         try:
             from core.utils import extract_embedded_cover
-            if embed_art:
+            if embed_art and not (cancel_check and cancel_check()):
                 cov = extract_embedded_cover(final_file_path)
                 if not cov or len(cov) < 500:
                     logger.warning(f"Cover art missing after tagging for '{track.title}'. Triggering emergency oEmbed auto-heal...")

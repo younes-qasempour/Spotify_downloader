@@ -297,6 +297,32 @@ d:\Spotify-Downloader\
   4. **Sidebar Navigation Integration (`gui/main_window.py`):**
      - Registered `PlaylistsView` as a dedicated top-level sidebar view: `Playlists` (`FluentIcon.ALBUM`).
 
+### 11. Musilon Stealth Rate-Limit Protection & Pause-and-Prompt Workflow
+- **Background:**
+  - Musilon does not enforce a rigid daily quota (e.g. fixed 200/500 files), but employs a behavioral rate-limit defense system triggered by:
+    1. Concurrent audio streaming connections (downloading multiple FLAC/MP3 files in parallel).
+    2. High requests per minute (RPM) without human-like delays.
+    3. Non-browser header patterns and missing station referers.
+  - When limits are triggered, Musilon returns HTTP 429 or HTML paywall pages with Persian quota notices (`سقف دانلود`, `محدودیت دانلود`, etc.).
+- **Implementation:**
+  1. **Strict Stream Mutex (`_musilon_stream_lock` in `DownloadQueueManager`):**
+     - Ensures strictly 1 active stream connection to Musilon CDN across all concurrent worker threads.
+     - YouTube Music and local archive operations continue downloading in parallel without blocking.
+  2. **Human Cooldown Timer with Real-Time UI Countdown (15–35s):**
+     - After each Musilon download, enforces a randomized cooldown (`musilon.cooldown_min_sec` to `musilon.cooldown_max_sec`).
+     - Ticks in small 100ms slices checking `cancel_check()`, updating UI status (`VIP Cooldown (24s)`), and enabling immediate cancellation (< 50ms) without hanging.
+  3. **Station-Specific Referer:**
+     - `MusilonSource` records `station_url` (e.g. `https://musilon.com/station/song-slug/`).
+     - `MusilonEngine.download_file()` sends the track's authentic station URL as the `Referer` header with `Sec-Fetch-Dest: audio`.
+  4. **Modern Windows 11 Chrome 131 Fingerprint:**
+     - Updated headers with Chrome 131, `sec-ch-ua`, `sec-ch-ua-platform: "Windows"`, and `Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7`.
+  5. **Pause-and-Prompt User Decision on Rate Limit:**
+     - `MusilonRateLimitExceededError` triggers a queue pause and prompts the user via a Fluent `MessageBox` to choose:
+       - **Switch to YouTube Music:** Resumes the queue and completes remaining tracks via YouTube Music.
+       - **Stop Downloads:** Halts the queue immediately and marks unprocessed tracks as `pending` in SQLite for easy resumption later.
+  6. **Settings View Controls:**
+     - Toggle for "VIP Anti-Ban Stealth Shield (Safe Mode)" and Min/Max Cooldown SpinBoxes (0–300s).
+
 ---
 
 ## 4. Verification History

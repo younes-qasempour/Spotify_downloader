@@ -113,6 +113,7 @@ class MainWindow(FluentWindow):
 
         # Connect Bridge to Completed View
         self.bridge.sig_completed.connect(self._on_track_completed)
+        self.bridge.sig_musilon_limit_reached.connect(self._show_musilon_limit_dialog)
         self.sig_reload_library.connect(self.completed_view.reload_all)
 
         # Background scan of output directory to index any pre-existing downloads into archive
@@ -169,6 +170,29 @@ class MainWindow(FluentWindow):
             if it.track.id == track_id:
                 self.completed_view.add_completed_item(it)
                 break
+
+    def _show_musilon_limit_dialog(self, track, item, decision_callback):
+        from qfluentwidgets import MessageBox
+        track_title = getattr(track, "title", "Track")
+        artist_name = getattr(track, "primary_artist", "Unknown Artist")
+
+        dialog = MessageBox(
+            title="Musilon Download Limit Reached",
+            content=(
+                f"Musilon has reached its download rate limit or daily VIP quota while downloading:\n\n"
+                f"  • {track_title} - {artist_name}\n\n"
+                "This track was found on Musilon, but the site rejected the download stream due to rate restrictions.\n\n"
+                "Would you like to continue downloading from YouTube Music, or stop the downloading process?"
+            ),
+            parent=self
+        )
+        dialog.yesButton.setText("Continue with YouTube")
+        dialog.cancelButton.setText("Stop Downloads")
+
+        if dialog.exec():
+            decision_callback("continue_youtube")
+        else:
+            decision_callback("stop")
 
     def _scan_and_index_startup(self, output_dir: str):
         try:

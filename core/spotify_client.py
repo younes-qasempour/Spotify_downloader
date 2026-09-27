@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import time
@@ -9,10 +10,11 @@ import requests
 
 try:
     import spotipy
-    from spotipy.oauth2 import SpotifyClientCredentials
+    from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
 except ImportError:
     spotipy = None
     SpotifyClientCredentials = None
+    SpotifyOAuth = None
 
 from core.utils import clean_watermarks, sanitize_filename
 
@@ -66,9 +68,9 @@ class TrackMetadata:
 
 class SpotifyClient:
     """
-    Dual-mode Spotify Metadata Resolver.
-    Supports official Web API (Client Credentials) with pagination for large playlists,
-    and automatic anonymous guest embed scraping requiring zero credentials.
+    Multi-mode Spotify Metadata Resolver.
+    Supports official Web API with User Authorization (SpotifyOAuth) for full playlist pagination,
+    Server-to-Server Client Credentials for tracks/albums, and automatic anonymous guest embed scraping.
     """
 
     SPOTIFY_URL_PATTERN = re.compile(
@@ -79,9 +81,12 @@ class SpotifyClient:
         self.client_id = client_id.strip()
         self.client_secret = client_secret.strip()
         self._sp: Optional[Any] = None
+        self._oauth: Optional[Any] = None
         self.last_resolution_mode: str = "none"  # "api" or "guest"
         self.last_was_truncated: bool = False
         self.last_total_tracks: int = 0
+        self.last_api_error: str = ""
+        self.last_owner_name: str = ""
         self._init_api()
 
         self._session = requests.Session()
@@ -92,20 +97,173 @@ class SpotifyClient:
         })
 
     def has_credentials(self) -> bool:
-        """Returns True if valid Spotify API credentials are configured."""
-        return bool(self.client_id and self.client_secret and self._sp)
+        """Returns True if Spotify API client ID and secret are configured."""
+        return bool(self.client_id and self.client_secret)
+
+    def has_user_auth(self) -> bool:
+        """Returns True if user has authorized via SpotifyOAuth (cached token valid or refreshable)."""
+        if not self._oauth:
+            self._init_api()
+        if not self._oauth:
+            return False
+        try:
+            cached = self._oauth.cache_handler.get_cached_token()
+            if not cached:
+                return False
+            token = self._oauth.validate_token(cached)
+            return bool(token)
+        except Exception as e:
+            logger.debug(f"has_user_auth check failed: {e}")
+            return False
+
+    def get_current_user_name(self) -> str:
+        """Returns the Spotify display name of the currently authorized user, or empty string."""
+        if not self.has_user_auth():
+            return ""
+        try:
+            if not self._sp:
+                self._init_api()
+            if self._sp:
+                me = self._sp.current_user()
+                if me:
+                    return me.get("display_name") or me.get("id", "")
+        except Exception:
+            pass
+        return ""
+
+    def clear_user_auth(self):
+        """Clears the cached OAuth token and resets the API client to unauthenticated."""
+        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
+        token_cache = os.path.join(cache_dir, ".spotify_token_cache")
+        if os.path.exists(token_cache):
+            try:
+                os.remove(token_cache)
+            except Exception as e:
+                logger.warning(f"Could not remove token cache: {e}")
+        self._init_api()
+
+    def _ensure_user_auth(self) -> bool:
+        """Ensures self._sp is using SpotifyOAuth with valid or refreshed tokens."""
+        if not self._oauth:
+            self._init_api()
+        if not self._oauth:
+            return False
+
+        if self.has_user_auth():
+            if not isinstance(getattr(self._sp, 'auth_manager', None), SpotifyOAuth):
+                self._sp = spotipy.Spotify(auth_manager=self._oauth)
+                logger.info("Switched Spotify API client to active user authorization session.")
+            return True
+
+        try:
+            logger.info("Playlist resolution requires user authorization. Starting Spotify OAuth login...")
+            return self.authorize_user()
+        except Exception as e:
+            logger.warning(f"Spotify OAuth authorization attempt failed: {e}")
+            return False
+
+    def get_auth_url(self) -> str:
+        """Returns the Spotify OAuth authorize URL to visit in browser."""
+        if not self._oauth:
+            self._init_api()
+        if self._oauth:
+            return self._oauth.get_authorize_url()
+        return ""
+
+    def authorize_user(self, force_new: bool = False) -> bool:
+        """
+        Triggers Spotify OAuth authorization flow. Opens default browser and waits
+        for callback on local redirect server (port 9900).
+        """
+        if force_new:
+            self.clear_user_auth()
+
+        if not self._oauth:
+            self._init_api()
+        if not self._oauth:
+            raise RuntimeError("SpotifyOAuth is not available. Please verify credentials.")
+
+        logger.info("Starting Spotify OAuth login flow...")
+        token = self._oauth.get_access_token(check_cache=not force_new)
+        if token:
+            self._sp = spotipy.Spotify(auth_manager=self._oauth)
+            logger.info("Spotify user account successfully authorized!")
+            return True
+        return False
+
+    def parse_and_save_auth_code(self, code_or_url: str) -> bool:
+        """Parses authorization code or redirected callback URL and retrieves tokens."""
+        if not self._oauth:
+            self._init_api()
+        if not self._oauth:
+            return False
+        code = self._oauth.parse_response_code(code_or_url)
+        token = self._oauth.get_access_token(code, as_dict=True)
+        if token:
+            self._sp = spotipy.Spotify(auth_manager=self._oauth)
+            logger.info("Successfully saved user token from authorization code/URL!")
+            return True
+        return False
 
     def _init_api(self):
-        if spotipy and self.client_id and self.client_secret:
+        if not (spotipy and self.client_id and self.client_secret):
+            self._sp = None
+            self._oauth = None
+            return
+
+        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        token_cache = os.path.join(cache_dir, ".spotify_token_cache")
+
+        redirect_uri = "http://127.0.0.1:9900/callback"
+        try:
+            from core.config import config
+            cfg_uri = config.get("spotify.redirect_uri", "").strip()
+            if cfg_uri:
+                redirect_uri = cfg_uri
+        except Exception:
+            pass
+
+        if SpotifyOAuth:
+            try:
+                self._oauth = SpotifyOAuth(
+                    client_id=self.client_id,
+                    client_secret=self.client_secret,
+                    redirect_uri=redirect_uri,
+                    scope="playlist-read-private playlist-read-collaborative",
+                    cache_path=token_cache,
+                    show_dialog=True,
+                    open_browser=True
+                )
+            except Exception as e:
+                logger.warning(f"Could not initialize SpotifyOAuth: {e}")
+                self._oauth = None
+            except Exception as e:
+                logger.warning(f"Could not initialize SpotifyOAuth: {e}")
+                self._oauth = None
+
+        # 1. Prefer User-Authorized client if cached token exists
+        if self._oauth:
+            try:
+                token = self._oauth.get_cached_token()
+                if token:
+                    self._sp = spotipy.Spotify(auth_manager=self._oauth)
+                    logger.info("Initialized official Spotify Web API client with User Authorization.")
+                    return
+            except Exception as e:
+                logger.debug(f"Cached token check failed: {e}")
+
+        # 2. Fallback to Client Credentials for tracks/albums/artists
+        if SpotifyClientCredentials:
             try:
                 auth_mgr = SpotifyClientCredentials(
                     client_id=self.client_id,
                     client_secret=self.client_secret
                 )
                 self._sp = spotipy.Spotify(auth_manager=auth_mgr)
-                logger.info("Initialized official Spotify Web API client.")
+                logger.info("Initialized official Spotify Web API client with Client Credentials.")
             except Exception as e:
-                logger.warning(f"Failed to initialize Spotipy client: {e}. Fallback to guest mode.")
+                logger.warning(f"Failed to initialize Spotipy client credentials: {e}. Fallback to guest mode.")
                 self._sp = None
         else:
             self._sp = None
@@ -140,6 +298,13 @@ class SpotifyClient:
 
         self.last_was_truncated = False
         self.last_total_tracks = 0
+        self.last_api_error = ""
+        self.last_owner_name = ""
+
+        # For playlists, Spotify requires user authentication since late 2024.
+        # Ensure self._sp is using valid or refreshed user OAuth tokens.
+        if entity_type == "playlist" and self.has_credentials():
+            self._ensure_user_auth()
 
         if self._sp:
             try:
@@ -194,16 +359,18 @@ class SpotifyClient:
         elif entity_type == "playlist":
             pl_title = "Spotify Playlist"
             pl_cover = ""
+            pl_owner = ""
             total_expected = 0
             try:
-                pl_meta = self._sp.playlist(entity_id, fields="name,images,tracks.total")
+                pl_meta = self._sp.playlist(entity_id, fields="name,images,owner")
                 if pl_meta:
                     if pl_meta.get("name"):
                         pl_title = clean_watermarks(pl_meta["name"])
                     if pl_meta.get("images"):
                         pl_cover = pl_meta["images"][0].get("url", "")
-                    if pl_meta.get("tracks") and isinstance(pl_meta["tracks"], dict):
-                        total_expected = pl_meta["tracks"].get("total", 0)
+                    if pl_meta.get("owner"):
+                        pl_owner = pl_meta["owner"].get("display_name") or pl_meta["owner"].get("id", "")
+                        self.last_owner_name = pl_owner
             except Exception as e:
                 logger.debug(f"Could not fetch playlist metadata: {e}")
 
@@ -223,6 +390,23 @@ class SpotifyClient:
                         )
                         break
                     except Exception as e:
+                        err_str = str(e)
+                        if "401" in err_str or "user authentication" in err_str.lower():
+                            logger.error(f"Spotify API requires user authorization for playlists: {e}")
+                            raise e
+                        if "not registered" in err_str.lower():
+                            logger.error("Spotify API 403: The user is not registered in Developer Dashboard -> User Management.")
+                            self.last_api_error = "not_registered"
+                            raise e
+                        if "403" in err_str or "forbidden" in err_str.lower():
+                            cur_user = self.get_current_user_name()
+                            logger.error(
+                                f"Spotify API 403 Forbidden: In 2026, Spotify restricts playlist items "
+                                f"to the owner or collaborators. Playlist '{pl_title}' is owned by '{pl_owner}', "
+                                f"but authorized as '{cur_user}'."
+                            )
+                            self.last_api_error = "403_not_owner"
+                            raise e
                         retries -= 1
                         time.sleep(2.0)
                         if retries == 0:
@@ -231,8 +415,11 @@ class SpotifyClient:
                 if not results or not results.get("items"):
                     break
 
+                if not total_expected and results.get("total"):
+                    total_expected = results.get("total", 0)
+
                 for item_wrapper in results["items"]:
-                    track_item = item_wrapper.get("track")
+                    track_item = item_wrapper.get("item") or item_wrapper.get("track")
                     if track_item and track_item.get("id"):
                         tracks.append(self._format_track_item(
                             track_item,

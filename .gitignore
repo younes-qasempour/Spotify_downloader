@@ -16,6 +16,8 @@ cookies.txt
 *cookies*.txt
 *.session
 *.env
+.cache
+.cache*
 archive.db
 *.db
 *.sqlite

@@ -1,5 +1,6 @@
 import os
 import time
+import random
 import queue
 import shutil
 import threading
@@ -11,6 +12,7 @@ import requests
 
 from core.spotify_client import TrackMetadata
 from core.resolver import CascadingAudioEngine, ResolvedTrackSource
+from core.musilon import MusilonRateLimitExceededError
 from core.archive import ArchiveManager
 from core.utils import sanitize_filename, is_valid_audio_file
 from core.config import config
@@ -65,6 +67,8 @@ class DownloadQueueManager:
 
         # Musilon bottleneck lock to ensure strict sequential requests
         self._musilon_lock = threading.Lock()
+        # Strict single-connection stream mutex for Musilon CDN downloads
+        self._musilon_stream_lock = threading.Lock()
 
         # Decoupled Event Callbacks
         self.on_track_enqueued: Optional[Callable[[QueueItem], None]] = None
@@ -73,6 +77,10 @@ class DownloadQueueManager:
         self.on_track_status_changed: Optional[Callable[[str, str], None]] = None
         self.on_track_completed: Optional[Callable[[str, str], None]] = None
         self.on_track_failed: Optional[Callable[[str, str], None]] = None
+        self.on_musilon_limit_reached: Optional[Callable[[TrackMetadata, QueueItem, Callable[[str], None]], None]] = None
+
+        self._allow_yt_on_limit = False
+        self._limit_lock = threading.Lock()
 
     def start(self):
         with self._lock:
@@ -152,9 +160,9 @@ class DownloadQueueManager:
         return not self._paused.is_set()
 
     def retry_failed(self) -> int:
-        """Finds all items in 'Failed' status, resets them, and re-queues them."""
+        """Finds all items in 'Failed' or 'Stopped' status, resets them, and re-queues them."""
         with self._lock:
-            failed_items = [it for it in self._items.values() if it.status == "Failed"]
+            failed_items = [it for it in self._items.values() if it.status in ("Failed", "Stopped")]
             for item in failed_items:
                 item.status = "Queued"
                 item.progress_percent = 0.0
@@ -193,12 +201,14 @@ class DownloadQueueManager:
         Stops active downloads immediately:
         - Drains pending items from queue and marks them 'Stopped'
         - Marks active in-flight items with cancelled = True and 'Stopped'
+        - Reverts queued tracks back to pending in saved playlists
         - Unpauses and terminates worker threads cleanly
         """
         with self._lock:
             while not self._queue.empty():
                 try:
                     it = self._queue.get_nowait()
+                    it.cancelled = True
                     if it.status == "Queued":
                         it.status = "Stopped"
                         if self.on_track_status_changed:
@@ -208,24 +218,43 @@ class DownloadQueueManager:
                     break
 
             for it in self._items.values():
-                if it.status in ("Downloading", "Resolving", "Paused", "Queued"):
+                if it.status in ("Downloading", "Resolving", "Paused", "Queued", "Stopped"):
                     it.cancelled = True
-                    it.status = "Stopped"
-                    if self.on_track_status_changed:
-                        self.on_track_status_changed(it.track.id, "Stopped")
+                    if it.status != "Stopped":
+                        it.status = "Stopped"
+                        if self.on_track_status_changed:
+                            self.on_track_status_changed(it.track.id, "Stopped")
 
             self._running = False
+            self._allow_yt_on_limit = False
             self._paused.set()  # Unblock workers so they cleanly exit
+
+            # Revert any queued or stopped tracks in SQLite back to pending so they can be re-downloaded
+            try:
+                self.archive.revert_queued_tracks_to_pending()
+            except Exception as e_rev:
+                logger.debug(f"Could not revert queued tracks on stop: {e_rev}")
+
         logger.info("Download queue stopped.")
 
     def enqueue(self, tracks: List[TrackMetadata]):
         with self._lock:
             for t in tracks:
                 if t.id in self._items:
-                    # If already completed or actively in queue, skip duplicate
                     existing = self._items[t.id]
                     if existing.status in ("Queued", "Downloading", "Resolving"):
                         continue
+                    # Re-queue previously stopped/cancelled/failed items without adding duplicates
+                    existing.status = "Queued"
+                    existing.cancelled = False
+                    existing.progress_percent = 0.0
+                    existing.error_message = ""
+                    existing.speed_str = ""
+                    existing.eta_str = ""
+                    self._queue.put(existing)
+                    if self.on_track_status_changed:
+                        self.on_track_status_changed(t.id, "Queued")
+                    continue
 
                 item = QueueItem(track=t, status="Queued")
                 self._items[t.id] = item
@@ -242,6 +271,10 @@ class DownloadQueueManager:
                 item.status = "Cancelled"
                 if self.on_track_status_changed:
                     self.on_track_status_changed(track_id, "Cancelled")
+            try:
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+            except Exception as e_arc:
+                logger.debug(f"Could not update archive status on cancel: {e_arc}")
         logger.info(f"Cancelled track {track_id}")
 
     def clear_completed(self):
@@ -430,24 +463,33 @@ class DownloadQueueManager:
                 self._update_status(item, "Stopped")
                 return
 
+            def cancel_check() -> bool:
+                return item.cancelled or not self._running
+
+            def pause_wait():
+                self._paused.wait()
+
             # 2. Resolving Phase
             self._paused.wait()
-            if item.cancelled or not self._running:
+            if cancel_check():
                 self._update_status(item, "Stopped")
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
 
             self._update_status(item, "Resolving")
             
             # Lazy resolution with rate-limiting bottleneck for Musilon
             with self._musilon_lock:
-                if item.cancelled or not self._running:
+                if cancel_check():
                     self._update_status(item, "Stopped")
+                    self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                     return
                 self._paused.wait()
-                resolved = self.engine.resolve_source(track)
+                resolved = self.engine.resolve_source(track, cancel_check=cancel_check)
 
-            if item.cancelled or not self._running:
+            if cancel_check():
                 self._update_status(item, "Stopped")
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
 
             if not resolved:
@@ -458,8 +500,9 @@ class DownloadQueueManager:
             if self.on_track_source_resolved:
                 self.on_track_source_resolved(track_id, resolved.source_type, resolved.quality_badge)
 
-            if item.cancelled or not self._running:
+            if cancel_check():
                 self._update_status(item, "Stopped")
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
 
             self._paused.wait()
@@ -479,29 +522,63 @@ class DownloadQueueManager:
             def status_cb(status_str: str):
                 self._update_status(item, status_str)
 
-            def cancel_check() -> bool:
-                return item.cancelled or not self._running
+            # Download & Tag with single-connection Mutex and post-download cooldown for Musilon
+            is_musilon = (resolved.source_type == "Musilon")
+            if is_musilon:
+                with self._musilon_stream_lock:
+                    if cancel_check():
+                        self._update_status(item, "Stopped")
+                        self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                        return
 
-            def pause_wait():
-                self._paused.wait()
+                    file_path = self.engine.download_and_tag(
+                        track=track,
+                        resolved=resolved,
+                        output_dir=output_dir,
+                        naming_template=naming_tmpl,
+                        save_lrc=save_lrc,
+                        embed_lyrics=embed_lyrics,
+                        embed_art=embed_art,
+                        progress_callback=progress_cb,
+                        status_callback=status_cb,
+                        cancel_check=cancel_check,
+                        pause_wait=pause_wait
+                    )
 
-            # Download & Tag
-            file_path = self.engine.download_and_tag(
-                track=track,
-                resolved=resolved,
-                output_dir=output_dir,
-                naming_template=naming_tmpl,
-                save_lrc=save_lrc,
-                embed_lyrics=embed_lyrics,
-                embed_art=embed_art,
-                progress_callback=progress_cb,
-                status_callback=status_cb,
-                cancel_check=cancel_check,
-                pause_wait=pause_wait
-            )
+                    # Post-download VIP cooldown to mimic human listening and evade 429 behavioral rate-limits
+                    if file_path and os.path.isfile(file_path) and config.get("musilon.safe_mode", True) and not cancel_check():
+                        min_cd = max(0, int(config.get("musilon.cooldown_min_sec", 15)))
+                        max_cd = max(min_cd, int(config.get("musilon.cooldown_max_sec", 35)))
+                        cooldown_secs = random.randint(min_cd, max_cd) if max_cd > 0 else 0
+                        logger.info(f"Musilon Safe Mode: cooling down for {cooldown_secs}s to evade rate limits...")
 
-            if item.cancelled or not self._running:
+                        for remaining in range(cooldown_secs, 0, -1):
+                            if cancel_check():
+                                break
+                            self._paused.wait()
+                            status_cb(f"VIP Cooldown ({remaining}s)")
+                            for _ in range(10):
+                                if cancel_check():
+                                    break
+                                time.sleep(0.1)
+            else:
+                file_path = self.engine.download_and_tag(
+                    track=track,
+                    resolved=resolved,
+                    output_dir=output_dir,
+                    naming_template=naming_tmpl,
+                    save_lrc=save_lrc,
+                    embed_lyrics=embed_lyrics,
+                    embed_art=embed_art,
+                    progress_callback=progress_cb,
+                    status_callback=status_cb,
+                    cancel_check=cancel_check,
+                    pause_wait=pause_wait
+                )
+
+            if cancel_check():
                 self._update_status(item, "Stopped")
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
 
             item.output_path = file_path or ""
@@ -515,15 +592,147 @@ class DownloadQueueManager:
             if self.on_track_completed:
                 self.on_track_completed(track_id, item.output_path)
 
+        except MusilonRateLimitExceededError as e_limit:
+            if cancel_check():
+                self._update_status(item, "Stopped")
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                return
+
+            logger.warning(f"Musilon rate limit / daily quota hit for '{track.title}'. Checking session preference or prompting user...")
+
+            use_yt = False
+            with self._limit_lock:
+                if self._allow_yt_on_limit:
+                    use_yt = True
+                else:
+                    self.pause()
+                    self._update_status(item, "Musilon Limit Reached")
+
+                    decision_event = threading.Event()
+                    decision_action = ["stop"]
+
+                    def on_decision(action: str):
+                        decision_action[0] = action
+                        decision_event.set()
+
+                    if self.on_musilon_limit_reached:
+                        try:
+                            self.on_musilon_limit_reached(track, item, on_decision)
+                        except Exception as e_hook:
+                            logger.error(f"Error invoking on_musilon_limit_reached: {e_hook}")
+                            decision_event.set()
+                    else:
+                        decision_event.set()
+
+                    while not decision_event.wait(timeout=0.25):
+                        if cancel_check():
+                            decision_action[0] = "stop"
+                            break
+
+                    if decision_action[0] == "continue_youtube" and not cancel_check():
+                        self._allow_yt_on_limit = True
+                        self.resume()
+                        use_yt = True
+                    else:
+                        self.stop()
+                        self._update_status(item, "Stopped")
+                        self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                        return
+
+            if use_yt and not cancel_check():
+                self._fallback_to_youtube(
+                    item=item,
+                    track=track,
+                    output_dir=output_dir,
+                    naming_tmpl=naming_tmpl,
+                    save_lrc=save_lrc,
+                    embed_lyrics=embed_lyrics,
+                    embed_art=embed_art,
+                    progress_cb=progress_cb,
+                    status_cb=status_cb,
+                    cancel_check=cancel_check,
+                    pause_wait=pause_wait
+                )
+
         except Exception as e:
             if item.cancelled or not self._running:
                 self._update_status(item, "Stopped")
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
             logger.error(f"Failed to process track '{track.title}': {e}")
             item.error_message = str(e)
             self._update_status(item, "Failed")
+            self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
             if self.on_track_failed:
                 self.on_track_failed(track_id, str(e))
+
+    def _fallback_to_youtube(
+        self,
+        item: QueueItem,
+        track: TrackMetadata,
+        output_dir: str,
+        naming_tmpl: str,
+        save_lrc: bool,
+        embed_lyrics: bool,
+        embed_art: bool,
+        progress_cb: Callable,
+        status_cb: Callable,
+        cancel_check: Callable[[], bool],
+        pause_wait: Callable[[], None]
+    ):
+        if cancel_check():
+            self._update_status(item, "Stopped")
+            self.archive.update_saved_track_status_by_spotify_id(track.id, "pending")
+            return
+
+        self._update_status(item, "Resolving (YTM Fallback)")
+        yt_src = self.engine.ytdlp.resolve_track(track, cancel_check=cancel_check)
+        if cancel_check():
+            self._update_status(item, "Stopped")
+            self.archive.update_saved_track_status_by_spotify_id(track.id, "pending")
+            return
+
+        if not yt_src:
+            raise RuntimeError(f"YouTube Music fallback could not find audio for '{track.title}'.")
+
+        act_ext = yt_src.audio_format or "opus"
+        badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
+        resolved_yt = ResolvedTrackSource(
+            source_type="YouTube Music",
+            quality_badge=badge,
+            source_obj=yt_src,
+            file_extension=act_ext
+        )
+        item.source_type = resolved_yt.source_type
+        item.quality_badge = resolved_yt.quality_badge
+        if self.on_track_source_resolved:
+            self.on_track_source_resolved(track.id, resolved_yt.source_type, resolved_yt.quality_badge)
+
+        file_path = self.engine.download_and_tag(
+            track=track,
+            resolved=resolved_yt,
+            output_dir=output_dir,
+            naming_template=naming_tmpl,
+            save_lrc=save_lrc,
+            embed_lyrics=embed_lyrics,
+            embed_art=embed_art,
+            progress_callback=progress_cb,
+            status_callback=status_cb,
+            cancel_check=cancel_check,
+            pause_wait=pause_wait
+        )
+        if cancel_check():
+            self._update_status(item, "Stopped")
+            self.archive.update_saved_track_status_by_spotify_id(track.id, "pending")
+            return
+
+        item.output_path = file_path or ""
+        self._update_status(item, "Completed")
+        if file_path and os.path.isfile(file_path):
+            self.archive.add_track(track, file_path, item.quality_badge, item.source_type)
+            self.archive.mark_saved_track_downloaded(track.id, file_path)
+        if self.on_track_completed:
+            self.on_track_completed(track.id, item.output_path)
 
     def _update_status(self, item: QueueItem, status: str):
         with self._lock:
