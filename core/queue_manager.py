@@ -84,18 +84,19 @@ class DownloadQueueManager:
 
     def start(self):
         with self._lock:
-            if self._running:
-                return
-            self._running = True
             self._paused.set()
+            if not self._running:
+                self._running = True
 
-            # Start worker threads
+            # Ensure worker threads are alive
+            self._worker_threads = [t for t in self._worker_threads if t.is_alive()]
             num_workers = max(1, config.get("download.concurrency", self.max_workers))
-            for i in range(num_workers):
-                t = threading.Thread(target=self._worker_loop, name=f"DownloadWorker-{i}", daemon=True)
+            while len(self._worker_threads) < num_workers:
+                idx = len(self._worker_threads)
+                t = threading.Thread(target=self._worker_loop, name=f"DownloadWorker-{idx}", daemon=True)
                 t.start()
                 self._worker_threads.append(t)
-            logger.info(f"Started DownloadQueueManager with {num_workers} workers.")
+            logger.info(f"Started DownloadQueueManager with {len(self._worker_threads)} workers.")
 
     def start_all(self) -> int:
         """
@@ -593,6 +594,14 @@ class DownloadQueueManager:
                 self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
 
+            if resolved:
+                if resolved.quality_badge and resolved.quality_badge != item.quality_badge:
+                    item.quality_badge = resolved.quality_badge
+                if resolved.source_type and resolved.source_type != item.source_type:
+                    item.source_type = resolved.source_type
+                if self.on_track_source_resolved:
+                    self.on_track_source_resolved(track_id, item.source_type, item.quality_badge)
+
             item.output_path = file_path or ""
             self._update_status(item, "Completed")
 
@@ -737,6 +746,14 @@ class DownloadQueueManager:
             self._update_status(item, "Stopped")
             self.archive.update_saved_track_status_by_spotify_id(track.id, "pending")
             return
+
+        if resolved_yt:
+            if resolved_yt.quality_badge and resolved_yt.quality_badge != item.quality_badge:
+                item.quality_badge = resolved_yt.quality_badge
+            if resolved_yt.source_type and resolved_yt.source_type != item.source_type:
+                item.source_type = resolved_yt.source_type
+            if self.on_track_source_resolved:
+                self.on_track_source_resolved(track.id, item.source_type, item.quality_badge)
 
         item.output_path = file_path or ""
         self._update_status(item, "Completed")

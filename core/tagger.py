@@ -202,7 +202,11 @@ class AudioTagger:
         audio["ALBUMARTIST"] = track.primary_artist
         audio["ALBUM"] = clean_album
         if track.release_date:
-            audio["DATE"] = str(track.release_date)
+            r_date_str = str(track.release_date).strip()
+            if r_date_str:
+                audio["DATE"] = r_date_str
+                if len(r_date_str) >= 4:
+                    audio["YEAR"] = r_date_str[:4]
         if getattr(track, "collection_type", "track") == "album" and getattr(track, "track_number", 0) > 0:
             audio["TRACKNUMBER"] = str(track.track_number)
             audio["DISCNUMBER"] = str(getattr(track, "disc_number", 1) or 1)
@@ -280,6 +284,10 @@ class AudioTagger:
         audio.add(TIT2(encoding=3, text=clean_title))
         audio.add(TPE1(encoding=3, text=track.artist_str))
         audio.add(TALB(encoding=3, text=clean_album))
+        if track.release_date:
+            r_date_str = str(track.release_date).strip()
+            if r_date_str:
+                audio.add(TDRC(encoding=3, text=r_date_str))
         if getattr(track, "collection_type", "track") == "album" and getattr(track, "track_number", 0) > 0:
             audio.add(TRCK(encoding=3, text=str(track.track_number)))
             audio.add(TPOS(encoding=3, text=str(getattr(track, "disc_number", 1) or 1)))
@@ -338,6 +346,10 @@ class AudioTagger:
         audio["\xa9ART"] = track.artist_str
         audio["aART"] = track.primary_artist
         audio["\xa9alb"] = clean_album
+        if track.release_date:
+            r_date_str = str(track.release_date).strip()
+            if r_date_str:
+                audio["\xa9day"] = r_date_str
         if getattr(track, "collection_type", "track") == "album" and getattr(track, "track_number", 0) > 0:
             audio["trkn"] = [(int(track.track_number), 0)]
             audio["disk"] = [(int(getattr(track, "disc_number", 1) or 1), 0)]
@@ -394,6 +406,12 @@ class AudioTagger:
         audio["ARTIST"] = track.artists
         audio["ALBUMARTIST"] = track.primary_artist
         audio["ALBUM"] = clean_album
+        if track.release_date:
+            r_date_str = str(track.release_date).strip()
+            if r_date_str:
+                audio["DATE"] = r_date_str
+                if len(r_date_str) >= 4:
+                    audio["YEAR"] = r_date_str[:4]
         if getattr(track, "collection_type", "track") == "album" and getattr(track, "track_number", 0) > 0:
             audio["TRACKNUMBER"] = str(track.track_number)
             audio["DISCNUMBER"] = str(getattr(track, "disc_number", 1) or 1)

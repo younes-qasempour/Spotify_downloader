@@ -6,6 +6,7 @@ import shutil
 from typing import Optional, List, Dict, Any, Callable, Tuple
 from pathlib import Path
 
+from core.config import config
 from core.spotify_client import TrackMetadata
 from core.utils import extract_embedded_cover, is_valid_audio_file, sanitize_filename
 
@@ -35,7 +36,6 @@ def resolve_collection_cover(folder_path: str, sample_file: str = "") -> str:
     folder_name = os.path.basename(os.path.normpath(folder_path))
     safe_name = sanitize_filename(folder_name, max_length=50)
 
-    from core.config import config
     cache_dir = config.get("download.cache_dir", "")
     if not cache_dir:
         cache_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache"))
@@ -1028,13 +1028,12 @@ class ArchiveManager:
         resolves them via multi-tier fallback (including Spotify oEmbed and LRCLIB),
         and safely embeds them into the audio containers without loss.
         """
-        from core.config import config
         from core.tagger import AudioTagger
         from core.lyrics import LyricsEngine
         from core.spotify_client import TrackMetadata
 
         if not root_dir:
-            root_dir = config.get("download.path", "downloads")
+            root_dir = config.get("download.output_dir", "downloads")
             if not os.path.isabs(root_dir):
                 root_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), root_dir))
 
@@ -1282,15 +1281,22 @@ class ArchiveManager:
 
                     # 2. Query already downloaded tracks map: spotify_id -> info
                     downloaded_map: Dict[str, Dict[str, str]] = {}
-                    rows = conn.execute("SELECT spotify_id, file_path, quality_badge, source_type FROM downloaded_tracks").fetchall()
-                    for r in rows:
-                        fpath = r["file_path"]
-                        if fpath and os.path.isfile(fpath):
-                            downloaded_map[r["spotify_id"]] = {
-                                "file_path": fpath,
-                                "quality_badge": r["quality_badge"] or "",
-                                "source_type": r["source_type"] or ""
-                            }
+                    track_ids = [t.id for t in tracks if t.id]
+                    if track_ids:
+                        chunk_size = 500
+                        for i in range(0, len(track_ids), chunk_size):
+                            chunk = track_ids[i:i + chunk_size]
+                            placeholders = ",".join("?" for _ in chunk)
+                            query = f"SELECT spotify_id, file_path, quality_badge, source_type FROM downloaded_tracks WHERE spotify_id IN ({placeholders})"
+                            rows = conn.execute(query, chunk).fetchall()
+                            for r in rows:
+                                fpath = r["file_path"]
+                                if fpath and os.path.isfile(fpath):
+                                    downloaded_map[r["spotify_id"]] = {
+                                        "file_path": fpath,
+                                        "quality_badge": r["quality_badge"] or "",
+                                        "source_type": r["source_type"] or ""
+                                    }
 
                     # 3. Batch insert/update tracks
                     track_rows = []

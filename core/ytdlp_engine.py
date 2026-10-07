@@ -79,6 +79,8 @@ class YtdlpEngine:
             opts["proxy"] = proxy
             logger.info(f"Using proxy for yt-dlp: {proxy}")
 
+        if not self.ffmpeg_path:
+            self.ffmpeg_path = ensure_ffmpeg()
         if self.ffmpeg_path:
             opts["ffmpeg_location"] = self.ffmpeg_path
 
@@ -600,6 +602,8 @@ class YtdlpEngine:
             outtmpl = output_template_without_ext + ".%(ext)s"
             node_path = shutil.which("node")
 
+            if not self.ffmpeg_path:
+                self.ffmpeg_path = ensure_ffmpeg()
             postprocessors = []
             if self.ffmpeg_path:
                 postprocessors.append({

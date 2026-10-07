@@ -1234,7 +1234,7 @@ class PlaylistsView(QWidget):
 
         # 2. Enqueue into DownloadQueueManager
         self.qm.enqueue(tracks_to_queue)
-        self.qm.start_all()
+        self.qm.start()
 
         if len(tracks_to_queue) < batch_size:
             msg_content = f"Queued all {len(tracks_to_queue)} remaining tracks in playlist (batch requested: {batch_size})."
@@ -1505,8 +1505,18 @@ class PlaylistsView(QWidget):
         elif action == act_copy_url:
             QApplication.clipboard().setText(f"https://open.spotify.com/track/{item.track.id}")
         elif act_reveal and action == act_reveal:
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-            subprocess.Popen(f'explorer /select,"{os.path.normpath(item.output_path)}"', creationflags=flags)
+            if item.output_path and os.path.exists(item.output_path):
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+                subprocess.Popen(["explorer", f"/select,{os.path.normpath(item.output_path)}"], creationflags=flags)
+            else:
+                InfoBar.warning(
+                    title="File Missing",
+                    content="The audio file was not found on disk.",
+                    orient=Qt.Orientation.Horizontal,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                    parent=self
+                )
         elif act_reset and action == act_reset:
             self.archive.update_saved_track_status(self.current_playlist_id, item.track.id, "pending")
             item.status = "Pending"
@@ -1540,6 +1550,7 @@ class PlaylistsView(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._update_api_banner()
         if self.stacked.currentIndex() == 1 and self.current_playlist_id:
             self._load_detail_tracks()
             self._refresh_detail_header()

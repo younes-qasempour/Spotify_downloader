@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict
 
@@ -67,6 +68,7 @@ class ConfigManager:
         if self._initialized:
             return
         self._initialized = True
+        self._lock = threading.RLock()
         if config_path:
             self.config_path = Path(config_path)
         else:
@@ -78,55 +80,59 @@ class ConfigManager:
 
     def load(self) -> None:
         """Load configuration from disk, creating default if not found."""
-        if self.config_path.exists():
-            try:
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    disk_data = json.load(f)
-                    self.data = self._deep_merge(DEFAULT_CONFIG, disk_data)
-                    logger.info(f"Loaded configuration from {self.config_path}")
-                    return
-            except Exception as e:
-                logger.error(f"Failed to read {self.config_path}, fallback to default: {e}")
-        
-        self.data = json.loads(json.dumps(DEFAULT_CONFIG))
-        self.save()
+        with self._lock:
+            if self.config_path.exists():
+                try:
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        disk_data = json.load(f)
+                        self.data = self._deep_merge(DEFAULT_CONFIG, disk_data)
+                        logger.info(f"Loaded configuration from {self.config_path}")
+                        return
+                except Exception as e:
+                    logger.error(f"Failed to read {self.config_path}, fallback to default: {e}")
+            
+            self.data = json.loads(json.dumps(DEFAULT_CONFIG))
+            self.save()
 
     def save(self) -> None:
         """Persist current configuration to disk."""
-        try:
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, indent=2, ensure_ascii=False)
-            logger.info(f"Configuration saved to {self.config_path}")
-        except Exception as e:
-            logger.error(f"Failed to save configuration: {e}")
+        with self._lock:
+            try:
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, indent=2, ensure_ascii=False)
+                logger.info(f"Configuration saved to {self.config_path}")
+            except Exception as e:
+                logger.error(f"Failed to save configuration: {e}")
 
     def get(self, key_path: str, default: Any = None) -> Any:
         """
         Get value using dot-separated path (e.g. 'musilon.session_cookie').
         """
         keys = key_path.split(".")
-        val = self.data
-        for k in keys:
-            if isinstance(val, dict) and k in val:
-                val = val[k]
-            else:
-                return default
-        return val
+        with self._lock:
+            val = self.data
+            for k in keys:
+                if isinstance(val, dict) and k in val:
+                    val = val[k]
+                else:
+                    return default
+            return val
 
     def set(self, key_path: str, value: Any, auto_save: bool = True) -> None:
         """
         Set value using dot-separated path (e.g. 'musilon.session_cookie', 'val').
         """
         keys = key_path.split(".")
-        d = self.data
-        for k in keys[:-1]:
-            if k not in d or not isinstance(d[k], dict):
-                d[k] = {}
-            d = d[k]
-        d[keys[-1]] = value
-        if auto_save:
-            self.save()
+        with self._lock:
+            d = self.data
+            for k in keys[:-1]:
+                if k not in d or not isinstance(d[k], dict):
+                    d[k] = {}
+                d = d[k]
+            d[keys[-1]] = value
+            if auto_save:
+                self.save()
 
     def _deep_merge(self, base: dict, override: dict) -> dict:
         result = json.loads(json.dumps(base))

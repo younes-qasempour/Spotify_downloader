@@ -238,9 +238,6 @@ class SpotifyClient:
             except Exception as e:
                 logger.warning(f"Could not initialize SpotifyOAuth: {e}")
                 self._oauth = None
-            except Exception as e:
-                logger.warning(f"Could not initialize SpotifyOAuth: {e}")
-                self._oauth = None
 
         # 1. Prefer User-Authorized client if cached token exists
         if self._oauth:
@@ -601,11 +598,20 @@ class SpotifyClient:
         if isinstance(r_date, str) and "T" in r_date:
             r_date = r_date.split("T")[0]
 
+        album_name = ""
+        album_data = entity.get("album")
+        if isinstance(album_data, dict):
+            album_name = album_data.get("name", "")
+        elif isinstance(album_data, str):
+            album_name = album_data
+        elif "albumName" in entity:
+            album_name = entity.get("albumName", "")
+
         return TrackMetadata(
             id=entity.get("id", ""),
             title=title,
             artists=artists if artists else ["Unknown Artist"],
-            album="",
+            album=album_name,
             release_date=str(r_date),
             duration_ms=entity.get("duration", 0),
             track_number=1,

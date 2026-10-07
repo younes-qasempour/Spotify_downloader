@@ -226,7 +226,7 @@ class MusilonEngine:
             logger.error(f"Error logging in to Musilon: {e}")
             return False, f"Login failed: {e}"
 
-    def test_connection(self) -> Tuple[bool, bool, str]:
+    def test_connection(self, auto_login: bool = True) -> Tuple[bool, bool, str]:
         """
         Tests connectivity and VIP authentication status with Musilon.
         Returns: (connected: bool, is_vip: bool, status_message: str)
@@ -238,11 +238,11 @@ class MusilonEngine:
             is_authenticated = bool(user_data)
 
             # If not authenticated but credentials exist, attempt auto-login
-            if not is_authenticated and self.username and self.password:
+            if not is_authenticated and auto_login and self.username and self.password:
                 logger.info("Musilon session unauthenticated; auto-authenticating with credentials...")
                 login_ok, _ = self.login_with_credentials(self.username, self.password)
                 if login_ok:
-                    return self.test_connection()
+                    return self.test_connection(auto_login=False)
 
             if is_authenticated:
                 user_name = user_data.get("display_name") or user_data.get("name") or user_data.get("email") or "VIP User"

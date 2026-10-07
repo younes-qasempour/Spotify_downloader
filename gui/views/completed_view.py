@@ -792,7 +792,7 @@ class CompletedView(QWidget):
         elif action == show_act:
             if item.output_path and os.path.isfile(item.output_path):
                 flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-                subprocess.Popen(f'explorer /select,"{os.path.normpath(item.output_path)}"', creationflags=flags)
+                subprocess.Popen(["explorer", f"/select,{os.path.normpath(item.output_path)}"], creationflags=flags)
             else:
                 InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == copy_act:
