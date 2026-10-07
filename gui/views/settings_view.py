@@ -186,9 +186,9 @@ class SettingsView(QScrollArea):
 
         guide_title = CaptionLabel("💡 How to copy session cookies from your browser:", guide_card)
         guide_title.setStyleSheet("font-weight: bold; color: #1DB954;")
-        guide_step1 = CaptionLabel("1. Open https://musilon.com in Chrome or Edge and log in to your VIP account.", guide_card)
-        guide_step2 = CaptionLabel("2. Press F12 (Developer Tools) → Application tab → Storage → Cookies → https://musilon.com.", guide_card)
-        guide_step3 = CaptionLabel("3. Copy the value of `wordpress_logged_in_*` (or right-click → copy all cookies) and click Paste above.", guide_card)
+        guide_step1 = CaptionLabel("1. Open https://open.musilon.com in Chrome or Edge and log in to your account.", guide_card)
+        guide_step2 = CaptionLabel("2. You can log in directly using your email and password above for automated session renewal.", guide_card)
+        guide_step3 = CaptionLabel("3. Or copy manually: Press F12 → Application → Cookies → copy `__Secure-next-auth.session-token`.", guide_card)
 
         g_layout.addWidget(guide_title)
         g_layout.addWidget(guide_step1)
@@ -848,8 +848,15 @@ class SettingsView(QScrollArea):
 
     def _update_status_badge(self):
         cookie = self.cookie_input.text().strip()
-        has_auth = "wordpress_logged_in" in cookie or "wordpress_sec" in cookie
-        self._set_status_badge(has_auth)
+        has_cookie_auth = (
+            "next-auth" in cookie
+            or "__Secure-next-auth" in cookie
+            or "wordpress_logged_in" in cookie
+            or "wordpress_sec" in cookie
+            or cookie.startswith("eyJ")
+        )
+        has_cred_auth = bool(self.user_input.text().strip() and self.pwd_input.text().strip())
+        self._set_status_badge(has_cookie_auth or has_cred_auth)
 
     def _set_status_badge(self, is_vip: bool, text: str = ""):
         if is_vip:

@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Callable, Tuple
 from urllib.parse import quote_plus, urljoin
 import requests
-from bs4 import BeautifulSoup
 
 from core.spotify_client import TrackMetadata
 from core.utils import clean_watermarks, format_bytes, is_valid_audio_file, detect_audio_header
@@ -18,7 +17,7 @@ logger = logging.getLogger("core.musilon")
 
 
 class MusilonVipError(Exception):
-    """Raised when Musilon returns a VIP paywall or warning page instead of an audio stream."""
+    """Raised when Musilon requires authentication or returns an unauthorized response."""
     pass
 
 
@@ -27,35 +26,49 @@ class MusilonRateLimitExceededError(MusilonVipError):
     pass
 
 
+class MusilonQualityUnavailableError(Exception):
+    """Raised when the requested quality tier is not available for a specific track (HTTP 409)."""
+    pass
+
+
 @dataclass
 class MusilonSource:
     track_id: str
     title: str
     artist: str
-    quality_tier: str  # "FLAC 16-bit", "FLAC 24-bit", "MP3 320kbps", "Stream 128k"
+    quality_tier: str  # e.g. "Musilon FLAC 16", "Musilon FLAC 24", "Musilon 320k", "Musilon Standard"
     download_url: str
-    file_extension: str  # "flac" or "mp3"
+    file_extension: str  # "flac" or "ogg"
     station_url: str = ""
+    isrc: str = ""
+    quality_param: str = "lossless"  # "hires", "lossless", "high", "standard"
 
 
 class MusilonEngine:
     """
-    VIP / Premium Scraper and Downloader for Musilon (https://musilon.com/).
-    Implements:
-    - Persistent authenticated session with auto-reauth on VIP challenge
-    - ArvanCloud challenge bypass
-    - Multi-vector catalog search with duration validation
-    - Quality tier resolution (FLAC 16-bit > FLAC 24-bit > MP3 320k)
-    - Rate-limit shield with 1.5s - 3.0s jitter and exponential backoff
-    - Chunked streaming downloader with progress callbacks & stream verification
-    - Aggressive multi-attempt retry with session renewal before fallback
+    VIP / Premium Engine for Musilon (https://open.musilon.com / https://musilon.com).
+    Supports:
+    - Direct NextAuth credentials login & persistent session management
+    - REST catalog search with smart anti-false-positive scoring & ISRC validation
+    - Multi-tier quality resolution (FLAC 24-bit Hi-Res > FLAC 16-bit Lossless > OGG 320k > OGG 192k)
+    - Automatic quality step-down fallback on 409 DOWNLOAD_QUALITY_UNAVAILABLE
+    - Chunked streaming downloader with magic bytes verification & integrity validation
+    - Rate-limit shield with sequential jitter and exponential backoff
+    - Auto-reauthentication on session expiration
     """
 
-    BASE_URL = "https://musilon.com"
+    BASE_URL = "https://open.musilon.com"
     USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     )
+
+    UNWANTED_VERSION_MODIFIERS = [
+        "instrumental", "karaoke", "acoustic", "workout mix", "workout",
+        "remix", "live", "cover", "slowed", "speed up", "sped up",
+        "reverb", "orchestral", "piano version", "tribute", "parody",
+        "radio edit", "extended mix", "club mix", "dub mix"
+    ]
 
     def __init__(self, session_cookie: str = "", username: str = "", password: str = "", enabled: bool = True):
         from core.config import config
@@ -67,17 +80,12 @@ class MusilonEngine:
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": self.USER_AGENT,
-            "Referer": "https://musilon.com/",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Referer": f"{self.BASE_URL}/",
+            "Accept": "application/json, text/plain, */*",
             "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
             "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1",
         })
 
         self._last_request_time = 0.0
@@ -98,7 +106,6 @@ class MusilonEngine:
         if clean.lower().startswith("cookie:"):
             clean = clean[7:].strip()
 
-        # Parse key=value; key2=val2
         parts = clean.split(";")
         found_pair = False
         for part in parts:
@@ -107,17 +114,24 @@ class MusilonEngine:
                 k, v = part.split("=", 1)
                 k = k.strip().strip('"').strip("'")
                 v = v.strip().strip('"').strip("'")
+                self.session.cookies.set(k, v, domain="open.musilon.com")
                 self.session.cookies.set(k, v, domain="musilon.com")
                 found_pair = True
 
         if not found_pair and clean:
-            # User might have pasted only the raw value of the wordpress_logged_in cookie
-            self.session.cookies.set("wordpress_logged_in", clean, domain="musilon.com")
+            # User might have pasted only the raw value of the next-auth session token
+            self.session.cookies.set("__Secure-next-auth.session-token", clean, domain="open.musilon.com")
+            self.session.cookies.set("next-auth.session-token", clean, domain="open.musilon.com")
 
+    # -------------------------------------------------------------------------
+    # Authentication & Session Verification
+    # -------------------------------------------------------------------------
     def login_with_credentials(self, username: str = "", password: str = "") -> Tuple[bool, str]:
         """
-        Attempts direct login to Musilon using username/password via Digits 2-step AJAX.
-        Uses a clean session state to avoid reload:true rejection and solves ArvanCloud challenges.
+        Attempts direct login to Musilon using NextAuth Directus Credentials flow.
+        1. Queries /api/auth/csrf for CSRF token
+        2. Submits credentials to /api/auth/callback/credentials
+        3. Verifies session via /api/auth/session
         Returns: (success: bool, message: str)
         """
         user = (username or self.username).strip()
@@ -129,139 +143,139 @@ class MusilonEngine:
         try:
             self._rate_limit_shield()
 
-            # Create an unauthenticated login session to prevent Digits {"reload": true} rejection
             login_session = requests.Session()
             login_session.headers.update({
                 "User-Agent": self.USER_AGENT,
-                "Referer": f"{self.BASE_URL}/?login=true",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8",
+                "Referer": f"{self.BASE_URL}/",
+                "Accept": "application/json, text/plain, */*",
                 "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
-                "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
             })
 
-            # Copy existing Cloud/Arvan challenge cookies if present
+            # Copy challenge cookies if present
             for c in self.session.cookies:
                 if "__arcsjs" in c.name or "cf_" in c.name:
+                    login_session.cookies.set(c.name, c.value, domain="open.musilon.com")
                     login_session.cookies.set(c.name, c.value, domain="musilon.com")
 
-            # 1. Fetch login page
-            r_page = login_session.get(f"{self.BASE_URL}/?login=true", timeout=15)
+            # 1. Fetch CSRF token
+            csrf_resp = login_session.get(f"{self.BASE_URL}/api/auth/csrf", timeout=12)
+            if csrf_resp.status_code != 200:
+                return False, f"Could not obtain CSRF token from Musilon (HTTP {csrf_resp.status_code})."
 
-            # Check for ArvanCloud challenge
-            if r_page.status_code == 200 and "__arcsjs" in r_page.text and "<script" in r_page.text:
-                logger.info("Solving ArvanCloud challenge on login page...")
-                if self._solve_arvancloud_challenge(r_page.text):
-                    for c in self.session.cookies:
-                        if "__arcsjs" in c.name:
-                            login_session.cookies.set(c.name, c.value, domain="musilon.com")
-                    r_page = login_session.get(f"{self.BASE_URL}/?login=true", timeout=15)
+            csrf_token = csrf_resp.json().get("csrfToken", "")
+            if not csrf_token:
+                return False, "Musilon did not return a valid CSRF token."
 
-            soup = BeautifulSoup(r_page.text, "html.parser")
-            login_form = soup.find("form", class_="digloginpage")
-            if not login_form:
-                return False, "Could not find Digits login form on Musilon."
-
-            form_data = {}
-            for inp in login_form.find_all("input"):
-                n = inp.get("name")
-                if n:
-                    form_data[n] = inp.get("value", "")
-
-            form_data["action_type"] = "email"
-            form_data["digits_email"] = user
-            if "digits_phone" in form_data:
-                del form_data["digits_phone"]
-
-            ajax_headers = {
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer": f"{self.BASE_URL}/?login=true"
+            # 2. Submit credentials
+            self._rate_limit_shield()
+            data = {
+                "csrfToken": csrf_token,
+                "email": user,
+                "password": pwd,
+                "json": "true"
             }
-
-            # Step 1: Submit email to request password step
-            self._rate_limit_shield()
-            r_step1 = login_session.post(
-                f"{self.BASE_URL}/wp-admin/admin-ajax.php",
-                data=form_data,
-                headers=ajax_headers,
+            login_resp = login_session.post(
+                f"{self.BASE_URL}/api/auth/callback/credentials",
+                data=data,
                 timeout=15
             )
-            step1_data = r_step1.json() if r_step1.status_code == 200 else {}
-            if not step1_data.get("success"):
-                msg = step1_data.get("data", {}).get("message", "Step 1 verification failed.")
-                return False, f"Login failed: {msg}"
 
-            # Step 2: Submit password
-            form_data["digits_step_1_type"] = "password"
-            form_data["digits_step_1_value"] = pwd
-            form_data["password"] = pwd
-
-            self._rate_limit_shield()
-            r_step2 = login_session.post(
-                f"{self.BASE_URL}/wp-admin/admin-ajax.php",
-                data=form_data,
-                headers=ajax_headers,
-                timeout=15
-            )
-            step2_data = r_step2.json() if r_step2.status_code == 200 else {}
-            if step2_data.get("success"):
-                logger.info("Successfully authenticated with Musilon Digits VIP.")
-                self.username = user
-                self.password = pwd
-
-                # Transfer all authenticated cookies to self.session
-                for k, v in login_session.cookies.items():
-                    self.session.cookies.set(k, v, domain="musilon.com")
-
-                # Save session cookies to config if possible
+            if login_resp.status_code not in (200, 302):
+                err_msg = "Invalid username or password."
                 try:
-                    from core.config import config
-                    cookie_dict = self.session.cookies.get_dict()
-                    cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
-                    config.set("musilon.session_cookie", cookie_str)
-                    config.set("musilon.username", user)
-                    config.set("musilon.password", pwd)
-                    config.set("musilon.enabled", True)
-                except Exception as e:
-                    logger.debug(f"Could not persist session cookies to config: {e}")
+                    res_json = login_resp.json()
+                    if "error" in res_json:
+                        err_msg = res_json["error"]
+                except Exception:
+                    pass
+                return False, f"Login failed: {err_msg}"
 
-                return True, "Successfully logged in to Musilon VIP."
-            else:
-                msg = step2_data.get("data", {}).get("message", "Invalid credentials or password.")
-                return False, f"Login failed: {msg}"
+            # 3. Verify session
+            sess_resp = login_session.get(f"{self.BASE_URL}/api/auth/session", timeout=10)
+            user_info = sess_resp.json().get("user") if sess_resp.status_code == 200 else None
+
+            if not user_info:
+                return False, "Login failed: No active session created."
+
+            display_name = user_info.get("display_name") or user_info.get("name") or user_info.get("first_name") or user
+
+            # Transfer authenticated cookies to self.session
+            for k, v in login_session.cookies.items():
+                self.session.cookies.set(k, v, domain="open.musilon.com")
+                self.session.cookies.set(k, v, domain="musilon.com")
+
+            self.username = user
+            self.password = pwd
+
+            # Persist cookies to config
+            try:
+                from core.config import config
+                cookie_dict = self.session.cookies.get_dict()
+                cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+                config.set("musilon.session_cookie", cookie_str)
+                config.set("musilon.username", user)
+                config.set("musilon.password", pwd)
+                config.set("musilon.enabled", True)
+            except Exception as e:
+                logger.debug(f"Could not persist session cookies to config: {e}")
+
+            logger.info(f"Successfully authenticated with Musilon account: {display_name} ({user})")
+            return True, f"Successfully logged in as {display_name}."
 
         except Exception as e:
             logger.error(f"Error logging in to Musilon: {e}")
-            return False, f"Login failed: {e}."
+            return False, f"Login failed: {e}"
 
     def test_connection(self) -> Tuple[bool, bool, str]:
         """
-        Tests connectivity and VIP authentication status.
-        Verifies actual logged-in status with the server rather than just cookie presence.
-        Auto-authenticates with credentials if VIP session is missing or expired.
-        Returns: (connected: bool, is_vip_authenticated: bool, status_message: str)
+        Tests connectivity and VIP authentication status with Musilon.
+        Returns: (connected: bool, is_vip: bool, status_message: str)
         """
         try:
-            r = self._request("GET", f"{self.BASE_URL}/", timeout=10, max_retries=2)
+            r = self._request("GET", f"{self.BASE_URL}/api/auth/session", timeout=10, max_retries=2)
             connected = r.status_code == 200
+            user_data = r.json().get("user") if connected else None
+            is_authenticated = bool(user_data)
 
-            # Verified VIP only if server indicates an authenticated user session
-            is_vip = "action=logout" in r.text or "wp-login.php?action=logout" in r.text
-
-            # If not verified VIP but credentials are present, auto-authenticate
-            if not is_vip and self.username and self.password:
-                logger.info("Musilon VIP session missing or expired; auto-authenticating with credentials...")
-                login_ok, login_msg = self.login_with_credentials(self.username, self.password)
+            # If not authenticated but credentials exist, attempt auto-login
+            if not is_authenticated and self.username and self.password:
+                logger.info("Musilon session unauthenticated; auto-authenticating with credentials...")
+                login_ok, _ = self.login_with_credentials(self.username, self.password)
                 if login_ok:
-                    return True, True, "Connected! Active Musilon VIP session verified."
+                    return self.test_connection()
 
-            if is_vip:
-                return True, True, "Connected! Active Musilon VIP session verified."
+            if is_authenticated:
+                user_name = user_data.get("display_name") or user_data.get("name") or user_data.get("email") or "VIP User"
+                
+                # Check subscription status and download budget
+                is_premium = True
+                try:
+                    r_sub = self._request("GET", f"{self.BASE_URL}/api/subscription/me", timeout=8)
+                    if r_sub.status_code == 200:
+                        is_premium = r_sub.json().get("data", {}).get("isPremium", True)
+                except Exception:
+                    pass
+
+                budget_str = ""
+                try:
+                    r_budget = self._request("GET", f"{self.BASE_URL}/api/media/download-budget", timeout=8)
+                    if r_budget.status_code == 200:
+                        b_data = r_budget.json()
+                        p_rem = b_data.get("premium", {}).get("remaining", 0)
+                        p_lim = b_data.get("premium", {}).get("limit", 0)
+                        s_rem = b_data.get("standard", {}).get("remaining", 0)
+                        s_lim = b_data.get("standard", {}).get("limit", 0)
+                        budget_str = f" | Daily Budget: {p_rem}/{p_lim} Lossless, {s_rem}/{s_lim} Standard"
+                except Exception:
+                    pass
+
+                vip_text = "VIP Active" if is_premium else "Free Account"
+                return True, is_premium, f"Connected! {vip_text} ({user_name}){budget_str}"
+
             elif connected:
-                return True, False, "Connected to Musilon (Guest mode). Log in or configure credentials to enable direct FLAC/320k."
+                return True, False, "Connected to Musilon (Guest mode). Log in with account credentials in Settings to enable downloads."
             else:
-                return False, False, f"HTTP status {r.status_code}"
+                return False, False, f"Musilon returned HTTP {r.status_code}"
 
         except Exception as e:
             return False, False, f"Musilon connection failed: {e}"
@@ -269,7 +283,7 @@ class MusilonEngine:
     def ensure_vip_session(self, force: bool = False) -> bool:
         """
         Ensures the engine has a verified active VIP session.
-        If force is True or session is expired, re-authenticates with username/password.
+        If force is True or session is inactive, re-authenticates with username/password.
         """
         if not self.username or not self.password:
             from core.config import config
@@ -277,37 +291,72 @@ class MusilonEngine:
             self.password = config.get("musilon.password", "")
 
         if not self.username or not self.password:
-            logger.warning("Musilon credentials not configured; cannot auto-authenticate VIP session.")
+            logger.warning("Musilon credentials not configured; cannot auto-authenticate.")
             return False
 
         if force:
             logger.info("Forcing fresh Musilon VIP authentication with credentials...")
-            ok, msg = self.login_with_credentials(self.username, self.password)
+            ok, _ = self.login_with_credentials(self.username, self.password)
             return ok
 
-        # Check if currently active
-        connected, is_vip, _ = self.test_connection()
-        if is_vip:
-            return True
+        try:
+            r = self._request("GET", f"{self.BASE_URL}/api/auth/session", timeout=8, max_retries=1)
+            if r.status_code == 200:
+                data = r.json()
+                user = data.get("user") or {}
+                if user and (user.get("email") or user.get("name") or user.get("display_name")) and not data.get("error"):
+                    return True
+        except Exception:
+            pass
 
-        logger.info("Musilon session inactive; authenticating with credentials...")
-        ok, msg = self.login_with_credentials(self.username, self.password)
+        logger.info("Musilon session inactive or expired; authenticating with credentials...")
+        ok, _ = self.login_with_credentials(self.username, self.password)
         return ok
+
+    def get_download_budget(self) -> Optional[Dict[str, Any]]:
+        """
+        Queries /api/media/download-budget to retrieve current daily download quota.
+        Returns dict with 'premium' and 'standard' usage and limits, or None if unavailable.
+        """
+        try:
+            r = self._request("GET", f"{self.BASE_URL}/api/media/download-budget", timeout=8)
+            if r.status_code == 200:
+                return r.json()
+        except Exception as e:
+            logger.debug(f"Could not retrieve download budget: {e}")
+        return None
+
+    def is_budget_exhausted(self, quality_tier: str = "lossless") -> bool:
+        """
+        Checks whether the daily download budget for the requested tier is exhausted.
+        """
+        budget = self.get_download_budget()
+        if not budget:
+            return False
+
+        is_lossless = any(q in quality_tier.lower() for q in ("hires", "lossless", "flac"))
+        if is_lossless:
+            p_rem = budget.get("premium", {}).get("remaining", 1)
+            return p_rem <= 0
+        else:
+            s_rem = budget.get("standard", {}).get("remaining", 1)
+            return s_rem <= 0
+
 
     # -------------------------------------------------------------------------
     # Rate-Limit Shield (Sequential Jitter & Backoff)
     # -------------------------------------------------------------------------
     def _rate_limit_shield(self):
-        """Enforces a strict 1.0s to 2.0s jitter between consecutive requests."""
+        """Enforces a strict 0.5s to 1.5s jitter between consecutive requests."""
         now = time.time()
         elapsed = now - self._last_request_time
-        jitter = random.uniform(1.0, 2.0)
+        jitter = random.uniform(0.5, 1.2)
         if elapsed < jitter:
             time.sleep(jitter - elapsed)
         self._last_request_time = time.time()
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """Wrapper around requests with challenge handling and fast fallback."""
+        """Wrapper around requests with challenge handling and fast backoff."""
         allow_404 = kwargs.pop("allow_404", False)
         max_retries = kwargs.pop("max_retries", 3)
         timeout = kwargs.pop("timeout", 15)
@@ -317,24 +366,22 @@ class MusilonEngine:
             self._rate_limit_shield()
             try:
                 resp = self.session.request(method, url, timeout=timeout, **kwargs)
-                
+
                 # Check for ArvanCloud challenge
                 if resp.status_code == 200 and "__arcsjs" in resp.text and "<script" in resp.text:
                     logger.info("ArvanCloud challenge detected. Solving challenge...")
                     if self._solve_arvancloud_challenge(resp.text):
-                        # Retry original request after setting challenge cookies
                         return self._request(method, url, allow_404=allow_404, max_retries=2, timeout=timeout, **kwargs)
 
                 if resp.status_code == 404 and allow_404:
                     return resp
 
-                if resp.status_code in (429, 403):
+                if resp.status_code in (429, 503):
                     logger.warning(f"Musilon rate-limited (HTTP {resp.status_code}). Backing off for {backoff:.1f}s...")
                     time.sleep(backoff)
                     backoff *= 1.5
                     continue
 
-                resp.raise_for_status()
                 return resp
 
             except (requests.RequestException, Exception) as e:
@@ -347,7 +394,7 @@ class MusilonEngine:
         raise RuntimeError(f"Max retries reached for {url}")
 
     def _solve_arvancloud_challenge(self, html_content: str) -> bool:
-        """Solves ArvanCloud JavaScript challenge using Node.js."""
+        """Solves ArvanCloud JavaScript challenge using headless Node.js."""
         try:
             scripts = re.findall(r'<script[^>]*>(.*?)</script>', html_content, re.DOTALL)
             challenge_script = next((s for s in scripts if '__arcsjs' in s), None)
@@ -374,6 +421,7 @@ class MusilonEngine:
             if proc.returncode == 0 and proc.stdout.strip():
                 cookies = json.loads(proc.stdout.strip())
                 for k, v in cookies.items():
+                    self.session.cookies.set(k, v, domain="open.musilon.com")
                     self.session.cookies.set(k, v, domain="musilon.com")
                 logger.info("Successfully solved and injected ArvanCloud challenge cookies.")
                 return True
@@ -382,177 +430,113 @@ class MusilonEngine:
         return False
 
     # -------------------------------------------------------------------------
-    # Multi-Source Search & Matching Logic
+    # Catalog Search & Context
     # -------------------------------------------------------------------------
-    UNWANTED_VERSION_MODIFIERS = [
-        "instrumental", "karaoke", "acoustic", "workout mix", "workout",
-        "remix", "live", "cover", "slowed", "speed up", "sped up",
-        "reverb", "orchestral", "piano version", "tribute", "parody",
-        "radio edit", "extended mix", "club mix", "dub mix"
-    ]
-
-    def _search_play_rest(self, query: str) -> List[Dict[str, Any]]:
-        """Queries internal /wp-json/play/search endpoint returning structured JSON."""
-        try:
-            url = f"{self.BASE_URL}/wp-json/play/search?search={quote_plus(query)}"
-            r = self._request("GET", url, timeout=15, allow_404=True)
-            if r.status_code != 200:
-                return []
-            results = []
-            for it in r.json():
-                u = it.get("url", "")
-                if "/station/" in u:
-                    results.append({
-                        "id": it.get("id"),
-                        "title": clean_watermarks(it.get("title", "")),
-                        "artist": clean_watermarks(it.get("author", "")),
-                        "url": u,
-                        "method": "play_rest"
-                    })
-            return results
-        except Exception as e:
-            logger.debug(f"play_rest search failed for '{query}': {e}")
+    def _search_catalog(self, query: str) -> List[Dict[str, Any]]:
+        """
+        Queries Musilon REST catalog /api/search?q={query}.
+        Returns structured track candidate objects.
+        """
+        if not query or not query.strip():
             return []
 
-    def _search_station_wp(self, query: str) -> List[Dict[str, Any]]:
-        """Queries WordPress REST API /wp-json/wp/v2/station endpoint."""
         try:
-            url = f"{self.BASE_URL}/wp-json/wp/v2/station?search={quote_plus(query)}&per_page=30"
-            r = self._request("GET", url, timeout=15, allow_404=True)
-            if r.status_code != 200:
+            url = f"{self.BASE_URL}/api/search?q={quote_plus(query.strip())}"
+            resp = self._request("GET", url, timeout=12, allow_404=True)
+            if resp.status_code != 200:
                 return []
-            results = []
-            for it in r.json():
-                u = it.get("link", "")
-                if "/station/" in u:
-                    tit = it.get("title", {}).get("rendered", "")
-                    results.append({
-                        "id": str(it.get("id")),
-                        "title": clean_watermarks(tit),
-                        "artist": "",
-                        "url": u,
-                        "method": "station_wp"
-                    })
-            return results
-        except Exception as e:
-            logger.debug(f"station_wp search failed for '{query}': {e}")
-            return []
 
-    def _search_artist_taxonomy(self, artist_name: str) -> List[Dict[str, Any]]:
-        """Queries artist taxonomy term and retrieves all stations by artist."""
-        try:
-            clean_art = re.sub(r'^(?:the|a)\s+', '', artist_name, flags=re.IGNORECASE).strip()
-            names_to_try = [clean_art]
-            if artist_name.strip().lower() != clean_art.lower():
-                names_to_try.append(artist_name.strip())
+            data = resp.json()
+            raw_tracks = list(data.get("tracks", []))
 
-            results = []
+            # Include any tracks returned in the mixed/featured category
+            for item in data.get("mixed", []):
+                if isinstance(item, dict) and item.get("type") == "track":
+                    raw_tracks.append(item)
+
+            candidates: List[Dict[str, Any]] = []
             seen_ids = set()
-            for art_query in names_to_try:
-                url = f"{self.BASE_URL}/wp-json/wp/v2/artist?search={quote_plus(art_query)}"
-                r = self._request("GET", url, timeout=15, allow_404=True)
-                if r.status_code != 200:
+
+            for t in raw_tracks:
+                t_id = t.get("id", "")
+                if not t_id or t_id in seen_ids:
                     continue
-                terms = r.json()
-                if not isinstance(terms, list):
-                    continue
-                for t in terms:
-                    term_id = t.get("id")
-                    term_name = t.get("name", "")
-                    count = t.get("count", 0)
-                    if count > 0 and (art_query.lower() in term_name.lower() or term_name.lower() in art_query.lower() or clean_art.lower() in term_name.lower()):
-                        st_url = f"{self.BASE_URL}/wp-json/wp/v2/station?artist={term_id}&per_page=100"
-                        r_st = self._request("GET", st_url, timeout=15, allow_404=True)
-                        if r_st.status_code == 200:
-                            for it in r_st.json():
-                                it_id = str(it.get("id"))
-                                if it_id in seen_ids:
-                                    continue
-                                seen_ids.add(it_id)
-                                u = it.get("link", "")
-                                tit = it.get("title", {}).get("rendered", "")
-                                results.append({
-                                    "id": it_id,
-                                    "title": clean_watermarks(tit),
-                                    "artist": term_name,
-                                    "url": u,
-                                    "method": "artist_taxonomy"
-                                })
-            return results
+                seen_ids.add(t_id)
+
+                artists = t.get("artistNames", [])
+                if not artists and t.get("artistCredits"):
+                    artists = [c.get("name") for c in t.get("artistCredits", []) if c.get("name")]
+
+                candidates.append({
+                    "id": t_id,
+                    "title": clean_watermarks(t.get("name", "")),
+                    "artist": ", ".join(artists) if artists else "",
+                    "artists": artists,
+                    "album": clean_watermarks(t.get("albumName", "")),
+                    "isrc": (t.get("isrc") or "").strip(),
+                    "lossless": t.get("lossless"),
+                    "hires": t.get("hires"),
+                    "popularity": t.get("popularity", 0.0),
+                })
+
+            return candidates
+
         except Exception as e:
-            logger.debug(f"artist_taxonomy search failed for '{artist_name}': {e}")
+            logger.debug(f"Musilon catalog search failed for '{query}': {e}")
             return []
 
-    def _search(self, query: str) -> List[Dict[str, Any]]:
-        """Queries Musilon HTML search page."""
-        search_url = f"{self.BASE_URL}/search/{quote_plus(query)}/"
-        resp = self._request("GET", search_url, allow_404=True)
-        if resp.status_code != 200:
-            return []
-        soup = BeautifulSoup(resp.text, "html.parser")
-        return self._parse_search_soup(soup)
+    def _get_track_context(self, track_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves detailed quality metadata for a track from /api/tracks/{id}/context.
+        """
+        if not track_id:
+            return None
+        try:
+            url = f"{self.BASE_URL}/api/tracks/{track_id}/context"
+            resp = self._request("GET", url, timeout=8, allow_404=True)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("track")
+        except Exception as e:
+            logger.debug(f"Failed to fetch context for track {track_id}: {e}")
+        return None
 
-    def _parse_search_soup(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
-        candidates: List[Dict[str, Any]] = []
-        seen = set()
-
-        articles = soup.find_all("article")
-        for art in articles:
-            data_id = art.get("data-play-id") or art.get("id", "").replace("post-", "")
-            title_tag = art.find(class_=re.compile(r'entry-title|item-title|station-title'))
-            link_tag = art.find("a", href=True)
-            if link_tag and title_tag:
-                url = urljoin(self.BASE_URL, link_tag["href"])
-                if url not in seen and "/station/" in url:
-                    seen.add(url)
-                    title = clean_watermarks(title_tag.get_text(strip=True))
-                    candidates.append({
-                        "id": data_id,
-                        "title": title,
-                        "artist": "",
-                        "url": url,
-                        "method": "html_search"
-                    })
-
-        return candidates
-
+    # -------------------------------------------------------------------------
+    # Scoring & Matching Logic
+    # -------------------------------------------------------------------------
     def _score_candidate(self, track: TrackMetadata, cand: Dict[str, Any]) -> float:
         """
-        Intelligently scores a Musilon candidate against target track metadata:
-        - Strict Artist Validation: rejects candidates with foreign artists (-999.0)
-        - Title Closeness: tokens and exact string matching
-        - Version Modifiers: penalizes remixes/live/acoustic if not requested
-        - Bonus Track alignment
+        Intelligently scores a Musilon candidate against target track metadata.
+        - Exact ISRC match gives an automatic 999.0 score.
+        - Strict Artist Validation: rejects foreign artists (-999.0).
+        - Title Closeness: tokens and exact string matching.
+        - Version Modifiers: penalizes unrequested remixes/live/acoustic/covers.
         """
+        cand_isrc = (cand.get("isrc") or "").strip().upper()
+        target_isrc = (track.isrc or "").strip().upper()
+
+        # 1. Exact ISRC match = Instant 100% verified match
+        if target_isrc and cand_isrc and target_isrc == cand_isrc:
+            return 999.0
+
         cand_title = cand.get("title", "").lower()
         cand_author = cand.get("artist", "").lower()
-        cand_url = cand.get("url", "").lower()
 
         target_title = clean_watermarks(track.title).lower()
-        target_artist = track.primary_artist.lower()
-        clean_target_art = re.sub(r'^(?:the|a)\s+', '', target_artist).strip()
-
-        # Extract artist from URL slug: e.g. /station/daniel-caesar/who-knows-2/
-        url_artist_slug = ""
-        m = re.search(r'/station/([^/]+)/([^/]+)/?', cand_url)
-        if m:
-            url_artist_slug = m.group(1).replace("-", " ")
-
-        # 1. Strict Artist Validation (Anti-False-Positive Filter)
-        art_match = False
         target_artists = [track.primary_artist] + [a for a in (track.artists or []) if a != track.primary_artist]
+
+        # 2. Artist Validation
         target_art_tokens = []
         for a in target_artists:
             clean_a = re.sub(r'^(?:the|a)\s+', '', a.lower(), flags=re.IGNORECASE).strip()
             target_art_tokens.extend([w for w in re.sub(r'[^\w\s]', ' ', clean_a).split() if len(w) > 1])
 
-        check_authors = []
+        cand_artists = [a.lower() for a in cand.get("artists", [])]
         if cand_author:
-            check_authors.append(cand_author)
-        if url_artist_slug:
-            check_authors.append(url_artist_slug)
+            cand_artists.append(cand_author)
 
-        for ca in check_authors:
+        art_match = False
+        for ca in cand_artists:
             ca_clean = re.sub(r'[^\w\s]', ' ', ca)
             ca_tokens = set(ca_clean.split())
             if any(tok in ca_tokens for tok in target_art_tokens):
@@ -562,59 +546,32 @@ class MusilonEngine:
                 art_match = True
                 break
 
-        # If author/slug information is present but completely unrelated to target artist:
-        if check_authors and not art_match:
+        if cand_artists and not art_match:
             return -999.0
-
-        # If url_artist_slug is present, it represents the primary station artist on Musilon.
-        # If the station's host artist slug does not match any target artist, this station belongs
-        # to a different lead artist (e.g. /station/offset/ when target is Drowning Pool).
-        # Reject stations hosted under foreign artists unless it's a generic compilation/various artists.
-        if url_artist_slug and url_artist_slug not in ("va", "various artists"):
-            slug_clean = re.sub(r'[^\w\s]', ' ', url_artist_slug)
-            slug_tokens = set(slug_clean.split())
-            slug_matched = any(tok in slug_tokens for tok in target_art_tokens) or any(
-                clean_a in url_artist_slug or url_artist_slug in clean_a
-                for clean_a in [re.sub(r'^(?:the|a)\s+', '', a.lower()).strip() for a in target_artists]
-            )
-            if not slug_matched:
-                return -999.0
 
         score = 50.0 if art_match else 0.0
 
-        # Exact artist match vs. extraneous artist penalty
+        # Exact artist match bonus
         if cand_author and art_match:
-            # Strip connector words
             author_clean = re.sub(r'\b(?:and|feat|ft|featuring|with|prod|the|a)\b', ' ', cand_author, flags=re.IGNORECASE)
             author_tokens = set(w for w in re.sub(r'[^\w\s]', ' ', author_clean).split() if len(w) > 1)
             target_set = set(target_art_tokens)
-
-            # Check if all author tokens match target tokens (exact artist match)
             if author_tokens and author_tokens.issubset(target_set):
-                score += 35.0  # Exact artist match bonus
+                score += 35.0
             else:
-                # Find extra tokens that don't belong to target artists
                 extra_tokens = author_tokens - target_set
-                # Check if these extra tokens are in target title (e.g. "feat. Someone" in title)
                 title_clean = re.sub(r'[^\w\s]', ' ', target_title)
                 title_words = set(title_clean.split())
                 unrequested_extra = [w for w in extra_tokens if w not in title_words]
                 if unrequested_extra:
-                    score -= 45.0  # Penalty for unrequested collaborator / cover singer
-        elif url_artist_slug and art_match:
-            slug_clean = re.sub(r'\b(?:and|the|a)\b', ' ', url_artist_slug, flags=re.IGNORECASE)
-            slug_tokens = set(w for w in slug_clean.split() if len(w) > 1)
-            if slug_tokens and slug_tokens.issubset(set(target_art_tokens)):
-                score += 20.0
+                    score -= 45.0
 
-        # 2. Title Matching
-        # Strip featuring/with/prod clauses
+        # 3. Title Matching
         clean_feat_title = re.sub(r'[\(\[]\s*(?:feat\.?|ft\.?|with|prod\.?|featuring)\b[^\]\)]*[\)\]]', '', target_title, flags=re.IGNORECASE).strip()
         clean_feat_title = re.sub(r'[\-\–\—]\s*(?:feat\.?|ft\.?|with|prod\.?|featuring)\b.*$', '', clean_feat_title, flags=re.IGNORECASE).strip()
         base_title_clean = re.sub(r'[\(\[\{][^\)\]\}]*[\)\]\}]', '', clean_feat_title).strip()
 
         title_variants = [clean_feat_title, base_title_clean, target_title]
-        # Extract parenthesized subtitles (e.g. "Heroes & Villains" from "Superhero (Heroes & Villains)")
         for pm in re.finditer(r'[\(\[]([^\)\]]+)[\)\]]', clean_feat_title):
             sub = pm.group(1).strip()
             if sub and len(sub) > 2 and sub not in title_variants:
@@ -656,58 +613,42 @@ class MusilonEngine:
             if v_score > best_title_score:
                 best_title_score = v_score
 
-        # Strict Title Requirement: A candidate MUST match the requested title.
-        # This prevents returning a completely different song by the same artist.
         if best_title_score < 40.0:
             return -999.0
 
         score += best_title_score
 
-        # 3. Version Modifier Penalties & Bonuses
+        # 4. Version Modifier Penalties & Bonuses
         for mod in self.UNWANTED_VERSION_MODIFIERS:
-            has_in_cand = (mod in cand_title) or (mod in cand_url) or (cand_author and mod in cand_author)
+            has_in_cand = (mod in cand_title) or (cand_author and mod in cand_author)
             has_in_target = (mod in target_title)
             if has_in_cand and not has_in_target:
                 if mod in ("cover", "tribute", "karaoke", "like a version", "parody"):
-                    score -= 90.0  # Extra heavy penalty for covers/tributes
+                    score -= 90.0
                 else:
                     score -= 70.0
             elif has_in_cand and has_in_target:
                 score += 30.0
 
-        # Bonus Track specific alignment
         if "bonus track" in target_title and "bonus track" in cand_title:
             score += 40.0
 
         return score
 
-    def _find_best_candidate(self, track: TrackMetadata, candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        if not candidates:
-            return None
-
-        scored = [(self._score_candidate(track, c), c) for c in candidates]
-        scored.sort(key=lambda x: x[0], reverse=True)
-
-        best_score, best_cand = scored[0]
-        if best_score >= 70.0:
-            return best_cand
-
-        return None
-
+    # -------------------------------------------------------------------------
+    # Track Resolution
+    # -------------------------------------------------------------------------
     def resolve_track(
         self,
         track: TrackMetadata,
         cancel_check: Optional[Callable[[], bool]] = None
     ) -> Optional[MusilonSource]:
         """
-        Searches Musilon for a track across 4 complementary search engines:
-        1. Live /wp-json/play/search REST API
-        2. /wp-json/wp/v2/station WordPress REST API
-        3. Full Artist Taxonomy Discography archive
-        4. HTML Search fallback
-        Extracts the highest quality tier (FLAC 16 > FLAC 24 > MP3 320k).
-        Strict Quality Rule: Rejects 128k preview streams.
-        Respects cancel_check to abort immediately if download is stopped.
+        Searches Musilon catalog and resolves the best matching audio source.
+        1. Multi-stage search across artist + title, base title, and full title.
+        2. Evaluates ISRC precision match or intelligent scoring.
+        3. Inspects quality options (FLAC 24-bit Hi-Res, FLAC 16-bit Lossless, OGG 320k).
+        4. Constructs MusilonSource configured for direct streaming/download.
         """
         if not self.enabled:
             return None
@@ -715,393 +656,135 @@ class MusilonEngine:
         if cancel_check and cancel_check():
             return None
 
-        # Check / verify VIP session
-        cookies = self.session.cookies
-        has_vip = any(
-            ("wordpress_logged_in" in c.name or "wordpress_sec" in c.name or "d_user_session" in c.name)
-            for c in cookies
-        )
-        if not has_vip and self.username and self.password:
-            logger.info("Auto-authenticating VIP session in resolve_track...")
-            self.login_with_credentials(self.username, self.password)
-
-        if cancel_check and cancel_check():
-            return None
+        # Verify or auto-authenticate session if credentials exist
+        if self.username and self.password:
+            self.ensure_vip_session()
 
         clean_title = clean_watermarks(track.title).strip()
         primary_artist = track.primary_artist.strip()
 
-        # Simplified and full artist names (e.g. "The 1975" and "1975")
         simplified_artist = re.sub(r'^(?:the|a)\s+', '', primary_artist, flags=re.IGNORECASE).strip()
-        artists_to_search = [simplified_artist]
-        if primary_artist.lower() != simplified_artist.lower():
-            artists_to_search.append(primary_artist)
-
-        # 1. Clean feature clauses: [with ...], (feat. ...), etc.
         clean_feat_title = re.sub(r'[\(\[]\s*(?:feat\.?|ft\.?|with|prod\.?|featuring)\b[^\]\)]*[\)\]]', '', clean_title, flags=re.IGNORECASE).strip()
-        clean_feat_title = re.sub(r'[\-\–\—]\s*(?:feat\.?|ft\.?|with|prod\.?|featuring)\b.*$', '', clean_feat_title, flags=re.IGNORECASE).strip()
-
-        # 2. Base title: remove (feat. ...), [From ...], - Remastered..., etc.
         base_title = re.sub(r'[\(\[\-].*?(?:feat|ft|with|prod|remaster|version|from|motion picture|bonus).*?[\)\]]?', '', clean_feat_title, flags=re.IGNORECASE).strip()
-        base_title = re.sub(r'[\(\[\{][^\)\]\}]*[\)\]\}]', '', base_title).strip()
-        base_title = base_title.rstrip(" -_~:").strip()
-
-        # Punctuation-normalized titles
-        norm_title = clean_title.replace("’", "'").replace("`", "'").replace("“", '"').replace("”", '"')
-        norm_feat = clean_feat_title.replace("’", "'").replace("`", "'").replace("“", '"').replace("”", '"')
-        norm_base = base_title.replace("’", "'").replace("`", "'").replace("“", '"').replace("”", '"')
-
-        # Decompose multi-part or bilingual titles (e.g. "オトノケ - Otonoke" -> ["オトノケ", "Otonoke"])
-        title_sub_variants: List[str] = []
-        for sep in (" - ", " / ", " | ", " : "):
-            for src_t in (norm_base, norm_feat):
-                if sep in src_t:
-                    for part in src_t.split(sep):
-                        p_clean = part.strip()
-                        if p_clean and len(p_clean) >= 2 and p_clean not in title_sub_variants:
-                            title_sub_variants.append(p_clean)
+        base_title = re.sub(r'[\(\[\{][^\)\]\}]*[\)\]\}]', '', base_title).rstrip(" -_~:").strip()
 
         candidate_pool: List[Dict[str, Any]] = []
-        seen_urls = set()
+        seen_ids = set()
 
         def add_candidates(cands: List[Dict[str, Any]]):
             for c in cands:
-                u = c.get("url")
-                if u and u not in seen_urls:
-                    seen_urls.add(u)
+                cid = c.get("id")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
                     candidate_pool.append(c)
 
-        # Stage 1: Play JSON REST Search with artist + base title (and feature title / sub-variants)
-        for art in artists_to_search:
-            if cancel_check and cancel_check():
-                return None
-            if art and norm_base:
-                add_candidates(self._search_play_rest(f"{art} {norm_base}"))
-                add_candidates(self._search_play_rest(f"{norm_base} {art}"))
-            if art and norm_feat and norm_feat != norm_base:
-                add_candidates(self._search_play_rest(f"{art} {norm_feat}"))
-            for sub_v in title_sub_variants:
-                if art:
-                    add_candidates(self._search_play_rest(f"{art} {sub_v}"))
+        # Stage 1: Artist + Base Title
+        if primary_artist and base_title:
+            add_candidates(self._search_catalog(f"{primary_artist} {base_title}"))
+        if simplified_artist and simplified_artist != primary_artist and base_title:
+            add_candidates(self._search_catalog(f"{simplified_artist} {base_title}"))
 
         if cancel_check and cancel_check():
             return None
 
-        # Early check if high-confidence match found in Stage 1
-        scored_stage1 = [(self._score_candidate(track, c), c) for c in candidate_pool]
-        scored_stage1.sort(key=lambda x: x[0], reverse=True)
-        for s, c in scored_stage1:
-            if cancel_check and cancel_check():
-                return None
-            if s >= 100.0:
-                logger.info(f"Trying high-confidence Musilon candidate (score {s:.1f}): {c.get('title')}")
-                src = self._extract_source(c["url"], c.get("id"), target_duration_ms=track.duration_ms)
-                if src:
-                    return src
+        # Quick check for exact ISRC match in Stage 1
+        target_isrc = (track.isrc or "").strip().upper()
+        if target_isrc:
+            for c in candidate_pool:
+                if (c.get("isrc") or "").strip().upper() == target_isrc:
+                    logger.info(f"Instant exact ISRC match on Musilon for '{track.title}': {target_isrc}")
+                    return self._create_source_from_candidate(c, track)
+
+        # Stage 2: Base Title alone
+        if not candidate_pool and base_title and len(base_title) >= 3:
+            add_candidates(self._search_catalog(base_title))
 
         if cancel_check and cancel_check():
             return None
 
-        # Stage 2: Play JSON REST Search with base title alone
-        if norm_base and len(norm_base) >= 3:
-            add_candidates(self._search_play_rest(norm_base))
-        if norm_feat and norm_feat != norm_base and len(norm_feat) >= 3:
-            add_candidates(self._search_play_rest(norm_feat))
-
-        if cancel_check and cancel_check():
-            return None
-
-        scored_stage2 = [(self._score_candidate(track, c), c) for c in candidate_pool]
-        scored_stage2.sort(key=lambda x: x[0], reverse=True)
-        for s, c in scored_stage2:
-            if cancel_check and cancel_check():
-                return None
-            if s >= 100.0:
-                src = self._extract_source(c["url"], c.get("id"), target_duration_ms=track.duration_ms)
-                if src:
-                    return src
-
-        if cancel_check and cancel_check():
-            return None
-
-        # Stage 3: Play JSON REST Search with full title
-        for art in artists_to_search:
-            if cancel_check and cancel_check():
-                return None
-            if norm_title != norm_base and norm_title != norm_feat:
-                add_candidates(self._search_play_rest(f"{art} {norm_title}"))
-
-        if cancel_check and cancel_check():
-            return None
-
-        # Stage 4: Artist Taxonomy Discography Archive
-        for art in artists_to_search:
-            if cancel_check and cancel_check():
-                return None
-            add_candidates(self._search_artist_taxonomy(art))
-
-        if cancel_check and cancel_check():
-            return None
-
-        # Stage 5: WordPress Station Search
-        if not candidate_pool:
-            for art in artists_to_search:
-                if cancel_check and cancel_check():
-                    return None
-                if art and norm_base:
-                    add_candidates(self._search_station_wp(f"{art} {norm_base}"))
-                if art and norm_feat and norm_feat != norm_base:
-                    add_candidates(self._search_station_wp(f"{art} {norm_feat}"))
-            if norm_base and not (cancel_check and cancel_check()):
-                add_candidates(self._search_station_wp(norm_base))
-
-        if cancel_check and cancel_check():
-            return None
-
-        # Stage 6: HTML Search fallback
-        if not candidate_pool:
-            for art in artists_to_search:
-                if cancel_check and cancel_check():
-                    return None
-                if art and norm_base:
-                    add_candidates(self._search(f"{art} {norm_base}"))
-                if art and norm_feat and norm_feat != norm_base:
-                    add_candidates(self._search(f"{art} {norm_feat}"))
-            if norm_base and not (cancel_check and cancel_check()):
-                add_candidates(self._search(norm_base))
+        # Stage 3: Full title + Artist
+        if not candidate_pool and clean_title != base_title:
+            add_candidates(self._search_catalog(f"{primary_artist} {clean_title}"))
 
         if cancel_check and cancel_check():
             return None
 
         if not candidate_pool:
-            logger.info(f"No candidates found on Musilon across all vectors for '{track.title}'")
+            logger.info(f"No candidate tracks found on Musilon catalog for '{track.title}' by {primary_artist}")
             return None
 
-        # Sort all pooled candidates by score descending and evaluate
+        # Score candidates
         scored = [(self._score_candidate(track, c), c) for c in candidate_pool]
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        for best_score, best_match in scored:
-            if cancel_check and cancel_check():
-                return None
-            if best_score < 70.0:
-                break
-            logger.info(f"Evaluating Musilon candidate (score {best_score:.1f}): '{best_match.get('title')}' -> {best_match.get('url')}")
-            src = self._extract_source(best_match["url"], best_match.get("id"), target_duration_ms=track.duration_ms)
-            if src:
-                logger.info(f"Selected best Musilon candidate (score {best_score:.1f}): '{best_match.get('title')}' -> {best_match.get('url')}")
-                return src
-
-        logger.info(f"No candidate met strict criteria or duration validation for '{track.title}'")
-        return None
-
-    @staticmethod
-    def parse_time_str(time_str: str) -> Optional[int]:
-        """Parses MM:SS or HH:MM:SS into milliseconds."""
-        if not time_str:
+        best_score, best_cand = scored[0]
+        if best_score < 70.0:
+            logger.info(f"Musilon candidate score {best_score:.1f} below threshold (70.0) for '{track.title}'")
             return None
-        parts = time_str.strip().split(":")
-        try:
-            if len(parts) == 2:
-                return (int(parts[0]) * 60 + int(parts[1])) * 1000
-            elif len(parts) == 3:
-                return (int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])) * 1000
-        except ValueError:
-            pass
-        return None
 
-    def _extract_source(
-        self,
-        track_url: str,
-        post_id: Optional[str] = None,
-        target_duration_ms: Optional[int] = None
-    ) -> Optional[MusilonSource]:
+        logger.info(f"Selected best Musilon candidate (score {best_score:.1f}): '{best_cand.get('title')}' by {best_cand.get('artist')}")
+        return self._create_source_from_candidate(best_cand, track)
+
+    def _create_source_from_candidate(self, cand: Dict[str, Any], track: TrackMetadata) -> Optional[MusilonSource]:
         """
-        Fetches the track station page and inspects the download popup and play endpoints
-        to extract the requested quality tier (respecting download.preferred_quality).
-        Scopes link extraction strictly to this track station URL to prevent grabbing recommendations.
-        Validates station duration against target_duration_ms if available.
+        Builds a MusilonSource from a candidate dict, querying quality context if needed
+        and picking initial quality based on user preferences.
         """
-        resp = self._request("GET", track_url)
-        soup = BeautifulSoup(resp.text, "html.parser")
+        isrc = (cand.get("isrc") or "").strip()
+        cand_id = cand.get("id", "")
 
-        # If VIP session is required / expired, auto-authenticate and reload
-        if "dl-not-login" in resp.text and self.username and self.password:
-            logger.info(f"Musilon VIP authentication required for {track_url}. Auto-authenticating...")
-            login_ok, _ = self.login_with_credentials(self.username, self.password)
-            if login_ok:
-                resp = self._request("GET", track_url)
-                soup = BeautifulSoup(resp.text, "html.parser")
+        has_lossless = cand.get("lossless")
+        has_hires = cand.get("hires")
 
-        # Check post_id from data-play-id
-        if not post_id:
-            m = re.search(r'data-play-id="(\d+)"', resp.text)
-            if m:
-                post_id = m.group(1)
+        # If quality attributes are not present in the search hit, fetch track context
+        if (has_lossless is None or not isrc) and cand_id:
+            ctx = self._get_track_context(cand_id)
+            if ctx:
+                has_lossless = ctx.get("lossless")
+                has_hires = ctx.get("hires")
+                if not isrc:
+                    isrc = (ctx.get("isrc") or "").strip()
 
-        # Duration validation against target_duration_ms
-        if target_duration_ms:
-            station_duration_ms = None
-            duration_span = soup.find(class_=re.compile(r"entry-info-duration|play-duration", re.I))
-            if duration_span:
-                station_duration_ms = self.parse_time_str(duration_span.get_text(strip=True))
-
-            if station_duration_ms is None and post_id:
-                try:
-                    r_play = self._request("GET", f"{self.BASE_URL}/wp-json/play/play/{post_id}", timeout=10)
-                    p_data = r_play.json()
-                    if isinstance(p_data, dict) and p_data.get("duration"):
-                        station_duration_ms = int(p_data["duration"])
-                except Exception:
-                    pass
-
-            if station_duration_ms:
-                diff_ms = abs(station_duration_ms - target_duration_ms)
-                # Reject if duration mismatch is greater than 20 seconds AND greater than 10%
-                if diff_ms > 20000 and (diff_ms / target_duration_ms) > 0.10:
-                    logger.warning(
-                        f"Musilon candidate '{track_url}' duration mismatch: "
-                        f"station={station_duration_ms/1000:.1f}s vs target={target_duration_ms/1000:.1f}s "
-                        f"(diff={diff_ms/1000:.1f}s). Rejecting candidate."
-                    )
-                    return None
+        if not isrc:
+            logger.warning(f"Musilon candidate '{cand.get('title')}' has no ISRC identifier; cannot construct download ticket.")
+            return None
 
         from core.config import config
         pref_q = str(config.get("download.preferred_quality", "320")).strip().lower()
 
-        flac_16_url = None
-        flac_24_url = None
-        mp3_320_url = None
-
-        # Clean target station path to strictly filter download links
-        clean_target_path = track_url.split("?")[0].rstrip("/")
-        station_slug = clean_target_path.split("/")[-1]
-
-        # Check popup and download links
-        for a in soup.find_all("a"):
-            href = a.get("href", "") or a.get("data-url", "") or a.get("data-link", "")
-            dtype = a.get("data-type", "")
-            classes = " ".join(a.get("class", []))
-            text = a.get_text(strip=True).lower()
-
-            if not href or href == "#" or href.startswith("javascript:") or "login" in href:
-                continue
-
-            # Scope check: ensure this download button belongs to the requested station
-            # Exclude recommendation links that belong to other stations
-            if "/station/" in href and f"/{station_slug}/" not in href and not href.startswith(clean_target_path):
-                continue
-
-            full_url = urljoin(self.BASE_URL, href)
-
-            if dtype == "16" or "dltype=16" in href or "16-bit" in text or "cd" in text:
-                flac_16_url = full_url
-            elif dtype == "24" or "dltype=24" in href or "24-bit" in text or "hi-res" in text:
-                flac_24_url = full_url
-            elif dtype == "320" or "dltype=320" in href or "320" in text or "320kbps" in text:
-                mp3_320_url = full_url
-
-        page_title = soup.title.get_text(strip=True) if soup.title else "Track"
-
-        # Return quality based on preference
-        if pref_q in ("320", "mp3", "320k", "mp3_320"):
-            if mp3_320_url:
-                return MusilonSource(
-                    track_id=post_id or station_slug,
-                    title=page_title,
-                    artist="",
-                    quality_tier="Musilon 320k",
-                    download_url=mp3_320_url,
-                    file_extension="mp3",
-                    station_url=track_url
-                )
-            if flac_16_url:
-                return MusilonSource(
-                    track_id=post_id or station_slug,
-                    title=page_title,
-                    artist="",
-                    quality_tier="Musilon FLAC 16",
-                    download_url=flac_16_url,
-                    file_extension="flac",
-                    station_url=track_url
-                )
-            if flac_24_url:
-                return MusilonSource(
-                    track_id=post_id or station_slug,
-                    title=page_title,
-                    artist="",
-                    quality_tier="Musilon FLAC 24",
-                    download_url=flac_24_url,
-                    file_extension="flac",
-                    station_url=track_url
-                )
+        # Quality ladder:
+        # User prefers "flac": hires (if available) -> lossless -> high (320k)
+        # User prefers "320": high (320k) -> lossless (flac) -> hires (flac)
+        if pref_q in ("flac", "lossless", "hires", "flac_16", "flac_24"):
+            if has_hires:
+                quality_param = "hires"
+                tier_label = "Musilon FLAC 24"
+                ext = "flac"
+            else:
+                quality_param = "lossless"
+                tier_label = "Musilon FLAC 16"
+                ext = "flac"
         else:
-            if flac_16_url:
-                return MusilonSource(
-                    track_id=post_id or station_slug,
-                    title=page_title,
-                    artist="",
-                    quality_tier="Musilon FLAC 16",
-                    download_url=flac_16_url,
-                    file_extension="flac",
-                    station_url=track_url
-                )
-            if flac_24_url:
-                return MusilonSource(
-                    track_id=post_id or station_slug,
-                    title=page_title,
-                    artist="",
-                    quality_tier="Musilon FLAC 24",
-                    download_url=flac_24_url,
-                    file_extension="flac",
-                    station_url=track_url
-                )
-            if mp3_320_url:
-                return MusilonSource(
-                    track_id=post_id or station_slug,
-                    title=page_title,
-                    artist="",
-                    quality_tier="Musilon 320k",
-                    download_url=mp3_320_url,
-                    file_extension="mp3",
-                    station_url=track_url
-                )
+            quality_param = "high"
+            tier_label = "Musilon 320k"
+            ext = "ogg"
 
-        # If buttons are still marked dl-not-login, VIP session was not active
-        if "dl-not-login" in resp.text:
-            logger.info(f"Musilon VIP authentication required for direct download on {track_url}.")
-            return None
+        dl_url = f"{self.BASE_URL}/api/media/download/{quote_plus(isrc)}?quality={quality_param}"
 
-        # Inspect the REST player endpoint fallback: /wp-json/play/play/{id}
-        if post_id:
-            try:
-                play_api = f"{self.BASE_URL}/wp-json/play/play/{post_id}"
-                r_play = self._request("GET", play_api)
-                data = r_play.json()
-                if isinstance(data, dict) and data.get("downloadable") and data.get("download_url"):
-                    d_url = data["download_url"]
-                    if "login" not in d_url and not d_url.endswith("#"):
-                        is_flac = ".flac" in d_url.lower()
-                        is_320 = "320" in d_url.lower() or not d_url.lower().endswith("128.mp3")
-                        if is_flac or is_320:
-                            tier = "Musilon FLAC 16" if is_flac else "Musilon 320k"
-                            return MusilonSource(
-                                track_id=post_id,
-                                title=data.get("title", ""),
-                                artist=data.get("artist", ""),
-                                quality_tier=tier,
-                                download_url=d_url,
-                                file_extension="flac" if is_flac else "mp3",
-                                station_url=track_url
-                            )
-            except Exception as e:
-                logger.debug(f"Could not fetch play rest API: {e}")
-
-        logger.info(f"Musilon does not offer FLAC or 320kbps for {track_url}.")
-        return None
+        return MusilonSource(
+            track_id=cand_id,
+            title=cand.get("title", track.title),
+            artist=cand.get("artist", track.artist_str),
+            quality_tier=tier_label,
+            download_url=dl_url,
+            file_extension=ext,
+            station_url=f"{self.BASE_URL}/",
+            isrc=isrc,
+            quality_param=quality_param
+        )
 
     # -------------------------------------------------------------------------
-    # Chunked Direct CDN Downloader
+    # Chunked Streaming Downloader
     # -------------------------------------------------------------------------
     def download_file(
         self,
@@ -1113,37 +796,73 @@ class MusilonEngine:
         pause_wait: Optional[Callable[[], None]] = None
     ) -> bool:
         """
-        Streams audio file directly from CDN to disk with chunked progress reporting.
-        Strictly verifies audio headers and magic bytes; aborts and raises MusilonVipError
-        if an HTML warning/paywall page is returned.
+        Streams audio file directly from Musilon to disk with chunked progress reporting.
+        Strictly verifies audio headers; raises MusilonQualityUnavailableError on 409,
+        MusilonVipError on 401/403, and MusilonRateLimitExceededError on 429.
         """
         temp_path = dest_path + ".part"
         os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
 
         download_headers = {
-            "Referer": station_url if station_url else "https://musilon.com/",
+            "Referer": f"{self.BASE_URL}/",
             "Accept": "*/*",
             "Sec-Fetch-Dest": "audio",
             "Sec-Fetch-Mode": "no-cors",
-            "Sec-Fetch-Site": "same-site",
+            "Sec-Fetch-Site": "same-origin",
         }
+
         resp = self.session.get(url, stream=True, timeout=(20, 90), headers=download_headers, allow_redirects=True)
+
+        # Handle 429 Too Many Requests immediately
         if resp.status_code == 429:
             raise MusilonRateLimitExceededError("Musilon download rate limit exceeded (HTTP 429 Too Many Requests).")
 
+        content_type = resp.headers.get("content-type", "").lower()
+        is_json_or_text = any(t in content_type for t in ("application/json", "text/html", "text/plain"))
+
+        # Inspect non-200 responses or unexpected payload bodies for quota/budget exhaustion BEFORE raise_for_status()
+        if resp.status_code != 200 or is_json_or_text:
+            text_preview = ""
+            try:
+                text_preview = resp.text[:4000].lower() if hasattr(resp, "text") else ""
+            except Exception:
+                pass
+
+            budget_indicators = [
+                "download_budget_exhausted",
+                "download_budget_unavailable",
+                "budget_exhausted",
+                "daily download budget",
+                "budget",
+                "quota",
+                "rate limit",
+                "daily limit",
+                "too many requests",
+                "limit reached",
+                "سقف دانلود",
+            ]
+            if any(k in text_preview for k in budget_indicators):
+                raise MusilonRateLimitExceededError(
+                    f"Musilon download limit or daily quota reached (HTTP {resp.status_code})."
+                )
+
+        if resp.status_code == 409:
+            raise MusilonQualityUnavailableError("Requested quality tier unavailable for this track.")
+
+        if resp.status_code in (401, 403):
+            # Check if 403 was caused by budget exhaustion before raising generic VIP error
+            if self.is_budget_exhausted():
+                raise MusilonRateLimitExceededError(f"Musilon daily download budget exhausted (HTTP {resp.status_code}).")
+            raise MusilonVipError(f"Musilon authentication required or session expired (HTTP {resp.status_code}).")
+
         resp.raise_for_status()
 
-        content_type = resp.headers.get("content-type", "").lower()
-        if "text/html" in content_type or "text/plain" in content_type:
+        if is_json_or_text:
             logger.warning(f"Musilon returned non-audio content-type '{content_type}' for {url}")
             initial_text = resp.text[:4000].lower() if hasattr(resp, "text") else ""
-            if any(k in initial_text for k in [
-                "سقف دانلود", "محدودیت دانلود", "حداکثر دانلود", "تعداد مجاز", "سقف مجاز",
-                "پایان اعتبار", "دانلود روزانه", "محدودیت دسترسی", "اعتبار دانلود",
-                "rate limit", "quota", "daily limit", "too many requests", "limit reached"
-            ]):
-                raise MusilonRateLimitExceededError("Musilon download limit or daily quota reached.")
-            raise MusilonVipError(f"Musilon returned HTML page ({content_type}) instead of audio stream.")
+            if "authentication" in initial_text or "unauthorized" in initial_text:
+                raise MusilonVipError("Musilon session expired or authentication required.")
+            raise MusilonVipError(f"Musilon returned non-audio response ({content_type}).")
 
         total_size = int(resp.headers.get("content-length", 0))
         downloaded = 0
@@ -1168,27 +887,20 @@ class MusilonEngine:
                         if not header_verified:
                             fmt = detect_audio_header(chunk)
                             if not fmt:
-                                h_low = chunk[:4000].lower()
-                                text_chunk = chunk[:4000].decode("utf-8", errors="ignore").lower()
+                                text_chunk = chunk[:2000].decode("utf-8", errors="ignore").lower()
                                 f.close()
                                 if os.path.exists(temp_path):
                                     os.remove(temp_path)
 
-                                is_limit = any(k in text_chunk for k in [
-                                    "سقف دانلود", "محدودیت دانلود", "حداکثر دانلود", "تعداد مجاز", "سقف مجاز",
-                                    "پایان اعتبار", "دانلود روزانه", "محدودیت دسترسی", "اعتبار دانلود",
-                                    "rate limit", "quota", "daily limit", "too many requests", "limit reached"
-                                ])
-                                if is_limit:
-                                    logger.warning(f"Musilon download limit reached in stream bytes for {url}")
+                                if any(k in text_chunk for k in [
+                                    "download_budget_exhausted", "download_budget_unavailable",
+                                    "budget_exhausted", "budget", "quota", "rate limit",
+                                    "daily limit", "too many requests", "limit reached", "سقف دانلود"
+                                ]) or self.is_budget_exhausted():
                                     raise MusilonRateLimitExceededError("Musilon download limit or daily quota reached.")
-
-                                if b"<!doctype html" in h_low or b"<html" in h_low or b"\xd8\xa7\xd8\xae\xd8\xb7\xd8\xa7\xd8\xb1" in chunk:
-                                    logger.warning(f"Musilon VIP error page detected in initial bytes for {url}")
-                                    raise MusilonVipError("Musilon VIP paywall or warning page received instead of audio stream.")
-                                else:
-                                    logger.warning(f"Unrecognized audio header returned by Musilon for {url}: {chunk[:32]}")
-                                    raise ValueError(f"Unrecognized audio stream header: {chunk[:32]}")
+                                if "authentication" in text_chunk or "unauthorized" in text_chunk:
+                                    raise MusilonVipError("Musilon authentication required.")
+                                raise ValueError(f"Unrecognized audio stream header: {chunk[:32]}")
                             header_verified = True
 
                         f.write(chunk)
@@ -1201,7 +913,7 @@ class MusilonEngine:
                             elapsed = now - start_time
                             speed_bps = downloaded / elapsed if elapsed > 0 else 0.0
                             speed_str = f"{format_bytes(speed_bps)}/s"
-                            
+
                             if total_size > downloaded and speed_bps > 0:
                                 eta_sec = int((total_size - downloaded) / speed_bps)
                                 eta_str = f"{eta_sec // 60:02d}:{eta_sec % 60:02d}"
@@ -1218,7 +930,6 @@ class MusilonEngine:
                     os.remove(temp_path)
                 return False
 
-            # Rename .part to destination
             if os.path.exists(dest_path):
                 os.remove(dest_path)
             os.rename(temp_path, dest_path)
@@ -1232,6 +943,9 @@ class MusilonEngine:
                     pass
             raise
 
+    # -------------------------------------------------------------------------
+    # Download with Retry & Quality Fallback
+    # -------------------------------------------------------------------------
     def download_track_with_retry(
         self,
         track: TrackMetadata,
@@ -1243,23 +957,46 @@ class MusilonEngine:
         max_retries: int = 5
     ) -> bool:
         """
-        Downloads a track from Musilon with aggressive VIP re-authentication and multi-attempt retries.
-        If an HTML paywall, VIP warning, 403, or stream error occurs:
-        1. Immediately refreshes the VIP session using stored credentials.
-        2. Re-scrapes the track station page to get a fresh download nonce/URL.
-        3. Retries up to max_retries attempts before conceding failure.
+        Downloads a track from Musilon with automatic quality tier fallback and VIP session renewal.
+        1. If 409 (quality unavailable): steps down quality (hires -> lossless -> high -> standard).
+        2. If 401/403 (session issue): renews VIP session with stored credentials and retries.
         """
         current_source = source
+        quality_stepdown_chain = {
+            "hires": "lossless",
+            "lossless": "high",
+            "high": "standard",
+            "standard": None
+        }
+
+        tier_labels = {
+            "hires": "Musilon FLAC 24",
+            "lossless": "Musilon FLAC 16",
+            "high": "Musilon 320k",
+            "standard": "Musilon Standard"
+        }
+
+        tier_exts = {
+            "hires": "flac",
+            "lossless": "flac",
+            "high": "ogg",
+            "standard": "ogg"
+        }
+
         for attempt in range(1, max_retries + 1):
             if cancel_check and cancel_check():
                 return False
 
+            # Update dest_path extension if quality stepdown changed the format
+            base_dest = os.path.splitext(dest_path)[0]
+            cur_dest = f"{base_dest}.{current_source.file_extension}"
+
             try:
-                logger.info(f"Musilon download attempt {attempt}/{max_retries} for '{track.title}'...")
+                logger.info(f"Musilon download attempt {attempt}/{max_retries} for '{track.title}' ({current_source.quality_tier})...")
                 success = self.download_file(
                     url=current_source.download_url,
-                    dest_path=dest_path,
-                    station_url=getattr(current_source, "station_url", ""),
+                    dest_path=cur_dest,
+                    station_url=current_source.station_url,
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
                     pause_wait=pause_wait
@@ -1267,13 +1004,38 @@ class MusilonEngine:
                 if cancel_check and cancel_check():
                     return False
 
-                if success and os.path.isfile(dest_path):
-                    valid, reason = is_valid_audio_file(dest_path)
+                if success and os.path.isfile(cur_dest):
+                    valid, reason = is_valid_audio_file(cur_dest)
                     if valid:
                         logger.info(f"Musilon download successfully completed and verified for '{track.title}'.")
                         return True
                     else:
                         logger.warning(f"Musilon file failed validation on attempt {attempt}: {reason}")
+
+            except MusilonQualityUnavailableError:
+                if cancel_check and cancel_check():
+                    return False
+                next_q = quality_stepdown_chain.get(current_source.quality_param)
+                if next_q:
+                    logger.info(f"Quality '{current_source.quality_param}' unavailable for '{track.title}'. Stepping down to '{next_q}'...")
+                    next_ext = tier_exts[next_q]
+                    next_tier = tier_labels[next_q]
+                    next_url = f"{self.BASE_URL}/api/media/download/{quote_plus(current_source.isrc)}?quality={next_q}"
+                    current_source = MusilonSource(
+                        track_id=current_source.track_id,
+                        title=current_source.title,
+                        artist=current_source.artist,
+                        quality_tier=next_tier,
+                        download_url=next_url,
+                        file_extension=next_ext,
+                        station_url=current_source.station_url,
+                        isrc=current_source.isrc,
+                        quality_param=next_q
+                    )
+                    continue
+                else:
+                    logger.warning(f"All quality tiers exhausted for Musilon track '{track.title}'.")
+                    break
 
             except MusilonRateLimitExceededError as e_limit:
                 if cancel_check and cancel_check():
@@ -1285,35 +1047,35 @@ class MusilonEngine:
                 if cancel_check and cancel_check():
                     return False
                 logger.warning(f"Musilon attempt {attempt}/{max_retries} encountered VIP issue: {e_vip}")
-                # Auto-authenticate VIP session
+                if self.is_budget_exhausted(current_source.quality_tier):
+                    logger.warning(f"Musilon daily budget confirmed exhausted for '{track.title}'. Raising limit error.")
+                    raise MusilonRateLimitExceededError(f"Musilon download limit / daily quota reached for '{track.title}'.")
+
                 if self.username and self.password:
                     logger.info("Renewing Musilon VIP session credentials...")
                     login_ok = self.ensure_vip_session(force=True)
                     if login_ok and not (cancel_check and cancel_check()):
-                        # Re-resolve track source to obtain a fresh nonce
-                        time.sleep(random.uniform(1.0, 2.0))
-                        fresh_src = self.resolve_track(track, cancel_check=cancel_check)
-                        if fresh_src:
-                            current_source = fresh_src
-                            continue
+                        time.sleep(random.uniform(0.5, 1.5))
+                        continue
 
             except Exception as e:
                 if cancel_check and cancel_check():
                     return False
                 logger.warning(f"Musilon attempt {attempt}/{max_retries} error: {e}")
-                if "403" in str(e) or "login" in str(e).lower() or "forbidden" in str(e).lower():
+                if self.is_budget_exhausted(current_source.quality_tier):
+                    logger.warning(f"Musilon daily budget confirmed exhausted for '{track.title}'. Raising limit error.")
+                    raise MusilonRateLimitExceededError(f"Musilon download limit / daily quota reached for '{track.title}'.")
+
+                if "401" in str(e) or "403" in str(e) or "unauthorized" in str(e).lower():
                     self.ensure_vip_session(force=True)
                     if not (cancel_check and cancel_check()):
-                        time.sleep(random.uniform(1.0, 2.0))
-                        fresh_src = self.resolve_track(track, cancel_check=cancel_check)
-                        if fresh_src:
-                            current_source = fresh_src
-                            continue
+                        time.sleep(random.uniform(0.5, 1.5))
+                        continue
 
             if cancel_check and cancel_check():
                 return False
 
-            time.sleep(random.uniform(1.5, 3.0))
+            time.sleep(random.uniform(1.0, 2.0))
 
         logger.error(f"All {max_retries} Musilon download attempts exhausted for '{track.title}'.")
         return False

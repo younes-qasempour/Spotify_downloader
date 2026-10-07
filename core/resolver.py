@@ -47,6 +47,7 @@ class CascadingAudioEngine:
         self,
         track: TrackMetadata,
         musilon_only: bool = False,
+        skip_musilon: bool = False,
         cancel_check: Optional[Callable[[], bool]] = None
     ) -> Optional[ResolvedTrackSource]:
         """
@@ -59,7 +60,7 @@ class CascadingAudioEngine:
             return None
 
         # 1. Try Musilon Tiers 1-3 across all multi-vector search stages
-        if self.musilon.enabled:
+        if self.musilon.enabled and not skip_musilon:
             try:
                 m_src = self.musilon.resolve_track(track, cancel_check=cancel_check)
                 if cancel_check and cancel_check():
@@ -91,7 +92,10 @@ class CascadingAudioEngine:
             return None
 
         # 2. Safety-Net Fallback to Tier 4: YouTube Music
-        logger.info(f"Musilon catalog completely exhausted for '{track.title}'; activating YouTube Music fallback...")
+        if skip_musilon:
+            logger.info(f"Musilon skipped (daily quota/limit hit); resolving directly via YouTube Music for '{track.title}'...")
+        else:
+            logger.info(f"Musilon catalog completely exhausted for '{track.title}'; activating YouTube Music fallback...")
         try:
             yt_src = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
             if cancel_check and cancel_check():
@@ -208,14 +212,21 @@ class CascadingAudioEngine:
                             pass
                     return None
 
-                if success and os.path.isfile(dest_file):
-                    is_valid, reason = is_valid_audio_file(dest_file)
+                candidate_files = [
+                    dest_file,
+                    f"{base_dest_without_ext}.flac",
+                    f"{base_dest_without_ext}.ogg",
+                    f"{base_dest_without_ext}.mp3"
+                ]
+                actual_file = next((f for f in candidate_files if os.path.isfile(f) and os.path.getsize(f) > 1024), None)
+                if success and actual_file:
+                    is_valid, reason = is_valid_audio_file(actual_file)
                     if is_valid:
-                        final_file_path = dest_file
+                        final_file_path = actual_file
                     else:
                         logger.warning(f"Musilon download produced an invalid audio file ({reason}) for '{track.title}'.")
                         try:
-                            os.remove(dest_file)
+                            os.remove(actual_file)
                         except Exception:
                             pass
                 else:

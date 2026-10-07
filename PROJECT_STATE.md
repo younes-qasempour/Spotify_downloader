@@ -339,6 +339,8 @@ d:\Spotify-Downloader\
 | 2026-09-13 | Kavinsky — *Nightcall* | Musilon 320k (Anti-Cover + Duration Filter) | ✅ Success (100%) | Resolved `nightcall-2` (4:18, 320kbps MP3) vs cover (2:59 rejected) |
 | 2026-09-15 | Creepy Nuts — *よふかしのうた* | YTM Auto-Generated (Sony Music) | ✅ Success (100%) | `downloads/This Is Creepy Nuts/Creepy Nuts - よふかしのうた - Yofukashino Uta.m4a` (240s, Sony Music) |
 | 2026-09-17 | Album Song Numbering & Ordering | Mutagen FLAC/MP3 + Dual Naming | ✅ Success (100%) | All 13 Nevermind and 15 LEGION tracks renamed `01..N`, tagged, and ordered |
+| 2026-10-07 | Musilon Next.js / Directus Migration | `https://open.musilon.com` REST API + ISRC | ✅ Success (100%) | Upgraded `MusilonEngine` to NextAuth credentials, `/api/search` catalog, direct ISRC download (`quality=hires/lossless/high`), 409 step-down fallback, and Ogg Vorbis/Opus tagging. |
+| 2026-10-07 | Musilon Rate Limit & Budget Detection | Daily Quota (`/api/media/download-budget`) + Prompt Fallback | ✅ Success (100%) | Detected 429 and `DOWNLOAD_BUDGET_EXHAUSTED` (HTTP 400/403), verified queue pause + prompt modal, `_allow_yt_on_limit` preference persistence, and subsequent track Musilon bypass. |
 
 ## 5. Development Cheat Sheet
 

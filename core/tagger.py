@@ -371,10 +371,17 @@ class AudioTagger:
         plain_lyrics: str,
         synced_lyrics: str = ""
     ) -> bool:
-        audio = OggOpus(file_path)
-        # In OggOpus, METADATA_BLOCK_PICTURE is stored as a Vorbis comment.
+        try:
+            audio = OggOpus(file_path)
+            is_opus = True
+        except Exception:
+            from mutagen.oggvorbis import OggVorbis
+            audio = OggVorbis(file_path)
+            is_opus = False
+
+        # In OggOpus / OggVorbis, METADATA_BLOCK_PICTURE is stored as a Vorbis comment.
         # Preserve existing picture and lyrics before audio.clear()
-        existing_pic = audio.get("METADATA_BLOCK_PICTURE")
+        existing_pic = audio.get("METADATA_BLOCK_PICTURE") or audio.get("metadata_block_picture")
         existing_lyr = audio.get("LYRICS", [""])[0] or audio.get("lyrics", [""])[0] or audio.get("SYNCEDLYRICS", [""])[0] or audio.get("UNSYNCEDLYRICS", [""])[0]
         if existing_lyr:
             existing_lyr = self._normalize_crlf(existing_lyr)
@@ -425,10 +432,18 @@ class AudioTagger:
             pic.mime = "image/jpeg" if cover_bytes[:2] == b'\xff\xd8' else "image/png"
             pic.desc = "Front Cover"
             pic.data = cover_bytes
-            audio["METADATA_BLOCK_PICTURE"] = [base64.b64encode(pic.write()).decode("ascii")]
+            b64_pic = base64.b64encode(pic.write()).decode("ascii")
+            if is_opus:
+                audio["METADATA_BLOCK_PICTURE"] = [b64_pic]
+            else:
+                audio["metadata_block_picture"] = [b64_pic]
+                audio["METADATA_BLOCK_PICTURE"] = [b64_pic]
         elif existing_pic:
-            audio["METADATA_BLOCK_PICTURE"] = existing_pic
+            if is_opus:
+                audio["METADATA_BLOCK_PICTURE"] = existing_pic
+            else:
+                audio["metadata_block_picture"] = existing_pic
 
         audio.save()
-        logger.info(f"Successfully tagged Opus: {file_path}")
+        logger.info(f"Successfully tagged {'Opus' if is_opus else 'Ogg Vorbis'}: {file_path}")
         return True

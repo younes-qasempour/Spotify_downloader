@@ -1006,8 +1006,12 @@ class ArchiveManager:
                             has_crlf = "\r\n" in existing_lyr_text
                             break
                 elif ext in (".opus", ".ogg"):
-                    from mutagen.oggopus import OggOpus
-                    aud = OggOpus(fpath)
+                    try:
+                        from mutagen.oggopus import OggOpus
+                        aud = OggOpus(fpath)
+                    except Exception:
+                        from mutagen.oggvorbis import OggVorbis
+                        aud = OggVorbis(fpath)
                     for k in ["LYRICS", "lyrics", "SYNCEDLYRICS", "UNSYNCEDLYRICS"]:
                         if k in aud and aud[k][0].strip():
                             existing_lyr_text = aud[k][0]

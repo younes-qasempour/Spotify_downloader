@@ -478,14 +478,24 @@ class DownloadQueueManager:
 
             self._update_status(item, "Resolving")
             
-            # Lazy resolution with rate-limiting bottleneck for Musilon
-            with self._musilon_lock:
-                if cancel_check():
-                    self._update_status(item, "Stopped")
-                    self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
-                    return
+            # If Musilon daily limit was reached and user elected to continue with YouTube,
+            # bypass Musilon search & lock entirely for subsequent tracks in the queue.
+            skip_mus = False
+            with self._limit_lock:
+                skip_mus = self._allow_yt_on_limit
+
+            if not skip_mus:
+                # Lazy resolution with rate-limiting bottleneck for Musilon
+                with self._musilon_lock:
+                    if cancel_check():
+                        self._update_status(item, "Stopped")
+                        self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                        return
+                    self._paused.wait()
+                    resolved = self.engine.resolve_source(track, skip_musilon=False, cancel_check=cancel_check)
+            else:
                 self._paused.wait()
-                resolved = self.engine.resolve_source(track, cancel_check=cancel_check)
+                resolved = self.engine.resolve_source(track, skip_musilon=True, cancel_check=cancel_check)
 
             if cancel_check():
                 self._update_status(item, "Stopped")
