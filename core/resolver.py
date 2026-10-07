@@ -223,6 +223,21 @@ class CascadingAudioEngine:
                     is_valid, reason = is_valid_audio_file(actual_file)
                     if is_valid:
                         final_file_path = actual_file
+                        # Synchronize resolved source details with actual audio file downloaded (handles quality stepdown)
+                        act_ext = os.path.splitext(actual_file)[1].lstrip(".").lower()
+                        resolved.file_extension = act_ext
+                        if act_ext in ("ogg", "mp3"):
+                            resolved.quality_badge = "Musilon 320k"
+                        elif act_ext == "flac":
+                            flac_quality = "Musilon FLAC 16"
+                            try:
+                                import mutagen
+                                audio = mutagen.File(actual_file)
+                                if audio and getattr(audio.info, "bits_per_sample", 16) == 24:
+                                    flac_quality = "Musilon FLAC 24"
+                            except Exception:
+                                pass
+                            resolved.quality_badge = flac_quality
                     else:
                         logger.warning(f"Musilon download produced an invalid audio file ({reason}) for '{track.title}'.")
                         try:

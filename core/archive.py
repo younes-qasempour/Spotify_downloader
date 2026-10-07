@@ -3,13 +3,23 @@ import sqlite3
 import threading
 import logging
 import shutil
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Tuple
 from pathlib import Path
 
 from core.spotify_client import TrackMetadata
 from core.utils import extract_embedded_cover, is_valid_audio_file, sanitize_filename
 
 logger = logging.getLogger("core.archive")
+
+
+def normalize_path(path: str) -> str:
+    """Normalizes path and ensures uppercase Windows drive letter for consistent deduplication."""
+    if not path:
+        return ""
+    p = os.path.normpath(os.path.abspath(path))
+    if os.name == 'nt' and len(p) > 1 and p[1] == ':':
+        p = p[0].upper() + p[1:]
+    return p
 
 
 def resolve_collection_cover(folder_path: str, sample_file: str = "") -> str:
@@ -174,6 +184,8 @@ class ArchiveManager:
                             cover_url TEXT,
                             status TEXT DEFAULT 'pending',
                             file_path TEXT DEFAULT '',
+                            quality_badge TEXT DEFAULT '',
+                            source_type TEXT DEFAULT '',
                             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             UNIQUE(playlist_id, spotify_id)
                         );
@@ -191,6 +203,53 @@ class ArchiveManager:
                         conn.execute("ALTER TABLE downloaded_tracks ADD COLUMN disc_number INTEGER DEFAULT 1;")
                     except sqlite3.OperationalError:
                         pass
+                    try:
+                        conn.execute("ALTER TABLE saved_playlist_tracks ADD COLUMN quality_badge TEXT DEFAULT '';")
+                    except sqlite3.OperationalError:
+                        pass
+                    try:
+                        conn.execute("ALTER TABLE saved_playlist_tracks ADD COLUMN source_type TEXT DEFAULT '';")
+                    except sqlite3.OperationalError:
+                        pass
+
+                    # Backfill quality_badge and source_type for downloaded playlist tracks
+                    conn.execute("""
+                        UPDATE saved_playlist_tracks
+                        SET quality_badge = (
+                            SELECT quality_badge FROM downloaded_tracks 
+                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                            LIMIT 1
+                        ),
+                        source_type = (
+                            SELECT source_type FROM downloaded_tracks 
+                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                            LIMIT 1
+                        )
+                        WHERE (quality_badge IS NULL OR quality_badge = '')
+                          AND EXISTS (
+                            SELECT 1 FROM downloaded_tracks 
+                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                          );
+                    """)
+
+                    # For remaining downloaded tracks without badge, infer from file extension:
+                    conn.execute("""
+                        UPDATE saved_playlist_tracks
+                        SET quality_badge = CASE 
+                            WHEN LOWER(file_path) LIKE '%.opus' THEN 'YTM Opus'
+                            WHEN LOWER(file_path) LIKE '%.mp3' THEN 'Musilon 320k'
+                            WHEN LOWER(file_path) LIKE '%.ogg' THEN 'Musilon 320k'
+                            WHEN LOWER(file_path) LIKE '%.m4a' THEN 'YTM M4A'
+                            WHEN LOWER(file_path) LIKE '%.flac' THEN 'FLAC 16'
+                            ELSE 'FLAC 16'
+                        END,
+                        source_type = CASE
+                            WHEN LOWER(file_path) LIKE '%.opus' THEN 'YouTube Music'
+                            WHEN LOWER(file_path) LIKE '%.m4a' THEN 'YouTube Music'
+                            ELSE 'Musilon'
+                        END
+                        WHERE status = 'downloaded' AND (quality_badge IS NULL OR quality_badge = '') AND file_path != '';
+                    """)
 
                     # Reset any stale 'queued' or 'stopped' tracks from previous sessions back to 'pending'
                     conn.execute("UPDATE saved_playlist_tracks SET status = 'pending' WHERE status IN ('queued', 'stopped');")
@@ -200,6 +259,34 @@ class ArchiveManager:
                 logger.error(f"Failed to initialize Archive database: {e}")
             finally:
                 conn.close()
+
+    @staticmethod
+    def infer_badge_from_file(file_path: str) -> Tuple[str, str]:
+        """
+        Infers (quality_badge, source_type) from audio file extension and audio headers.
+        """
+        if not file_path:
+            return "", ""
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".flac":
+            quality = "FLAC 16"
+            try:
+                import mutagen
+                audio = mutagen.File(file_path)
+                if audio and getattr(audio.info, "bits_per_sample", 16) == 24:
+                    quality = "FLAC 24"
+            except Exception:
+                pass
+            return quality, "Musilon"
+        elif ext == ".opus":
+            return "YTM Opus", "YouTube Music"
+        elif ext == ".m4a":
+            return "YTM M4A", "YouTube Music"
+        elif ext in (".mp3", ".ogg"):
+            return "Musilon 320k", "Musilon"
+        elif ext == ".wav":
+            return "WAV", "Local Archive"
+        return "Audio", "Unknown"
 
     def add_track(
         self,
@@ -213,7 +300,7 @@ class ArchiveManager:
         if not file_path or not os.path.isfile(file_path):
             return False
 
-        norm_path = os.path.normpath(os.path.abspath(file_path))
+        norm_path = normalize_path(file_path)
         if file_size <= 0:
             try:
                 file_size = os.path.getsize(norm_path)
@@ -653,7 +740,7 @@ class ArchiveManager:
                 if ext not in audio_exts:
                     continue
 
-                full_path = os.path.normpath(os.path.join(dirpath, fname))
+                full_path = normalize_path(os.path.join(dirpath, fname))
                 is_valid, _ = is_valid_audio_file(full_path)
                 if not is_valid:
                     continue
@@ -1193,18 +1280,29 @@ class ArchiveManager:
                             updated_at = CURRENT_TIMESTAMP
                     """, (playlist_id, name, spotify_url, cover_url, len(tracks)))
 
-                    # 2. Query already downloaded tracks map: spotify_id -> file_path
-                    downloaded_map: Dict[str, str] = {}
-                    rows = conn.execute("SELECT spotify_id, file_path FROM downloaded_tracks").fetchall()
+                    # 2. Query already downloaded tracks map: spotify_id -> info
+                    downloaded_map: Dict[str, Dict[str, str]] = {}
+                    rows = conn.execute("SELECT spotify_id, file_path, quality_badge, source_type FROM downloaded_tracks").fetchall()
                     for r in rows:
                         fpath = r["file_path"]
                         if fpath and os.path.isfile(fpath):
-                            downloaded_map[r["spotify_id"]] = fpath
+                            downloaded_map[r["spotify_id"]] = {
+                                "file_path": fpath,
+                                "quality_badge": r["quality_badge"] or "",
+                                "source_type": r["source_type"] or ""
+                            }
 
                     # 3. Batch insert/update tracks
                     track_rows = []
                     for t in tracks:
-                        existing_fp = downloaded_map.get(t.id, "")
+                        dl_info = downloaded_map.get(t.id)
+                        existing_fp = dl_info["file_path"] if dl_info else ""
+                        q_badge = dl_info["quality_badge"] if dl_info else ""
+                        s_type = dl_info["source_type"] if dl_info else ""
+                        if existing_fp and not q_badge:
+                            qb_inf, st_inf = self.infer_badge_from_file(existing_fp)
+                            q_badge = qb_inf
+                            s_type = s_type or st_inf
                         status = "downloaded" if existing_fp else "pending"
                         track_rows.append((
                             playlist_id,
@@ -1218,15 +1316,17 @@ class ArchiveManager:
                             t.isrc or "",
                             t.cover_url or "",
                             status,
-                            existing_fp
+                            existing_fp,
+                            q_badge,
+                            s_type
                         ))
 
                     conn.executemany("""
                         INSERT INTO saved_playlist_tracks (
                             playlist_id, spotify_id, title, artist, album,
                             duration_ms, track_number, disc_number, isrc,
-                            cover_url, status, file_path
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            cover_url, status, file_path, quality_badge, source_type
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(playlist_id, spotify_id) DO UPDATE SET
                             title = excluded.title,
                             artist = excluded.artist,
@@ -1237,7 +1337,9 @@ class ArchiveManager:
                             isrc = excluded.isrc,
                             cover_url = excluded.cover_url,
                             status = CASE WHEN saved_playlist_tracks.status = 'downloaded' THEN 'downloaded' ELSE excluded.status END,
-                            file_path = CASE WHEN saved_playlist_tracks.file_path != '' THEN saved_playlist_tracks.file_path ELSE excluded.file_path END
+                            file_path = CASE WHEN saved_playlist_tracks.file_path != '' THEN saved_playlist_tracks.file_path ELSE excluded.file_path END,
+                            quality_badge = CASE WHEN saved_playlist_tracks.quality_badge != '' THEN saved_playlist_tracks.quality_badge ELSE excluded.quality_badge END,
+                            source_type = CASE WHEN saved_playlist_tracks.source_type != '' THEN saved_playlist_tracks.source_type ELSE excluded.source_type END
                     """, track_rows)
 
                 logger.info(f"Saved playlist '{name}' ({len(tracks)} tracks) into database.")
@@ -1344,22 +1446,44 @@ class ArchiveManager:
         with self._db_lock:
             conn = self._get_connection()
             try:
-                base_sql = "SELECT * FROM saved_playlist_tracks WHERE playlist_id = ?"
+                base_sql = """
+                    SELECT 
+                        s.id, s.playlist_id, s.spotify_id, s.title, s.artist, s.album,
+                        s.duration_ms, s.track_number, s.disc_number, s.isrc, s.cover_url,
+                        s.status,
+                        COALESCE(NULLIF(s.file_path, ''), d.file_path, '') AS file_path,
+                        COALESCE(NULLIF(s.quality_badge, ''), d.quality_badge, '') AS quality_badge,
+                        COALESCE(NULLIF(s.source_type, ''), d.source_type, '') AS source_type,
+                        s.added_at
+                    FROM saved_playlist_tracks s
+                    LEFT JOIN downloaded_tracks d ON s.spotify_id = d.spotify_id
+                    WHERE s.playlist_id = ?
+                """
                 params: List[Any] = [playlist_id]
                 if status:
-                    base_sql += " AND status = ?"
+                    base_sql += " AND s.status = ?"
                     params.append(status)
                 if search_query:
-                    base_sql += " AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)"
+                    base_sql += " AND (s.title LIKE ? OR s.artist LIKE ? OR s.album LIKE ?)"
                     q = f"%{search_query}%"
                     params.extend([q, q, q])
-                base_sql += " ORDER BY track_number ASC, id ASC"
+                base_sql += " ORDER BY s.track_number ASC, s.id ASC"
                 if limit and limit > 0:
                     base_sql += " LIMIT ?"
                     params.append(limit)
 
                 rows = conn.execute(base_sql, tuple(params)).fetchall()
-                return [dict(r) for r in rows]
+                res = []
+                for r in rows:
+                    d_row = dict(r)
+                    if d_row.get("status") == "downloaded" and not d_row.get("quality_badge"):
+                        qb, st = self.infer_badge_from_file(d_row.get("file_path", ""))
+                        if qb:
+                            d_row["quality_badge"] = qb
+                        if st and not d_row.get("source_type"):
+                            d_row["source_type"] = st
+                    res.append(d_row)
+                return res
             finally:
                 conn.close()
 
@@ -1395,19 +1519,34 @@ class ArchiveManager:
             finally:
                 conn.close()
 
-    def mark_saved_track_downloaded(self, spotify_id: str, file_path: str):
+    def mark_saved_track_downloaded(
+        self,
+        spotify_id: str,
+        file_path: str,
+        quality_badge: str = "",
+        source_type: str = ""
+    ):
         """Marks a track as downloaded across all saved playlists when download succeeds."""
         if not spotify_id:
             return
+        if not quality_badge or not source_type:
+            qb_inf, st_inf = self.infer_badge_from_file(file_path)
+            quality_badge = quality_badge or qb_inf
+            source_type = source_type or st_inf
+
+        norm_fp = normalize_path(file_path)
         with self._db_lock:
             conn = self._get_connection()
             try:
                 with conn:
                     conn.execute("""
                         UPDATE saved_playlist_tracks
-                        SET status = 'downloaded', file_path = ?
+                        SET status = 'downloaded',
+                            file_path = ?,
+                            quality_badge = CASE WHEN ? != '' THEN ? ELSE quality_badge END,
+                            source_type = CASE WHEN ? != '' THEN ? ELSE source_type END
                         WHERE spotify_id = ?
-                    """, (file_path, spotify_id))
+                    """, (norm_fp, quality_badge, quality_badge, source_type, source_type, spotify_id))
             except Exception as e:
                 logger.debug(f"Failed to mark track {spotify_id} downloaded in saved playlists: {e}")
             finally:

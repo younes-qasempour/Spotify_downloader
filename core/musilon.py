@@ -417,7 +417,8 @@ class MusilonEngine:
             {challenge_script}
             console.log(JSON.stringify(cookies));
             """
-            proc = subprocess.run(['node', '-e', node_code], capture_output=True, text=True, timeout=10)
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            proc = subprocess.run(['node', '-e', node_code], capture_output=True, text=True, timeout=10, creationflags=flags)
             if proc.returncode == 0 and proc.stdout.strip():
                 cookies = json.loads(proc.stdout.strip())
                 for k, v in cookies.items():

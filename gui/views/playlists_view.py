@@ -3,8 +3,8 @@ import subprocess
 import threading
 from typing import Optional, List, Dict, Any
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QModelIndex, QRectF
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QColor
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QModelIndex, QRectF, QUrl
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QColor, QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QHeaderView, QMenu, QApplication,
     QStackedWidget, QLabel, QFrame
@@ -82,7 +82,7 @@ class SpotifyCredentialsDialog(MessageBoxBase):
         self.viewLayout.addWidget(self.guide_label)
 
         self.open_dash_btn = PushButton(FluentIcon.LINK, "Open Spotify Developer Dashboard", self)
-        self.open_dash_btn.clicked.connect(lambda: subprocess.Popen(["cmd", "/c", "start", "https://developer.spotify.com/dashboard"]))
+        self.open_dash_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://developer.spotify.com/dashboard")))
         self.viewLayout.addWidget(self.open_dash_btn)
 
         self.cid_input = LineEdit(self)
@@ -504,10 +504,6 @@ class PlaylistsView(QWidget):
         batch_header.addStretch(1)
         batch_layout.addLayout(batch_header)
 
-        # Controls Row
-        batch_ctrl_layout = QHBoxLayout()
-        batch_ctrl_layout.setSpacing(10)
-
         spin_lbl = BodyLabel("Batch Size:", self)
         self.batch_spinbox = SpinBox(self)
         self.batch_spinbox.setRange(1, 5000)
@@ -578,26 +574,32 @@ class PlaylistsView(QWidget):
         self.reset_btn.setToolTip("Reset queued & failed tracks in this playlist back to pending")
         self.reset_btn.clicked.connect(self._on_reset_queued_clicked)
 
-        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Folder", self)
-        self.open_folder_btn.clicked.connect(self._open_download_folder)
+        # Row 1: Batch Size Selection & Quick Presets
+        batch_size_layout = QHBoxLayout()
+        batch_size_layout.setSpacing(8)
+        batch_size_layout.addWidget(spin_lbl)
+        batch_size_layout.addWidget(self.batch_spinbox)
+        batch_size_layout.addWidget(self.preset_25)
+        batch_size_layout.addWidget(self.preset_50)
+        batch_size_layout.addWidget(self.preset_100)
+        batch_size_layout.addWidget(self.preset_200)
+        batch_size_layout.addWidget(self.preset_all)
+        batch_size_layout.addStretch(1)
 
-        batch_ctrl_layout.addWidget(spin_lbl)
-        batch_ctrl_layout.addWidget(self.batch_spinbox)
-        batch_ctrl_layout.addWidget(self.preset_25)
-        batch_ctrl_layout.addWidget(self.preset_50)
-        batch_ctrl_layout.addWidget(self.preset_100)
-        batch_ctrl_layout.addWidget(self.preset_200)
-        batch_ctrl_layout.addWidget(self.preset_all)
-        batch_ctrl_layout.addSpacing(10)
-        batch_ctrl_layout.addWidget(self.download_batch_btn)
-        batch_ctrl_layout.addWidget(self.download_selected_btn)
-        batch_ctrl_layout.addWidget(self.pause_btn)
-        batch_ctrl_layout.addWidget(self.stop_btn)
-        batch_ctrl_layout.addWidget(self.reset_btn)
-        batch_ctrl_layout.addWidget(self.open_folder_btn)
-        batch_ctrl_layout.addStretch(1)
+        # Row 2: Action Buttons
+        batch_action_layout = QHBoxLayout()
+        batch_action_layout.setSpacing(10)
+        batch_action_layout.addWidget(self.download_batch_btn)
+        batch_action_layout.addWidget(self.download_selected_btn)
+        batch_action_layout.addWidget(self.pause_btn)
+        batch_action_layout.addWidget(self.stop_btn)
+        batch_action_layout.addWidget(self.reset_btn)
+        batch_action_layout.addWidget(self.open_folder_btn)
+        batch_action_layout.addStretch(1)
 
-        batch_layout.addLayout(batch_ctrl_layout)
+        batch_layout.addLayout(batch_size_layout)
+        batch_layout.addSpacing(6)
+        batch_layout.addLayout(batch_action_layout)
         detail_layout.addWidget(batch_card)
 
         # 3. Track Search & Status Filter Row
@@ -1160,12 +1162,17 @@ class PlaylistsView(QWidget):
             status = r.get("status", "pending")
             status_pill = "Completed" if status == "downloaded" else ("Queued" if status == "queued" else "Pending")
             file_path = r.get("file_path", "")
+            q_badge = r.get("quality_badge", "")
+            s_type = r.get("source_type", "")
+            if status == "downloaded" and not q_badge and file_path:
+                q_badge, s_inf = self.archive.infer_badge_from_file(file_path)
+                s_type = s_type or s_inf
 
             item = QueueItem(
                 track=track,
                 status=status_pill,
-                source_type="Musilon" if status == "downloaded" else "",
-                quality_badge="FLAC 16" if status == "downloaded" else "",
+                source_type=s_type if status == "downloaded" else "",
+                quality_badge=q_badge if status == "downloaded" else "",
                 progress_percent=100.0 if status == "downloaded" else 0.0,
                 output_path=file_path
             )
@@ -1386,7 +1393,11 @@ class PlaylistsView(QWidget):
                 out_dir = specific_folder
 
         if os.path.exists(out_dir):
-            subprocess.Popen(f'explorer "{os.path.normpath(out_dir)}"')
+            try:
+                os.startfile(out_dir)
+            except Exception:
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+                subprocess.Popen(["explorer", os.path.normpath(out_dir)], creationflags=flags)
 
     def _on_table_double_click(self, index: QModelIndex):
         item = self.model.get_item(index.row())
@@ -1494,7 +1505,8 @@ class PlaylistsView(QWidget):
         elif action == act_copy_url:
             QApplication.clipboard().setText(f"https://open.spotify.com/track/{item.track.id}")
         elif act_reveal and action == act_reveal:
-            subprocess.Popen(f'explorer /select,"{os.path.normpath(item.output_path)}"')
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            subprocess.Popen(f'explorer /select,"{os.path.normpath(item.output_path)}"', creationflags=flags)
         elif act_reset and action == act_reset:
             self.archive.update_saved_track_status(self.current_playlist_id, item.track.id, "pending")
             item.status = "Pending"

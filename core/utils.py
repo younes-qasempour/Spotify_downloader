@@ -179,7 +179,8 @@ def download_ffmpeg(
             os.remove(temp_gz)
 
         # Test execution
-        proc = subprocess.run([target_exe, "-version"], capture_output=True, text=True, timeout=5)
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        proc = subprocess.run([target_exe, "-version"], capture_output=True, text=True, timeout=5, creationflags=flags)
         if proc.returncode == 0:
             logger.info(f"FFmpeg successfully installed at {target_exe}")
             if progress_callback:

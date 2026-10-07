@@ -341,6 +341,23 @@ d:\Spotify-Downloader\
 | 2026-09-17 | Album Song Numbering & Ordering | Mutagen FLAC/MP3 + Dual Naming | ✅ Success (100%) | All 13 Nevermind and 15 LEGION tracks renamed `01..N`, tagged, and ordered |
 | 2026-10-07 | Musilon Next.js / Directus Migration | `https://open.musilon.com` REST API + ISRC | ✅ Success (100%) | Upgraded `MusilonEngine` to NextAuth credentials, `/api/search` catalog, direct ISRC download (`quality=hires/lossless/high`), 409 step-down fallback, and Ogg Vorbis/Opus tagging. |
 | 2026-10-07 | Musilon Rate Limit & Budget Detection | Daily Quota (`/api/media/download-budget`) + Prompt Fallback | ✅ Success (100%) | Detected 429 and `DOWNLOAD_BUDGET_EXHAUSTED` (HTTP 400/403), verified queue pause + prompt modal, `_allow_yt_on_limit` preference persistence, and subsequent track Musilon bypass. |
+| 2026-10-07 | Playlist Quality Badge Accuracy & System Polish | True SQLite metadata sync, UI 2-row layout, memory safeguards | ✅ Success (100%) | Eliminated hardcoded "FLAC 16" in playlist view; added `quality_badge` & `source_type` columns to `saved_playlist_tracks` with automated backfill; synchronized step-down tiers in `resolver.py`; split playlist batch bar into 2 rows; added LRU cache in `queue_delegate.py`; and suppressed Windows console flashing. |
+
+### 12. Quality Badge Accuracy, Toolbar Ergonomics, Subprocess Guarding, and Memory Safeguards
+- **Background & Root Causes:**
+  1. In `gui/views/playlists_view.py`, `_load_detail_tracks()` hardcoded `quality_badge="FLAC 16"` and `source_type="Musilon"` for all downloaded items.
+  2. `saved_playlist_tracks` lacked `quality_badge` and `source_type` columns, preventing persistence and retrieval of real audio formats.
+  3. In `gui/views/playlists_view.py`, 14 widgets in a single `QHBoxLayout` caused toolbar button clipping on narrower screens.
+  4. In `core/resolver.py`, when Musilon stepped down to 320k OGG/MP3, `resolved.quality_badge` was not refreshed to match the downloaded file.
+  5. In `gui/queue_delegate.py`, `ThumbnailCache` was unbounded and spawned unmanaged threads per image, creating memory and thread pressure.
+  6. Subprocess invocations on Windows flashed brief console windows due to missing `CREATE_NO_WINDOW` flags.
+- **Resolutions:**
+  1. Updated `saved_playlist_tracks` schema with migrations and automated backfill for all existing downloaded records.
+  2. Integrated `ArchiveManager.infer_badge_from_file(file_path)` across `archive.py`, `playlists_view.py`, and `completed_view.py`.
+  3. Reorganized the Playlist detail batch controls into a responsive 2-row layout (Row 1: Batch size & presets; Row 2: Action buttons).
+  4. Synchronized `resolved.quality_badge` and `resolved.file_extension` in `resolver.download_and_tag()` based on actual file headers and extensions.
+  5. Implemented a 500-item LRU `OrderedDict` and 4-worker `ThreadPoolExecutor` in `ThumbnailCache`.
+  6. Replaced shell commands with `QDesktopServices.openUrl()`, `os.startfile()`, and added `creationflags=CREATE_NO_WINDOW` across all subprocess calls.
 
 ## 5. Development Cheat Sheet
 

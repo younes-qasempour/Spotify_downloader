@@ -65,13 +65,22 @@ def run_tests():
     print("Step 6: Queued tracks count:", len(queued_tracks), flush=True)
     assert len(queued_tracks) == 25
 
-    # 4. Mark downloaded
-    archive.mark_saved_track_downloaded("tr_1", "C:/music/song1.flac")
+    # 4. Mark downloaded with specific quality badges
+    archive.mark_saved_track_downloaded("tr_1", "C:/music/song1.flac", "FLAC 16", "Musilon")
+    archive.mark_saved_track_downloaded("tr_2", "C:/music/song2.opus", "YTM Opus", "YouTube Music")
+    
+    downloaded_tracks = archive.get_saved_playlist_tracks("test12345", status="downloaded")
+    assert len(downloaded_tracks) == 2
+    assert downloaded_tracks[0]["quality_badge"] == "FLAC 16"
+    assert downloaded_tracks[0]["source_type"] == "Musilon"
+    assert downloaded_tracks[1]["quality_badge"] == "YTM Opus"
+    assert downloaded_tracks[1]["source_type"] == "YouTube Music"
+
     pl = archive.get_saved_playlist("test12345")
     print("Step 7: Downloaded count:", pl["downloaded_count"], flush=True)
-    assert pl["downloaded_count"] == 1
-    assert pl["pending_count"] == 99
-    assert pl["progress_percent"] == 1.0
+    assert pl["downloaded_count"] == 2
+    assert pl["pending_count"] == 98
+    assert pl["progress_percent"] == 2.0
 
     # 5. Test search filter
     search_res = archive.get_saved_playlist_tracks("test12345", search_query="Song 42")

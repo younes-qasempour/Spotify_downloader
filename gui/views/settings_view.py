@@ -2,7 +2,8 @@ import os
 import subprocess
 import threading
 from typing import Optional
-from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QScrollArea,
     QFrame, QApplication
@@ -301,7 +302,7 @@ class SettingsView(QScrollArea):
 
         s_btn_row = QHBoxLayout()
         self.open_sp_dash_btn = PushButton(FluentIcon.LINK, "Open Spotify Developer Dashboard", spotify_card)
-        self.open_sp_dash_btn.clicked.connect(lambda: subprocess.Popen(["cmd", "/c", "start", "https://developer.spotify.com/dashboard"]))
+        self.open_sp_dash_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://developer.spotify.com/dashboard")))
         s_btn_row.addWidget(self.open_sp_dash_btn)
         s_btn_row.addStretch(1)
         s_layout.addLayout(s_btn_row)

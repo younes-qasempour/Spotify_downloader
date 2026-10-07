@@ -400,8 +400,8 @@ class DownloadQueueManager:
                 if os.path.abspath(src_file) == os.path.abspath(target_dest):
                     # Same exact file in the destination folder
                     item.output_path = src_file
-                    item.quality_badge = archived.get("quality_badge", "FLAC 16")
-                    item.source_type = archived.get("source_type", "Musilon")
+                    item.quality_badge = archived.get("quality_badge") or self.archive.infer_badge_from_file(src_file)[0] or "FLAC 16"
+                    item.source_type = archived.get("source_type") or self.archive.infer_badge_from_file(src_file)[1] or "Musilon"
                     item.progress_percent = 100.0
                     self._update_status(item, "Completed")
                     if self.on_track_source_resolved:
@@ -410,6 +410,7 @@ class DownloadQueueManager:
                         self.on_track_progress(track_id, 100.0, "Archived", "00:00")
                     if self.on_track_completed:
                         self.on_track_completed(track_id, src_file)
+                    self.archive.mark_saved_track_downloaded(track.id, src_file, item.quality_badge, item.source_type)
                     logger.info(f"Reused existing archive file for '{track.title}': {src_file}")
                     return
                 else:
@@ -443,7 +444,7 @@ class DownloadQueueManager:
                                 logger.debug(f"Retagging archived track for album failed: {e_tag}")
 
                         item.output_path = target_dest
-                        item.quality_badge = archived.get("quality_badge", "FLAC 16")
+                        item.quality_badge = archived.get("quality_badge") or self.archive.infer_badge_from_file(target_dest)[0] or "FLAC 16"
                         item.source_type = "Local Archive"
                         item.progress_percent = 100.0
                         self._update_status(item, "Completed")
@@ -454,6 +455,7 @@ class DownloadQueueManager:
                         if self.on_track_completed:
                             self.on_track_completed(track_id, target_dest)
                         self.archive.add_track(track, target_dest, item.quality_badge, "Local Archive")
+                        self.archive.mark_saved_track_downloaded(track.id, target_dest, item.quality_badge, item.source_type)
                         logger.info(f"Copied archived track '{track.title}' to {target_dest}")
                         return
                     except Exception as copy_err:
@@ -597,7 +599,7 @@ class DownloadQueueManager:
             # Record in Archive
             if file_path and os.path.isfile(file_path):
                 self.archive.add_track(track, file_path, item.quality_badge, item.source_type)
-                self.archive.mark_saved_track_downloaded(track.id, file_path)
+                self.archive.mark_saved_track_downloaded(track.id, file_path, item.quality_badge, item.source_type)
 
             if self.on_track_completed:
                 self.on_track_completed(track_id, item.output_path)
@@ -740,7 +742,7 @@ class DownloadQueueManager:
         self._update_status(item, "Completed")
         if file_path and os.path.isfile(file_path):
             self.archive.add_track(track, file_path, item.quality_badge, item.source_type)
-            self.archive.mark_saved_track_downloaded(track.id, file_path)
+            self.archive.mark_saved_track_downloaded(track.id, file_path, item.quality_badge, item.source_type)
         if self.on_track_completed:
             self.on_track_completed(track.id, item.output_path)
 

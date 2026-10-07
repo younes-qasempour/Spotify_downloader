@@ -453,13 +453,24 @@ class CompletedView(QWidget):
                 collection_name=r.get("collection_name", ""),
                 collection_type=r.get("collection_type", "track")
             )
+            q_badge = r.get("quality_badge") or ""
+            f_path = r.get("file_path", "")
+            s_type = r.get("source_type") or ""
+            if not q_badge and f_path:
+                q_inf, s_inf = self.archive.infer_badge_from_file(f_path)
+                q_badge = q_inf or "FLAC 16"
+                s_type = s_type or s_inf or "Musilon"
+            elif not q_badge:
+                q_badge = "FLAC 16"
+                s_type = s_type or "Musilon"
+
             item = QueueItem(
                 track=track,
                 status="Completed",
-                source_type=r.get("source_type", "Musilon"),
-                quality_badge=r.get("quality_badge", "FLAC 16"),
+                source_type=s_type,
+                quality_badge=q_badge,
                 progress_percent=100.0,
-                output_path=r.get("file_path", "")
+                output_path=f_path
             )
             self.model.add_item(item)
             row = self.model.rowCount() - 1
@@ -667,13 +678,24 @@ class CompletedView(QWidget):
                 collection_name=r.get("collection_name", ""),
                 collection_type=r.get("collection_type", coll_type)
             )
+            q_badge = r.get("quality_badge") or ""
+            f_path = r.get("file_path", "")
+            s_type = r.get("source_type") or ""
+            if not q_badge and f_path:
+                q_inf, s_inf = self.archive.infer_badge_from_file(f_path)
+                q_badge = q_inf or "FLAC 16"
+                s_type = s_type or s_inf or "Musilon"
+            elif not q_badge:
+                q_badge = "FLAC 16"
+                s_type = s_type or "Musilon"
+
             item = QueueItem(
                 track=track,
                 status="Completed",
-                source_type=r.get("source_type", "Musilon"),
-                quality_badge=r.get("quality_badge", "FLAC 16"),
+                source_type=s_type,
+                quality_badge=q_badge,
                 progress_percent=100.0,
-                output_path=r.get("file_path", "")
+                output_path=f_path
             )
             self.model.add_item(item)
             row = self.model.rowCount() - 1
@@ -769,7 +791,8 @@ class CompletedView(QWidget):
                 InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == show_act:
             if item.output_path and os.path.isfile(item.output_path):
-                subprocess.Popen(f'explorer /select,"{os.path.normpath(item.output_path)}"')
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+                subprocess.Popen(f'explorer /select,"{os.path.normpath(item.output_path)}"', creationflags=flags)
             else:
                 InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == copy_act:

@@ -63,28 +63,36 @@ def extract_embedded_cover(file_path: str) -> Optional[bytes]:
     return None
 
 
+import collections
+from concurrent.futures import ThreadPoolExecutor
+
 class ThumbnailSignalEmitter(QObject):
     sig_loaded = pyqtSignal(str)
 
 
 class ThumbnailCache:
-    """Thread-safe in-memory cache for album artwork pixmaps (both remote URLs and local files)."""
+    """Thread-safe bounded LRU in-memory cache for album artwork pixmaps."""
     _instance = None
     _lock = threading.Lock()
+    MAX_CACHE_SIZE = 500
 
     def __new__(cls):
         if not cls._instance:
             cls._instance = super().__new__(cls)
-            cls._instance.cache: Dict[str, QPixmap] = {}
+            cls._instance.cache: collections.OrderedDict[str, QPixmap] = collections.OrderedDict()
             cls._instance.loading: set = set()
             cls._instance.emitter = ThumbnailSignalEmitter()
+            cls._instance.pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ThumbLoader")
         return cls._instance
 
     def get(self, key: str) -> Optional[QPixmap]:
         if not key:
             return None
         with self._lock:
-            return self.cache.get(key)
+            if key in self.cache:
+                self.cache.move_to_end(key)
+                return self.cache[key]
+            return None
 
     def load_async(self, key: str):
         if not key:
@@ -121,6 +129,9 @@ class ThumbnailCache:
                         pix = QPixmap.fromImage(scaled)
                         with self._lock:
                             self.cache[key] = pix
+                            self.cache.move_to_end(key)
+                            while len(self.cache) > self.MAX_CACHE_SIZE:
+                                self.cache.popitem(last=False)
                             self.loading.discard(key)
                         self.emitter.sig_loaded.emit(key)
                         return
@@ -129,7 +140,7 @@ class ThumbnailCache:
             with self._lock:
                 self.loading.discard(key)
 
-        threading.Thread(target=worker, daemon=True).start()
+        self.pool.submit(worker)
 
 
 class TrackCardDelegate(QStyledItemDelegate):
