@@ -89,6 +89,19 @@ class YtdlpEngine:
         if self.ffmpeg_path:
             opts["ffmpeg_location"] = self.ffmpeg_path
 
+        # Disable broken external POT script plugins that cause 15s subprocess timeouts
+        opts.setdefault("extractor_args", {})
+        opts["extractor_args"]["youtubepot-bgutilscriptdeno"] = {"script_path": ["disabled"]}
+        opts["extractor_args"]["youtubepot-bgutilscriptnode"] = {"script_path": ["disabled"]}
+
+        try:
+            from yt_dlp.extractor.youtube.pot import _director
+            if hasattr(_director, "_pot_providers") and hasattr(_director._pot_providers, "value"):
+                _director._pot_providers.value.pop('BgUtilScriptDeno', None)
+                _director._pot_providers.value.pop('BgUtilScriptNode', None)
+        except Exception:
+            pass
+
         return opts
 
     @staticmethod
@@ -113,7 +126,8 @@ class YtdlpEngine:
             "is_acoustic": False,
             "is_remix": False,
             "is_instrumental": False,
-            "is_radio_edit": False
+            "is_radio_edit": False,
+            "is_acappella": False,
         }
 
         lower_t = title.lower()
@@ -129,6 +143,8 @@ class YtdlpEngine:
             flags["is_instrumental"] = True
         if "radio edit" in lower_t or "short edit" in lower_t:
             flags["is_radio_edit"] = True
+        if any(k in lower_t for k in ["acappella", "a cappella", "acapella"]):
+            flags["is_acappella"] = True
 
         featured_artists: List[str] = []
         feat_patterns = [
@@ -155,8 +171,14 @@ class YtdlpEngine:
         core = re.sub(r'[\(\[]\s*anniversary(?:\s+edition)?\s*[\)\]]', '', core, flags=re.IGNORECASE)
         core = re.sub(r'[\-\–\—]\s*anniversary(?:\s+edition)?\s*$', '', core, flags=re.IGNORECASE)
 
-        # Strip soundtrack / movie / TV / series subtitles in parentheses/brackets
-        core = re.sub(r'[\(\[]\s*(?:music\s+)?(?:from|featured in|soundtrack|theme|ost|score|original series)\b[^\)\]]*[\)\]]', '', core, flags=re.IGNORECASE)
+        # Strip acappella tags from search core
+        core = re.sub(r'[\(\[]\s*a\s*capp?ella\s*[\)\]]', '', core, flags=re.IGNORECASE)
+
+        # Strip soundtrack / game / movie / TV / series subtitles in parentheses/brackets
+        core = re.sub(r'[\(\[]\s*(?:music\s+|game\s+|movie\s+|film\s+|original\s+)*(?:from|featured in|soundtrack|theme|ost|score|original series|series)\b[^\)\]]*[\)\]]', '', core, flags=re.IGNORECASE)
+
+        # Strip classical arrangement / transcription subtitles in parentheses/brackets
+        core = re.sub(r'[\(\[]\s*(?:arr\.?|arranged|transcription)\b[^\)\]]*[\)\]]', '', core, flags=re.IGNORECASE)
 
         # Strip movie / soundtrack / edition / series trailing tags after separators
         for sep in [" - ", " – ", " — "]:
@@ -268,12 +290,15 @@ class YtdlpEngine:
             or is_official_channel
         )
 
+        is_persian_label = any(lbl in uploader_lower for lbl in ("taraneh", "caltex", "avang", "pars video", "persianmusictube"))
+
         artist_verified = (
             artist_in_channel
             or artist_in_title
             or artist_in_desc
             or native_artist_match
             or (is_cjk_title and (is_official_channel or is_topic_channel or norm_core in cand_title_norm))
+            or (is_persian_label and diff <= 10.0 and (norm_core == norm_cand_core or norm_core in cand_title_norm or best_sim >= 0.65))
         )
 
         # Strict check: Candidate must mention artist in channel/title/desc or be verified native/official delivery
@@ -310,23 +335,36 @@ class YtdlpEngine:
         raw_seq_sim = difflib.SequenceMatcher(None, norm_raw, norm_cand_core).ratio()
         best_sim = max(seq_sim, raw_seq_sim)
 
+        cand_full_words = set(cand_title_norm.split())
+        cand_core_words = set(norm_cand_core.split())
+        all_cand_words = cand_full_words.union(cand_core_words)
+
         core_words = set(norm_core.split())
-        cand_words = set(norm_cand_core.split())
-        matched_words = core_words.intersection(cand_words)
+        matched_words = core_words.intersection(all_cand_words)
         word_overlap = len(matched_words) / max(len(core_words), 1)
 
-        missing_words = core_words - cand_words
-        sig_missing = [w for w in missing_words if len(w) > 2]
-
-        extra_words = cand_words - core_words
         artist_words = set(" ".join(norm_artists).split())
         if native_artist_prefix:
             artist_words.update(native_artist_prefix.split())
         stop_words = {"the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for", "with", "feat", "ft", "by"}
+        classical_arrangement_terms = {"arr", "arranged", "mezzo", "soprano", "guitar", "piano", "violin", "cello", "orchestra", "transcription", "theme", "soundtrack"}
+
+        desc_words = set(desc_norm.split())
+        sig_missing = [
+            w for w in (core_words - cand_core_words)
+            if len(w) > 2
+            and w not in cand_full_words
+            and w not in desc_words
+            and w not in artist_words
+            and w not in stop_words
+            and w not in classical_arrangement_terms
+        ]
+
+        extra_words = cand_core_words - core_words
         sig_extra = [w for w in extra_words if w not in artist_words and w not in stop_words and len(w) > 2]
 
         # Base title score (max 50)
-        if norm_core == norm_cand_core or norm_core in norm_cand_core or norm_raw in norm_cand_core:
+        if norm_core == norm_cand_core or norm_core in norm_cand_core or norm_raw in norm_cand_core or norm_core in cand_title_norm or norm_raw in cand_title_norm:
             title_score = 50.0
         elif (is_official_delivery or is_topic_channel or is_official_channel) and (artist_in_desc or artist_in_channel or artist_in_title) and diff <= 3.0:
             # Multi-lingual official delivery match where title is English/Romaji (e.g. Sheena Ringo - Marunouchi Sadistic)
@@ -368,6 +406,13 @@ class YtdlpEngine:
         elif cand_has_acoustic and flags["is_acoustic"]:
             version_penalty += 20.0
 
+        # Check acappella
+        cand_has_acappella = any(a in cand_lower_raw for a in ["acappella", "a cappella", "acapella"])
+        if cand_has_acappella and not flags.get("is_acappella", False):
+            version_penalty -= 30.0
+        elif cand_has_acappella and flags.get("is_acappella", False):
+            version_penalty += 20.0
+
         # 5. Channel and Delivery Scoring
         channel_score = 0.0
         if is_topic_channel:
@@ -377,7 +422,7 @@ class YtdlpEngine:
                 channel_score = 25.0  # Various Artists soundtrack topic
         elif artist_in_channel:
             channel_score = 35.0  # Official artist channel
-        elif any(lbl in uploader_lower for lbl in ("vevo", "records", "entertainment", "sony music", "universal music", "warner")):
+        elif any(lbl in uploader_lower for lbl in ("vevo", "records", "entertainment", "sony music", "universal music", "warner", "taraneh", "caltex", "avang")):
             channel_score = 30.0  # Official record label
         else:
             channel_score = 5.0   # Third party channel
@@ -445,6 +490,35 @@ class YtdlpEngine:
             queries.append(f'ytsearch5:{artist} {" ".join(feat_artists)} {core_title}')
         if clean_artist != artist:
             queries.append(f'ytsearch5:{clean_artist} {core_title}')
+
+        # Add multi-artist performer queries (classical composers vs performers, duets, collaborations)
+        for sec_artist in (track.artists[1:] if track.artists else []):
+            sec_clean = sec_artist.strip()
+            if sec_clean and sec_clean.lower() != artist.lower():
+                queries.append(f'ytsearch5:{sec_clean} {core_title}')
+                queries.append(f'ytsearch5:{sec_clean} - {core_title}')
+                queries.append(f'ytsearch5:{sec_clean} {core_title} Topic')
+
+        # Add album-assisted queries
+        if track.album:
+            clean_alb = re.sub(r'[\(\[].*?[\)\]]', '', track.album).strip()
+            clean_alb = clean_watermarks(clean_alb).strip()
+            if clean_alb and len(clean_alb) > 2 and clean_alb.lower() != core_title.lower():
+                queries.append(f'ytsearch5:{artist} {clean_alb} {core_title}')
+                queries.append(f'ytsearch5:{clean_alb} {core_title}')
+                queries.append(f'ytsearch5:{core_title} {clean_alb}')
+
+        # Add Persian label catalog assisted queries
+        if isrc.startswith("USJ3V") or "taraneh" in (track.album or "").lower() or "taraneh" in core_title.lower():
+            queries.append(f'ytsearch5:{core_title} Taraneh')
+            queries.append(f'ytsearch5:{artist} {core_title} Taraneh')
+        elif isrc.startswith("USBMF") or "caltex" in (track.album or "").lower():
+            queries.append(f'ytsearch5:{core_title} Caltex')
+            queries.append(f'ytsearch5:{artist} {core_title} Caltex')
+
+        if flags.get("is_acappella", False):
+            queries.append(f'ytsearch5:{artist} {core_title} acappella')
+            queries.append(f'ytsearch5:{core_title} acappella {artist}')
 
         is_cjk_title = bool(re.search(r'[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f\uac00-\ud7af]', core_title))
         if is_cjk_title:

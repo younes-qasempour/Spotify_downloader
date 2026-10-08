@@ -410,7 +410,24 @@ d:\Spotify-Downloader\
 - **Fixes:**
   1. Initialized `text_preview = ""` before the response inspection block in `core/musilon.py` and guarded the downstream premium check.
   2. Enhanced `_clean_title_for_search()` in `core/ytdlp_engine.py` to strip soundtrack, TV, movie, and series parentheticals and subtitles after separators.
-  3. Added unit tests in `tests/test_utils.py` verifying soundtrack subtitle extraction and clean core title matching.
+### 36. Multi-Artist Classical Resolution, Broken POT Plugin Bypass, and Acappella/Persian Catalog Matching
+- **Symptoms:**
+  1. Classical and arranged tracks (*Fauré: 3 Songs, Op. 23: I. Les Berceaux*) failed resolution and download despite official performer videos existing on YouTube.
+  2. Acappella and video game vocal tracks (*Dark Souls 3 main menu theme [Acappella]*) failed resolution with `Title score too low (3.0)` despite exact matching Topic videos existing.
+  3. Persian compilation album tracks (*Shahram Shabpareh - Anar Anar* from *Kereshme 1*) failed to resolve to verified label uploads (*Serjik - Anar Anar* on TaranehEnterprise).
+  4. YouTube queries intermittently hung on 15-second subprocess timeouts due to external Deno/Node POT provider plugins (`bgutil`) failing permission checks.
+- **Causes:**
+  1. In `core/ytdlp_engine.py`, `resolve_track()` only queried `track.primary_artist` (the composer, e.g. *Gabriel Fauré*), omitting the performer/channel artist (*Marina Viotti*).
+  2. In `_score_candidate()`, stripping all parentheticals from `cand_core` caused parenthetical words present in the candidate title (e.g. `[Acappella]`, `(Arr. for Mezzo-Soprano & Guitar...)`) to be falsely penalized as "missing significant words" (-15.0 per word).
+  3. `_clean_title_for_search()` did not extract `[Acappella]` or classical arrangement markers (`Arr. for...`), causing mismatch against clean titles.
+  4. External `getpot_bgutil_script` plugin ran `deno` with restrictive flags, causing a 15s timeout on every YouTube request.
+- **Fixes:**
+  1. Disabled broken external script POT plugins (`youtubepot-bgutilscriptdeno`, `youtubepot-bgutilscriptnode`) in `_get_ydl_auth_opts()`.
+  2. Added secondary/performing artist queries (`ytsearch5:{art} {core_title}`) for all artists in `track.artists[1:]`.
+  3. Added album-assisted and verified label queries (`Taraneh`, `Caltex`) for compilation and Persian catalog releases.
+  4. Added `is_acappella` flag detection and scoring reward (+20.0), and stripped acappella/arrangement markers from search core.
+  5. Fixed `_score_candidate()` missing word checking by validating against `cand_full_words` (candidate's actual full title) and ignoring classical arrangement terms.
+  6. Verified verified Persian label channels (`TaranehEnterprise`, `Caltex Records`) for close duration (<=10s) and title matching.
 
 ## 5. Development Cheat Sheet
 
