@@ -390,6 +390,16 @@ d:\Spotify-Downloader\
   - Implemented `get_download_budget()` and `is_budget_exhausted()` in `core/musilon.py`.
   - Integrated quota details dynamically into `test_connection()` and the Settings UI so the user clearly sees their current daily allowance (`Daily Quota: X/150 Lossless, Y/150 Standard`) rather than guessing why downloads might switch to fallbacks.
 
+### 34. Cooldown Stepper Controls Legibility & v1.0.1 Version Preparation
+- **Symptom:**
+  - In `SettingsView`, the numeric cooldown values inside the Min and Max SpinBoxes were completely invisible (only the up/down arrow buttons were visible).
+- **Cause:**
+  - Standard `qfluentwidgets.SpinBox` applies a default CSS rule `padding: 0px 80px 0 10px` to house side-by-side arrow buttons. At a widget width of 85px, the 90px total horizontal padding completely squeezed out the internal `QLineEdit` text area.
+- **Fix:**
+  - Migrated `cooldown_min_spin` and `cooldown_max_spin` to `CompactSpinBox(musilon_card)` with `setFixedWidth(95)`.
+  - `CompactSpinBox` uses native vertical up/down stepper arrows (`padding: 0px 26px 0 10px`), ensuring numeric values (`0` through `300`) are 100% visible, centered, and legible in dark mode.
+  - Bumped version to `v1.0.1` across `core/__init__.py`, `installer.iss`, `version_info.txt`, and `build_windows.py`.
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:

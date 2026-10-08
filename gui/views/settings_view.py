@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
     LineEdit, PrimaryPushButton, PushButton, ToolButton, SwitchButton,
-    CardWidget, InfoBar, InfoBarPosition, FluentIcon, Slider, ComboBox, SpinBox
+    CardWidget, InfoBar, InfoBarPosition, FluentIcon, Slider, ComboBox, CompactSpinBox
 )
 
 from core.config import config
@@ -281,17 +281,17 @@ class SettingsView(QScrollArea):
         spin_box_layout.setSpacing(10)
 
         min_lbl = CaptionLabel("Min:", musilon_card)
-        self.cooldown_min_spin = SpinBox(musilon_card)
+        self.cooldown_min_spin = CompactSpinBox(musilon_card)
         self.cooldown_min_spin.setRange(0, 300)
         self.cooldown_min_spin.setValue(int(config.get("musilon.cooldown_min_sec", 15)))
-        self.cooldown_min_spin.setFixedWidth(85)
+        self.cooldown_min_spin.setFixedWidth(95)
         self.cooldown_min_spin.valueChanged.connect(self._on_cooldown_min_changed)
 
         max_lbl = CaptionLabel("Max:", musilon_card)
-        self.cooldown_max_spin = SpinBox(musilon_card)
+        self.cooldown_max_spin = CompactSpinBox(musilon_card)
         self.cooldown_max_spin.setRange(0, 300)
         self.cooldown_max_spin.setValue(int(config.get("musilon.cooldown_max_sec", 35)))
-        self.cooldown_max_spin.setFixedWidth(85)
+        self.cooldown_max_spin.setFixedWidth(95)
         self.cooldown_max_spin.valueChanged.connect(self._on_cooldown_max_changed)
 
         spin_box_layout.addWidget(min_lbl)

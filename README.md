@@ -3,7 +3,7 @@
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
   <strong>Next-Generation High-Fidelity Spotify Audio Downloader & Library Manager for Windows 11</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.0.0-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.0.0"></a>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.0.1-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.0.1"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Fluent">
   <img src="https://img.shields.io/badge/Audio-24bit%20Hi--Res%20%7C%2016bit%20FLAC-00C853?style=for-the-badge&logo=flac&logoColor=white" alt="Lossless FLAC">
@@ -154,7 +154,7 @@ Flacify/
 ## 💾 Installation
 
 ### Option 1: Standalone Windows Installer (Recommended)
-1. Download **`Flacify_Setup_v1.0.0.exe`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases).
+1. Download **`Flacify_Setup_v1.0.1.exe`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases).
 2. Run the installer wizard (installs per-user into `%LOCALAPPDATA%\Programs\Flacify` without requiring Administrator privileges).
 3. Launch **Flacify** from your Start Menu or Desktop shortcut.
 
@@ -238,7 +238,7 @@ python build_windows.py
 This automated pipeline:
 1. Validates and generates multi-resolution Windows icons (`assets/icon.ico`).
 2. Invokes **PyInstaller** using `app.spec` to create a slim, windowed `dist/Flacify` application bundle.
-3. Invokes **Inno Setup 6** (`ISCC.exe`) to generate `dist/installer/Flacify_Setup_v1.0.0.exe` with a complete uninstaller and mutex process guard.
+3. Invokes **Inno Setup 6** (`ISCC.exe`) to generate `dist/installer/Flacify_Setup_v1.0.1.exe` with a complete uninstaller and mutex process guard.
 
 ---
 
