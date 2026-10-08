@@ -138,7 +138,7 @@ class SettingsView(QScrollArea):
         m_layout.addLayout(cookie_row)
 
         # Or Credentials Row
-        cred_label = CaptionLabel("Or Log In with Account Credentials:", musilon_card)
+        cred_label = CaptionLabel("Or Log In with Account Credentials (Email & Password):", musilon_card)
         cred_label.setStyleSheet("font-weight: bold;")
         m_layout.addWidget(cred_label)
 
@@ -146,7 +146,7 @@ class SettingsView(QScrollArea):
         cred_row.setSpacing(10)
 
         self.user_input = LineEdit(musilon_card)
-        self.user_input.setPlaceholderText("Username or Email")
+        self.user_input.setPlaceholderText("Registered Email Address (e.g. name@gmail.com)")
         self.user_input.setText(config.get("musilon.username", ""))
         self.user_input.textChanged.connect(self._on_user_changed)
 
@@ -791,12 +791,21 @@ class SettingsView(QScrollArea):
         user = self.user_input.text().strip()
         pwd = self.pwd_input.text().strip()
         if not user or not pwd:
-            InfoBar.warning("Empty Credentials", "Please enter your Musilon username and password.", parent=self)
+            InfoBar.warning("Empty Credentials", "Please enter your Musilon email and password.", parent=self)
+            return
+
+        if "@" not in user:
+            InfoBar.warning(
+                "Email Required",
+                "Musilon requires your registered email address (e.g. your_email@gmail.com), not your username.",
+                duration=5000,
+                parent=self
+            )
             return
 
         self.login_btn.setEnabled(False)
         self.login_btn.setText("Logging In...")
-        self.result_label.setText("Attempting automated login to musilon.com...")
+        self.result_label.setText("Attempting automated login to open.musilon.com...")
 
         def worker():
             success, msg = self.musilon_engine.login_with_credentials(user, pwd)
@@ -817,6 +826,8 @@ class SettingsView(QScrollArea):
             config.set("musilon.session_cookie", cookie_str)
             self._set_status_badge(True)
             InfoBar.success("Login Successful", "Authenticated with Musilon VIP account!", duration=4000, parent=self)
+            # Auto-refresh connection status and VIP quota display
+            self._test_musilon()
         else:
             self._set_status_badge(False)
             InfoBar.error("Login Failed", msg, duration=5000, parent=self)

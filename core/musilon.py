@@ -140,6 +140,9 @@ class MusilonEngine:
         if not user or not pwd:
             return False, "Username and password cannot be empty."
 
+        if "@" not in user:
+            return False, "Musilon requires your registered email address (e.g. your_email@gmail.com), not your username."
+
         try:
             self._rate_limit_shield()
 
@@ -180,15 +183,30 @@ class MusilonEngine:
                 timeout=15
             )
 
-            if login_resp.status_code not in (200, 302):
-                err_msg = "Invalid username or password."
+            # Inspect login response for NextAuth error redirections or JSON failures
+            res_json = {}
+            try:
+                res_json = login_resp.json()
+            except Exception:
+                pass
+
+            err_msg = ""
+            if "error" in res_json:
+                err_msg = res_json["error"]
+            elif "url" in res_json and "error=" in res_json["url"]:
                 try:
-                    res_json = login_resp.json()
-                    if "error" in res_json:
-                        err_msg = res_json["error"]
+                    from urllib.parse import urlparse, parse_qs, unquote
+                    parsed = urlparse(res_json["url"])
+                    qs = parse_qs(parsed.query)
+                    if "error" in qs and qs["error"]:
+                        err_msg = unquote(qs["error"][0])
+                        if err_msg == "CredentialsSignin":
+                            err_msg = "Invalid email or password."
                 except Exception:
                     pass
-                return False, f"Login failed: {err_msg}"
+
+            if err_msg or login_resp.status_code not in (200, 302):
+                return False, f"Login failed: {err_msg or 'Invalid email or password.'}"
 
             # 3. Verify session
             sess_resp = login_session.get(f"{self.BASE_URL}/api/auth/session", timeout=10)
