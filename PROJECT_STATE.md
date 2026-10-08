@@ -342,22 +342,9 @@ d:\Spotify-Downloader\
 | 2026-10-07 | Musilon Next.js / Directus Migration | `https://open.musilon.com` REST API + ISRC | ✅ Success (100%) | Upgraded `MusilonEngine` to NextAuth credentials, `/api/search` catalog, direct ISRC download (`quality=hires/lossless/high`), 409 step-down fallback, and Ogg Vorbis/Opus tagging. |
 | 2026-10-07 | Musilon Rate Limit & Budget Detection | Daily Quota (`/api/media/download-budget`) + Prompt Fallback | ✅ Success (100%) | Detected 429 and `DOWNLOAD_BUDGET_EXHAUSTED` (HTTP 400/403), verified queue pause + prompt modal, `_allow_yt_on_limit` preference persistence, and subsequent track Musilon bypass. |
 | 2026-10-07 | Playlist Quality Badge Accuracy & System Polish | True SQLite metadata sync, UI 2-row layout, memory safeguards | ✅ Success (100%) | Eliminated hardcoded "FLAC 16" in playlist view; added `quality_badge` & `source_type` columns to `saved_playlist_tracks` with automated backfill; synchronized step-down tiers in `resolver.py`; split playlist batch bar into 2 rows; added LRU cache in `queue_delegate.py`; and suppressed Windows console flashing. |
+| 2026-10-08 | Musilon NextAuth & Settings Responsive Overhaul | Live Credentials Login + Download Budget + Responsive Layout | ✅ Success (100%) | NextAuth Directus email login verified; dynamic 150-song daily budget query (`/api/media/download-budget`); SettingsView layout blowout cured via label word-wrapping; WinError 10013 friendly diagnostics; production installer compilation and release replacement. |
 
-### 12. Quality Badge Accuracy, Toolbar Ergonomics, Subprocess Guarding, and Memory Safeguards
-- **Background & Root Causes:**
-  1. In `gui/views/playlists_view.py`, `_load_detail_tracks()` hardcoded `quality_badge="FLAC 16"` and `source_type="Musilon"` for all downloaded items.
-  2. `saved_playlist_tracks` lacked `quality_badge` and `source_type` columns, preventing persistence and retrieval of real audio formats.
-  3. In `gui/views/playlists_view.py`, 14 widgets in a single `QHBoxLayout` caused toolbar button clipping on narrower screens.
-  4. In `core/resolver.py`, when Musilon stepped down to 320k OGG/MP3, `resolved.quality_badge` was not refreshed to match the downloaded file.
-  5. In `gui/queue_delegate.py`, `ThumbnailCache` was unbounded and spawned unmanaged threads per image, creating memory and thread pressure.
-  6. Subprocess invocations on Windows flashed brief console windows due to missing `CREATE_NO_WINDOW` flags.
-- **Resolutions:**
-  1. Updated `saved_playlist_tracks` schema with migrations and automated backfill for all existing downloaded records.
-  2. Integrated `ArchiveManager.infer_badge_from_file(file_path)` across `archive.py`, `playlists_view.py`, and `completed_view.py`.
-  3. Reorganized the Playlist detail batch controls into a responsive 2-row layout (Row 1: Batch size & presets; Row 2: Action buttons).
-  4. Synchronized `resolved.quality_badge` and `resolved.file_extension` in `resolver.download_and_tag()` based on actual file headers and extensions.
-  5. Implemented a 500-item LRU `OrderedDict` and 4-worker `ThreadPoolExecutor` in `ThumbnailCache`.
-  ### 13. Production Packaging, Standalone Binary & Windows Installer (Flacify v1.0.0)
+### 31. Production Packaging, Standalone Binary & Windows Installer (Flacify v1.0.0)
 - **Background & Motivations:**
   Converting the Python / PyQt6 repository into a standalone, distribution-grade Windows executable required solving permissions crashes in `Program Files`, suppressing command prompt consoles, bundling dynamic Fluent resources, multi-resolution application icons, and packaging an automated Inno Setup installer.
 - **Architectural Implementation:**
@@ -377,7 +364,9 @@ d:\Spotify-Downloader\
      - Process guard via named mutex `FlacifyMutex` to prevent collisions during install/upgrade.
      - Automatic Start Menu and Desktop shortcuts and clean uninstallation registration.
   5. **Automated Build Pipeline (`build_windows.py`):**
-### 33. Musilon Account Authentication, WinError 10013 Handling & Settings GUI Layout Fix
+     - Single-command build orchestrator executing PyInstaller, asset verification, and Inno Setup compiler (`ISCC.exe`) generating `dist/installer/Flacify_Setup_v1.0.0.exe`.
+
+### 32. Musilon Account Authentication, WinError 10013 Handling & Settings GUI Layout Fix
 - **Symptom:**
   1. Settings view blew out horizontally: cards, buttons, and status labels were clipped/squished on the right, and the Log In button was distorted.
   2. The app displayed raw Windows socket errors (`[WinError 10013] An attempt was made to access a socket in a way forbidden by its access permissions`).
@@ -394,6 +383,12 @@ d:\Spotify-Downloader\
   4. Added `format_network_error()` in `core/musilon.py` to translate Windows socket errors (WinError 10013, 10061, 10060, proxy errors) into actionable user guidance.
   5. Configured system/configured proxy support in `MusilonEngine.session.proxies`.
   6. Caught HTTP 402 / `DOWNLOAD_PREMIUM_REQUIRED` directly in `download_file()` and `download_track_with_retry()`, short-circuiting retries and seamlessly triggering YouTube Music fallback.
+
+### 33. Live Download Budget & Quota Diagnostics (`/api/media/download-budget`)
+- **Background & Implementation:**
+  - Musilon's backend enforces a daily media budget per account (150 Lossless songs/day and 150 Standard songs/day), returning JSON with `{premium: {limit: 150, remaining, used}, standard: {limit: 150, remaining, used}, resetsAt}`.
+  - Implemented `get_download_budget()` and `is_budget_exhausted()` in `core/musilon.py`.
+  - Integrated quota details dynamically into `test_connection()` and the Settings UI so the user clearly sees their current daily allowance (`Daily Quota: X/150 Lossless, Y/150 Standard`) rather than guessing why downloads might switch to fallbacks.
 
 ## 5. Development Cheat Sheet
 

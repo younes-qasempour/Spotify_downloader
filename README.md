@@ -2,60 +2,105 @@
 
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
-  <img src="https://img.shields.io/badge/Release-v1.0.0-blue?style=flat-square" alt="Version 1.0.0">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white&style=flat-square" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?logo=windows11&logoColor=white&style=flat-square" alt="Windows 11 Fluent">
-  <img src="https://img.shields.io/badge/Audio-Lossless%20FLAC%2016%2F24-emerald?logo=flac&style=flat-square" alt="Lossless FLAC">
-  <img src="https://img.shields.io/badge/Safety%20Net-YouTube%20Music%20Opus-red?logo=youtubemusic&logoColor=white&style=flat-square" alt="YouTube Music">
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
+  <strong>Next-Generation High-Fidelity Spotify Audio Downloader & Library Manager for Windows 11</strong><br><br>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.0.0-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.0.0"></a>
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Fluent">
+  <img src="https://img.shields.io/badge/Audio-24bit%20Hi--Res%20%7C%2016bit%20FLAC-00C853?style=for-the-badge&logo=flac&logoColor=white" alt="Lossless FLAC">
+  <img src="https://img.shields.io/badge/Safety%20Net-YouTube%20Music%20Opus-FF0000?style=for-the-badge&logo=youtubemusic&logoColor=white" alt="YouTube Music">
+  <img src="https://img.shields.io/badge/License-MIT-purple?style=for-the-badge" alt="License">
 </p>
 
-A production-grade, visually stunning Windows 11 desktop application and headless CLI suite designed to download Spotify tracks, albums, and massive playlists (1,000+ tracks) at studio-master fidelity without crashes, rate-limit bans, or UI freezing.
+---
 
-Built on a clean **two-layer decoupled architecture** separating a **Headless Core Multimedia Engine** (`core/`) from a **Windows 11 Fluent Design Interface** (`gui/`).
+## 📖 Overview
+
+**Flacify** is a production-grade, distribution-ready Windows 11 desktop application and headless CLI suite engineered to download Spotify tracks, full albums, and massive playlists (1,000+ tracks) at **true studio-master fidelity** without crashes, rate-limit bans, audio transcoding artifacts, or memory leaks.
+
+Unlike conventional downloaders that record compressed, lossy audio or re-encode degraded streams, Flacify combines **direct high-speed lossless CDN retrieval** with **stealth anti-ban pacing**, **exact ISRC matching**, **embedded CRLF synchronized lyrics**, and an **offline SQLite library manager**.
+
+Built on a completely **decoupled two-layer architecture**:
+- **Headless Multimedia Engine (`core/`)**: High-performance, multi-threaded core with zero GUI dependencies.
+- **Fluent Design Presentation Layer (`gui/`)**: Immersive Windows 11 user experience featuring Mica/Acrylic styling, virtualized table views, and real-time status diagnostics.
 
 ---
 
 ## 🌟 Key Features
 
-### 🎧 High-Fidelity Cascading Audio Engine
-Every queued track traverses an intelligent cascading resolution ladder to ensure the highest possible acoustic fidelity:
-1. **Tier 1 (Target):** Musilon Lossless FLAC 16-bit (CD Quality, 44.1 kHz / 16-bit PCM).
-2. **Tier 2 (Hi-Res):** Musilon Studio Master FLAC 24-bit (48–96 kHz / 24-bit).
-3. **Tier 3 (Studio MP3):** Musilon Pristine MP3 320 kbps (Constant Bitrate).
-4. **Tier 4 (Safety Net):** YouTube Music native high-bitrate Opus stream via `yt-dlp` with strict track duration tolerance ($\pm 5$s). **Activates strictly when Musilon catalog has no matching candidate.**
+### 🎧 High-Fidelity Cascading Audio Ladder
+Every queued track automatically traverses an intelligent cascading resolution ladder to guarantee the highest acoustic fidelity available:
+1. **Tier 1 (Target):** **Musilon Studio Master 24-bit Hi-Res FLAC** (48 kHz – 96 kHz / 24-bit PCM).
+2. **Tier 2 (Lossless):** **Musilon CD-Quality 16-bit FLAC** (44.1 kHz / 16-bit Lossless).
+3. **Tier 3 (Pristine):** **Musilon Studio 320 kbps MP3 / OGG** (Constant Bitrate, 320 kbps).
+4. **Tier 4 (Safety Net):** **YouTube Music native Opus/AAC** stream via `yt-dlp` with strict $\pm 5$s duration matching. *Engages automatically if a song is not indexed on lossless CDNs.*
 
-### 🔍 4-Tier Discovery Engine
-Musilon's catalog is probed across four concurrent search vectors with smart scoring to ensure 100% accurate resolution:
-- **Vector 1 (Live REST API):** Queries `/wp-json/play/search?search={query}` used by the web player for real-time JSON responses.
-- **Vector 2 (WordPress Station API):** Queries native `/wp-json/wp/v2/station?search={query}&per_page=30`.
-- **Vector 3 (Artist Taxonomy Discography):** Resolves artist taxonomy `/wp-json/wp/v2/artist?search={name}` and scans their complete catalog archive.
-- **Vector 4 (HTML Fallback):** Resilient HTML scraping via `/search/{query}/` and `/?s={query}`.
-- **Anti-False-Positive Heuristics:** Hard foreign artist rejection (`-999.0` penalty), remix/acoustic penalties (`-70.0`), and strict title similarity scoring prevent mismatched downloads.
+### 🔍 Precision Catalog Matching & Anti-False-Positive Heuristics
+- **Exact ISRC Resolution:** Matches tracks against International Standard Recording Codes (ISRC) for instant 100% verified track matching.
+- **Dynamic Context Inspection:** Queries live track metadata via `/api/tracks/{id}/context` to detect bit depth, sample rates, and available audio tiers.
+- **Anti-False-Positive Scoring:** Enforces strict artist validation, penalizes foreign artist uploads (`-999.0`), and penalizes unrequested remixes, karaoke, live versions, and tribute covers.
+- **Quality Step-Down Fallback:** Seamlessly handles HTTP 409 (`DOWNLOAD_QUALITY_UNAVAILABLE`) by stepping down from 24-bit to 16-bit or 320k without download failures.
 
-### 🖼️ Artwork & Tagging Perfection
-- **Unique Album Art**: Fetches individual 640×640 front cover artwork directly from Spotify's CDN per track (no shared or generic cover art).
-- **Embedded Tags**: Complete Vorbis comments (FLAC/Opus), ID3v2.4 (MP3), and MP4 metadata (M4A) via `mutagen`.
-- **Synchronized Lyrics**: Automated companion `.lrc` files or embedded lyrics fetched from LRCLIB with Windows CRLF (`\r\n`) timestamps for full compatibility with desktop music players.
-- **Watermark Scrubbing**: Automatically strips promotional site tags and watermarks (e.g. `[Musilon]`, `- Musilon`) from filenames and audio metadata.
+### 🛡️ VIP Integration & Stealth Anti-Ban Shield
+- **Direct Credentials Authentication:** Seamless login via NextAuth Directus flow using your registered Musilon email and password with automatic session renewal.
+- **Real-Time Download Budget Diagnostics:** Queries `/api/media/download-budget` live to track your daily quota (150 Lossless / 150 Standard songs/day) directly within the UI.
+- **Single-Stream CDN Mutex:** Restricts concurrent CDN streaming to 1 active connection while allowing YouTube Music and local deduplication to operate in parallel.
+- **Human Jitter & Cooldown Countdown:** Enforces randomized pacing (15–35s) with a live UI countdown timer (`VIP Cooldown (18s)`) and non-blocking cancellation.
+- **Pause-and-Prompt On Limit:** If daily limits or rate-limits are reached, the app cleanly pauses and prompts you with options to switch to YouTube Music or gracefully stop.
 
-### 📁 Smart Folder Organization
-Downloads are automatically organized into dedicated subdirectories within your chosen download directory based on the Spotify entity:
-- **Playlists:** Saved into a folder named after the playlist (e.g. `Music/Chill Moody Mix/`).
-- **Albums:** Saved into a separate folder named after the album (e.g. `Music/Random Access Memories/`).
-- **Singles:** Standalone tracks are neatly placed into a dedicated `Music/Singles/` folder.
+### 📜 Synchronized CRLF Lyrics & Audio Tagging
+- **Embedded Synchronized Lyrics:** Automatically fetches synchronized time-stamped lyrics from LRCLIB and embeds them directly into Vorbis comments (`LYRICS`, `UNSYNCEDLYRICS`) and ID3 (`USLT`).
+- **Windows CRLF Formatting:** Standardizes all lyrics line breaks to Windows CRLF (`\r\n`), ensuring seamless scrolling in desktop players like foobar2000, Windows Media Player, MusicBee, and AIMP.
+- **High-Resolution Front Cover Artwork:** Injects authentic 640×640 album artwork directly from Spotify's CDN into FLAC picture blocks, ID3 APIC frames, and MP4 cover atoms.
+- **Watermark Scrubbing:** Automatically strips promotional site watermarks (e.g. `[Musilon]`, `- musilon.com`) from metadata tags and filenames.
 
-### ⚡ Windows 11 Fluent Design GUI
-- Built with `PyQt6` and `PyQt6-Fluent-Widgets`.
-- **Virtualized Card Delegate**: Renders hundreds of tracks smoothly with zero Windows GDI handle exhaustion.
-- **Queue Management**: Start, Pause, Resume, Retry Failed, and Clear controls with live metric counters (Total, Downloading, Completed, Failed).
-- **Offline Completed Library**: Interactive library view with Songs, Albums, and Playlists navigation, search filter, thumbnail covers, double-click playback, and Explorer reveal.
-- **Settings View & Auto-Repair**: Visual status badges, one-click FFmpeg auto-downloader, directory chooser, VIP credential testing, and a Deep Scan Auto-Repair tool to heal missing lyrics or cover art.
-- **Clipboard Auto-Detect**: Instantly recognizes copied Spotify URLs upon focusing the app or via `Ctrl+V`.
+### 📁 Smart Folder Organization & Track Numbering
+- **Playlists:** Saved to `{output_dir}/{playlist_name}/`.
+- **Albums:** Saved to `{output_dir}/{album_name}/` with album track numbering (`01. Artist - Title.flac`), preserving genuine track and disc order.
+- **Singles:** Standalone tracks are neatly routed to `{output_dir}/Singles/`.
+- **Isolated App Cache:** Album covers and marker files are stored in `%LOCALAPPDATA%\Flacify\cache`, leaving your music folders 100% clean.
+
+### 💾 Offline Saved Playlists & On-Demand Batch Downloads
+- **Metadata Archiving:** Import massive playlists (500 to 5,000+ tracks) and save their full track listings instantly into a local SQLite database without queuing audio downloads.
+- **Flexible Batch Downloading:** Download tracks in custom batches (25, 50, 100, 200, or custom size) with a single click, keeping you comfortably under daily quota limits.
+- **Persistent Progress Tracking:** Visual progress bars, track counters (Total, Downloaded, Pending), and track-level status badges (`Pending`, `Queued`, `Completed`).
+
+### ⚡ Persistent SQLite Library & Instant Deduplication (`archive.db`)
+- **Zero-Bandwidth Re-Downloads:** Tracks previously downloaded into any playlist or single folder are instantly detected via Spotify ID, ISRC, or normalized `(artist, title)` and copied locally in ~2ms.
+- **Offline Library View:** Searchable library with Songs, Albums, and Playlists navigation, cover art thumbnails, double-click playback (`os.startfile`), and Explorer reveal.
+- **Deep Scan Auto-Repair:** One-click repair engine scans existing audio files, identifies missing cover art or lyrics, and heals them in-place without re-downloading audio streams.
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture & Data Flow
+
+```mermaid
+flowchart TD
+    A[Spotify URL / URI] --> B[Spotify Metadata Resolver]
+    B --> C{SQLite Archive Check}
+    C -- "Already Downloaded" --> D[Instant Local Copy & Retag (~2ms)]
+    C -- "New Track" --> E[Cascading Audio Ladder]
+    
+    subgraph Engine [Multi-Tier Audio Ladder]
+        E --> F{Musilon VIP Engine}
+        F -- "Catalog Match" --> G[Lossless FLAC 24/16-bit or 320k]
+        F -- "409 / Unavailable" --> H[Step-Down Quality Fallback]
+        H --> G
+        F -- "No Match / Rate Limit" --> I[YouTube Music Safety Net]
+        I --> J[Native Opus/AAC Stream via yt-dlp]
+    end
+
+    G --> K[Chunked Stream & Magic Byte Validation]
+    J --> K
+    K --> L[LRCLIB Synced CRLF Lyrics Fetch]
+    L --> M[Mutagen Tagging & 640x640 Artwork Injection]
+    M --> N[Smart Folder Organization & File Output]
+    N --> O[SQLite Archive Indexing (archive.db)]
+    D --> O
+```
+
+---
+
+## 📂 Repository Structure
 
 ```
 Flacify/
@@ -64,37 +109,44 @@ Flacify/
 ├── installer.iss             # Inno Setup 6 per-user Windows installer configuration
 ├── version_info.txt          # Embedded Windows PE version resource metadata
 ├── config.example.json       # Clean template for configuration settings
-├── requirements.txt          # Python dependencies
+├── requirements.txt          # Production Python dependencies
 ├── main.py                   # Unified entrypoint (GUI default or --headless CLI)
 │
 ├── assets/                   # APPLICATION BRANDING & ICONS
-│   ├── icon.ico              # Multi-resolution icon (16x16 up to 256x256)
+│   ├── icon.ico              # Multi-resolution icon (16x16 to 256x256)
 │   ├── icon.png              # High-res 256x256 application logo
 │   └── convert_icon.py       # Reusable icon generation utility
 │
 ├── core/                     # HEADLESS MULTIMEDIA ENGINE (Zero GUI Dependencies)
 │   ├── paths.py              # Centralized path manager (%LOCALAPPDATA%\Flacify)
 │   ├── config.py             # Thread-safe persistent JSON config manager
-│   ├── archive.py            # SQLite music library archive, deduplication & auto-repair
+│   ├── archive.py            # SQLite music library archive, deduplication & repair
 │   ├── spotify_client.py     # Spotify Web API client + guest scraper fallback
-│   ├── musilon.py            # Musilon VIP engine (ArvanCloud solver, 4-tier search, CDN downloader)
-│   ├── ytdlp_engine.py       # YouTube Music fallback engine (yt-dlp wrapper)
+│   ├── musilon.py            # Musilon VIP engine (NextAuth, REST catalog, ISRC matcher)
+│   ├── ytdlp_engine.py       # YouTube Music fallback engine (±5s duration validation)
 │   ├── lyrics.py             # LRCLIB lyrics client (synchronized .lrc + plain lyrics)
 │   ├── tagger.py             # Mutagen metadata tagger & cover art embedder
 │   ├── resolver.py           # Cascading ladder engine (Musilon -> YTM safety net)
 │   ├── queue_manager.py      # Producer-consumer thread queue with callback hooks
 │   └── utils.py              # Filename sanitizer, FFmpeg detector/downloader
 │
-└── gui/                      # WINDOWS 11 FLUENT PRESENTATION LAYER
-    ├── styles.py             # Dark theme palette and styling tokens
-    ├── bridge.py             # Qt Signal Bridge between background threads & event loop
-    ├── queue_model.py        # Virtualized TrackQueueModel (QAbstractTableModel)
-    ├── queue_delegate.py     # TrackCardDelegate (74px high custom card painter)
-    ├── main_window.py        # FluentWindow with navigation sidebar
-    └── views/
-        ├── queue_view.py     # Queue management, URL inputs, metric cards, context menu
-        ├── completed_view.py # Completed downloads library with direct file launcher
-        └── settings_view.py  # VIP credentials, fallback toggle, directory picker, auto-repair
+├── gui/                      # WINDOWS 11 FLUENT PRESENTATION LAYER
+│   ├── styles.py             # Dark theme palette and styling tokens
+│   ├── bridge.py             # Qt Signal Bridge between background threads & event loop
+│   ├── queue_model.py        # Virtualized TrackQueueModel (QAbstractTableModel)
+│   ├── queue_delegate.py     # TrackCardDelegate (74px high custom card painter)
+│   ├── main_window.py        # FluentWindow with navigation sidebar
+│   └── views/
+│       ├── queue_view.py     # Queue management, URL inputs, metric cards
+│       ├── playlists_view.py # Saved Playlists manager & batch download controls
+│       ├── completed_view.py # Completed downloads library with direct file launcher
+│       └── settings_view.py  # VIP credentials, quota diagnostics, auto-repair
+│
+└── tests/                    # AUTOMATED TEST SUITE
+    ├── test_utils.py         # Utilities, sanitization, and duration formatting tests
+    ├── test_spotify_client.py# Metadata resolving and entity parsing tests
+    ├── test_archive.py       # SQLite archive and deduplication tests
+    └── test_gui.py           # PyQt6 GUI model and signal bridge tests
 ```
 
 ---
@@ -102,100 +154,117 @@ Flacify/
 ## 💾 Installation
 
 ### Option 1: Standalone Windows Installer (Recommended)
-Download the latest installer from [Releases](https://github.com/younes-qasempour/Spotify_downloader/releases):
-- Download **`Flacify_Setup_v1.0.0.exe`**.
-- Run the setup wizard (installs per-user without requiring administrator privileges).
-- Launch **Flacify** directly from your Start Menu or Desktop shortcut.
+1. Download **`Flacify_Setup_v1.0.0.exe`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases).
+2. Run the installer wizard (installs per-user into `%LOCALAPPDATA%\Programs\Flacify` without requiring Administrator privileges).
+3. Launch **Flacify** from your Start Menu or Desktop shortcut.
 
 ### Option 2: Running from Source
 
 #### Prerequisites
-- **Python 3.10+** (tested on Python 3.11 – 3.14 on Windows 11)
-- **Node.js** (required for solving dynamic JavaScript challenges on Musilon)
-- **FFmpeg** (bundled in binary releases; auto-installable via the Settings tab in source mode)
+- **Python 3.10+** (tested on Python 3.10 through 3.14 on Windows 10/11)
+- **Node.js** (required for dynamic ArvanCloud challenge bypass)
+- **FFmpeg** (bundled automatically in the installer; auto-downloadable via Settings in source mode)
 
-#### Setup Steps
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/younes-qasempour/Spotify_downloader.git
-   cd Spotify_downloader
-   ```
+#### Step-by-Step Setup
+```powershell
+# 1. Clone the repository
+git clone https://github.com/younes-qasempour/Spotify_downloader.git
+cd Spotify_downloader
 
-2. **Create a virtual environment (recommended):**
-   ```bash
-   python -m venv venv
-   .\venv\Scripts\activate
-   ```
+# 2. Create and activate a virtual environment
+python -m venv venv
+.\venv\Scripts\activate
 
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+# 3. Install dependencies
+pip install -r requirements.txt
 
-4. **Launch Flacify:**
-   ```bash
-   python main.py
-   ```
-
----
-
-## 💻 Usage
-
-### 1. Desktop GUI
-```bash
+# 4. Launch the application
 python main.py
 ```
-- Paste any Spotify track, album, or playlist URL into the top search bar (or use `Ctrl+V`).
-- Click **Analyze & Enqueue**.
-- Click **Start All** to begin high-speed parallel downloads.
+
+---
+
+## 💻 Usage Guide
+
+### 1. Graphical Interface (GUI)
+```powershell
+python main.py
+```
+- **Paste Spotify Link:** Copy any track, album, or playlist URL from Spotify and press `Ctrl+V` or paste into the top search bar.
+- **Analyze & Enqueue:** Resolves metadata instantly and populates the virtualized queue.
+- **Batch Download:** In the **Playlists** tab, save full playlists offline and download them in manageable batches (25, 50, 100 songs).
+- **Controls:** Start, Pause, Resume, or Retry Failed tracks at any time with live progress indicators.
 
 ### 2. Headless CLI Mode
-For automated environments, servers, or terminal workflows:
-```bash
-# Download a single track
+For servers, scheduled tasks, or scripting environments:
+```powershell
+# Download a single track at maximum available quality
 python main.py --headless "https://open.spotify.com/track/3AJwUDP919kvQ9QcozQPxg"
 
-# Download an entire playlist to a specific directory
-python main.py --headless "https://open.spotify.com/playlist/37i9dQZF1EIguyCzHJlUGq" --output "D:/Music"
+# Download a complete album or playlist to a custom folder
+python main.py --headless "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M" --output "D:/Music/TopHits"
 ```
 
 ---
 
-## 📦 Building Standalone Installer
+## ⚙️ Configuration & Settings
 
-To compile the production standalone executable and Inno Setup installer:
-```bash
+All settings are configured via the in-app **Settings** view or stored in `%LOCALAPPDATA%\Flacify\config.json`:
+
+| Setting Key | Default | Description |
+|-------------|---------|-------------|
+| `musilon.enabled` | `true` | Enables high-speed lossless Musilon CDN downloads |
+| `musilon.username` | `""` | Registered Musilon email address |
+| `musilon.password` | `""` | Musilon account password |
+| `musilon.safe_mode` | `true` | Enforces human jitter & cooldown pacing to prevent rate limits |
+| `musilon.cooldown_min_sec` | `15` | Minimum cooldown seconds between consecutive Musilon downloads |
+| `musilon.cooldown_max_sec` | `35` | Maximum cooldown seconds between consecutive Musilon downloads |
+| `download.allow_fallback` | `true` | Automatically falls back to YouTube Music if Musilon lacks the track |
+| `download.output_dir` | `~/Music` | Base root directory for all music downloads |
+| `download.naming_template` | `{artist} - {title}` | File naming pattern for singles and playlists |
+| `download.album_naming_template` | `{track_num}. {artist} - {title}` | File naming pattern for album tracks |
+| `download.preferred_quality` | `lossless` | Preferred quality tier (`lossless`, `hires`, `high`, `standard`) |
+| `download.lyrics_mode` | `embedded_only` | Lyrics embedding mode (`embedded_only`, `both`, `disabled`) |
+
+---
+
+## 📦 Compiling Standalone Executable & Installer
+
+To build the standalone production executable and Inno Setup installer:
+```powershell
 python build_windows.py
 ```
-This automatically:
-1. Verifies/generates `assets/icon.ico`.
-2. Runs PyInstaller with `app.spec` in `onedir` windowed mode.
-3. Invokes Inno Setup 6 (`ISCC.exe`) to produce `dist/installer/Flacify_Setup_v1.0.0.exe`.
+
+This automated pipeline:
+1. Validates and generates multi-resolution Windows icons (`assets/icon.ico`).
+2. Invokes **PyInstaller** using `app.spec` to create a slim, windowed `dist/Flacify` application bundle.
+3. Invokes **Inno Setup 6** (`ISCC.exe`) to generate `dist/installer/Flacify_Setup_v1.0.0.exe` with a complete uninstaller and mutex process guard.
 
 ---
 
-## 🔧 YouTube Fallback & Cookie Setup Guide
+## 🧪 Testing
 
-The application uses an intelligent multi-tier discovery pipeline:
-- **Tiers 1–3 (Musilon VIP):** High-speed direct CDN access providing MP3 320 kbps, 16-bit FLAC, and 24-bit Hi-Res audio.
-- **Tier 4 (YouTube Music Fallback):** Automatically triggers when a track is not present on Musilon (e.g. Japanese City Pop, regional releases, indie tracks, video game OSTs, or obscure b-sides).
-
-### Exporting `cookies.txt` for YouTube
-YouTube enforces anti-bot verification against automated downloaders. Providing your browser cookies allows seamless downloads:
-1. Install a browser extension:
-   - **Chrome / Edge / Brave:** [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbngbenkjcffliehddfacccg)
-   - **Firefox:** [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
-2. Log into [youtube.com](https://youtube.com) in your browser.
-3. Export `cookies.txt`.
-4. Place the file in `%LOCALAPPDATA%\Flacify\cookies.txt` or select it in the app's **Settings** tab.
+Run the automated test suite covering core utilities, Spotify resolving, archive deduplication, and GUI components:
+```powershell
+python -m unittest discover -s tests -p "test_*.py"
+```
 
 ---
 
 ## 🛡️ Security & Privacy
-- **Zero Leaked Secrets**: User credentials, session tokens, and local databases are stored exclusively in `%LOCALAPPDATA%\Flacify` and are never committed to git.
-- **Git Shield**: `.gitignore` strictly protects `config.json`, cookies, local music files, databases (`archive.db`), and third-party binaries.
+
+- **Protected Secrets:** Account credentials, session cookies, and local database records are stored strictly in your local `%LOCALAPPDATA%\Flacify` directory.
+- **Git Shield:** `.gitignore` ensures that personal credentials, configuration overrides, local music files, and cache records are never committed to version control.
+- **Non-Admin Installation:** Installs per-user into the local app folder without requiring elevation or modifying system-level directories.
+
+---
+
+## ⚖️ Legal Disclaimer
+
+This software is developed strictly for **educational, personal backup, and private research purposes**. Flacify does not host, distribute, or stream any copyrighted audio files. Users are responsible for complying with the terms of service of any third-party platforms and applicable local copyright laws.
 
 ---
 
 ## 📄 License
-This project is open-source software licensed under the [MIT License](LICENSE).
+
+This project is licensed under the [MIT License](LICENSE).
