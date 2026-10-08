@@ -66,23 +66,21 @@ def get_app_data_dir() -> Path:
 def get_config_path() -> Path:
     """
     Returns the path to config.json inside the user's AppData directory.
-    Automatically seeds from local/bundled config.example.json or config.json if missing.
+    Automatically seeds from clean template config.example.json if missing.
     """
     target = get_app_data_dir() / "config.json"
     if not target.exists():
-        # Seed from dev config.json or config.example.json
+        # Seed only from clean config.example.json template candidates
         dev_root = Path(__file__).resolve().parent.parent
         seed_candidates = [
-            dev_root / "config.json",
-            dev_root / "config.example.json",
             get_resource_path("config.example.json"),
-            get_resource_path("config.json"),
+            dev_root / "config.example.json",
         ]
         for cand in seed_candidates:
             if cand.exists() and cand.is_file():
                 try:
                     shutil.copy2(str(cand), str(target))
-                    logger.info(f"Initialized user configuration from {cand} -> {target}")
+                    logger.info(f"Initialized user configuration from template {cand} -> {target}")
                     break
                 except Exception as e:
                     logger.warning(f"Could not seed config from {cand}: {e}")
@@ -92,11 +90,10 @@ def get_config_path() -> Path:
 def get_archive_db_path() -> Path:
     """
     Returns the path to archive.db inside the user's AppData directory.
-    If archive.db does not exist in AppData, copies any existing local archive.db
-    from the project root to preserve historical downloads.
+    In development mode, copies any existing local archive.db from the project root.
     """
     target = get_app_data_dir() / "archive.db"
-    if not target.exists():
+    if not target.exists() and not is_frozen():
         dev_db = Path(__file__).resolve().parent.parent / "archive.db"
         if dev_db.exists() and dev_db.is_file():
             try:

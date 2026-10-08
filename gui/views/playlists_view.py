@@ -574,6 +574,9 @@ class PlaylistsView(QWidget):
         self.reset_btn.setToolTip("Reset queued & failed tracks in this playlist back to pending")
         self.reset_btn.clicked.connect(self._on_reset_queued_clicked)
 
+        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Folder", self)
+        self.open_folder_btn.clicked.connect(self._open_download_folder)
+
         # Row 1: Batch Size Selection & Quick Presets
         batch_size_layout = QHBoxLayout()
         batch_size_layout.setSpacing(8)

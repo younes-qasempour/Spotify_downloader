@@ -141,11 +141,14 @@ def run_gui():
     from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
 
-    # Fix Windows taskbar icon grouping
+    # Fix Windows taskbar icon grouping and create installer mutex
     if sys.platform == "win32":
         try:
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Flacify.App.1.0")
+            # Create named mutex for Inno Setup installer active process detection (AppMutex)
+            global _app_mutex_handle
+            _app_mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, "FlacifyMutex")
         except Exception:
             pass
 

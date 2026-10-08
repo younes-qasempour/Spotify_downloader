@@ -17,10 +17,9 @@ datas = [
 if os.path.isdir('bin'):
     datas.append(('bin', 'bin'))
 
-# Include configuration templates if present
-for extra_file in ['config.example.json', 'config.json', 'cookies.txt']:
-    if os.path.isfile(extra_file):
-        datas.append((extra_file, '.'))
+# Include configuration templates (never bundle private developer credentials or cookies)
+if os.path.isfile('config.example.json'):
+    datas.append(('config.example.json', '.'))
 
 # Collect PyQt-Fluent-Widgets resources (fonts, SVGs, QSS stylesheets)
 try:
