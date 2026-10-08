@@ -1,7 +1,7 @@
 import os
 import subprocess
 import threading
-from typing import Optional
+from typing import Optional, Any, Union
 from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
@@ -38,7 +38,7 @@ class SettingsView(QScrollArea):
     """
 
     sig_login_result = pyqtSignal(bool, str)
-    sig_test_result = pyqtSignal(bool, bool, str)
+    sig_test_result = pyqtSignal(bool, bool, bool, str)  # connected, is_authenticated, is_vip, msg
     sig_spotify_result = pyqtSignal(bool, str)
     sig_spotify_auth_result = pyqtSignal(bool, str)
     sig_ffmpeg_progress = pyqtSignal(float, str)
@@ -115,68 +115,92 @@ class SettingsView(QScrollArea):
             musilon_card
         )
         desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        desc.setWordWrap(True)
         m_layout.addWidget(desc)
 
-        # Session Cookie Input
-        cookie_label = CaptionLabel("Session Cookie / Full Cookie Header:", musilon_card)
-        cookie_label.setStyleSheet("font-weight: bold;")
-        m_layout.addWidget(cookie_label)
-
-        cookie_row = QHBoxLayout()
-        cookie_row.setSpacing(8)
-
-        self.cookie_input = LineEdit(musilon_card)
-        self.cookie_input.setPlaceholderText("Paste cookies: __arcsjs=...; __arcsjsc=...; wordpress_logged_in_...;")
-        self.cookie_input.setText(config.get("musilon.session_cookie", ""))
-        self.cookie_input.textChanged.connect(self._on_cookie_changed)
-
-        self.paste_cookie_btn = PushButton(FluentIcon.PASTE, "Paste", musilon_card)
-        self.paste_cookie_btn.clicked.connect(self._paste_cookie)
-
-        cookie_row.addWidget(self.cookie_input, 1)
-        cookie_row.addWidget(self.paste_cookie_btn)
-        m_layout.addLayout(cookie_row)
-
-        # Or Credentials Row
-        cred_label = CaptionLabel("Or Log In with Account Credentials (Email & Password):", musilon_card)
+        # Account Credentials (Primary Login)
+        cred_label = CaptionLabel("Musilon Account Credentials (Email & Password):", musilon_card)
         cred_label.setStyleSheet("font-weight: bold;")
         m_layout.addWidget(cred_label)
 
-        cred_row = QHBoxLayout()
-        cred_row.setSpacing(10)
+        # Clean side-by-side credentials inputs
+        inputs_layout = QHBoxLayout()
+        inputs_layout.setSpacing(12)
 
         self.user_input = LineEdit(musilon_card)
         self.user_input.setPlaceholderText("Registered Email Address (e.g. name@gmail.com)")
         self.user_input.setText(config.get("musilon.username", ""))
+        self.user_input.setClearButtonEnabled(True)
         self.user_input.textChanged.connect(self._on_user_changed)
 
         self.pwd_input = LineEdit(musilon_card)
         self.pwd_input.setPlaceholderText("Password")
         self.pwd_input.setEchoMode(LineEdit.EchoMode.Password)
         self.pwd_input.setText(config.get("musilon.password", ""))
+        self.pwd_input.setClearButtonEnabled(True)
         self.pwd_input.textChanged.connect(self._on_pwd_changed)
 
-        self.login_btn = PushButton(FluentIcon.PEOPLE, "Log In", musilon_card)
+        inputs_layout.addWidget(self.user_input, 1)
+        inputs_layout.addWidget(self.pwd_input, 1)
+        m_layout.addLayout(inputs_layout)
+
+        # Action Buttons Row (Log In + Test Connection)
+        action_btn_row = QHBoxLayout()
+        action_btn_row.setSpacing(10)
+
+        self.login_btn = PrimaryPushButton(FluentIcon.PEOPLE, "Log In", musilon_card)
+        self.login_btn.setMinimumWidth(110)
         self.login_btn.clicked.connect(self._login_musilon)
 
-        cred_row.addWidget(self.user_input, 1)
-        cred_row.addWidget(self.pwd_input, 1)
-        cred_row.addWidget(self.login_btn)
-        m_layout.addLayout(cred_row)
-
-        # Action and Diagnostics Row
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
-
-        self.test_btn = PrimaryPushButton(FluentIcon.SYNC, "Test Connection & VIP Status", musilon_card)
+        self.test_btn = PushButton(FluentIcon.SYNC, "Test Connection && VIP Status", musilon_card)
+        self.test_btn.setMinimumWidth(190)
         self.test_btn.clicked.connect(self._test_musilon)
 
-        self.result_label = CaptionLabel("", musilon_card)
-        self.result_label.setStyleSheet("font-size: 11px;")
+        action_btn_row.addWidget(self.login_btn)
+        action_btn_row.addWidget(self.test_btn)
+        action_btn_row.addStretch(1)
+        m_layout.addLayout(action_btn_row)
 
-        action_row.addWidget(self.test_btn)
-        action_row.addWidget(self.result_label, 1)
-        m_layout.addLayout(action_row)
+        # Diagnostics & Status Banner (Dedicated Box with setWordWrap(True))
+        self.result_container = QFrame(musilon_card)
+        self.result_container.setStyleSheet(
+            "background-color: rgba(255, 255, 255, 0.04); "
+            "border: 1px solid #333333; border-radius: 6px; padding: 8px 12px;"
+        )
+        rc_layout = QHBoxLayout(self.result_container)
+        rc_layout.setContentsMargins(8, 6, 8, 6)
+        rc_layout.setSpacing(8)
+
+        rc_icon = CaptionLabel("ℹ️", self.result_container)
+        self.result_label = CaptionLabel("Ready to test connection.", self.result_container)
+        self.result_label.setWordWrap(True)
+        self.result_label.setStyleSheet("font-size: 12px; color: #CCCCCC;")
+
+        rc_layout.addWidget(rc_icon, 0, Qt.AlignmentFlag.AlignTop)
+        rc_layout.addWidget(self.result_label, 1)
+        m_layout.addWidget(self.result_container)
+
+        # Advanced / Session Cookie Section
+        cookie_label = CaptionLabel("Advanced: Session Cookie (Optional / Auto-Saved on Login):", musilon_card)
+        cookie_label.setStyleSheet("font-weight: bold; color: #888888;")
+        m_layout.addWidget(cookie_label)
+
+        cookie_row = QHBoxLayout()
+        cookie_row.setSpacing(8)
+
+        self.cookie_input = LineEdit(musilon_card)
+        self.cookie_input.setPlaceholderText("Optional: __arcsjs=...; __Secure-next-auth.session-token=...")
+        self.cookie_input.setText(config.get("musilon.session_cookie", ""))
+        self.cookie_input.setClearButtonEnabled(True)
+        self.cookie_input.textChanged.connect(self._on_cookie_changed)
+
+        self.paste_cookie_btn = PushButton(FluentIcon.PASTE, "Paste", musilon_card)
+        self.paste_cookie_btn.setFixedWidth(90)
+        self.paste_cookie_btn.clicked.connect(self._paste_cookie)
+
+        cookie_row.addWidget(self.cookie_input, 1)
+        cookie_row.addWidget(self.paste_cookie_btn)
+        m_layout.addLayout(cookie_row)
 
         # Instructions Helper Card
         guide_card = QFrame(musilon_card)
@@ -188,8 +212,11 @@ class SettingsView(QScrollArea):
         guide_title = CaptionLabel("💡 How to copy session cookies from your browser:", guide_card)
         guide_title.setStyleSheet("font-weight: bold; color: #1DB954;")
         guide_step1 = CaptionLabel("1. Open https://open.musilon.com in Chrome or Edge and log in to your account.", guide_card)
+        guide_step1.setWordWrap(True)
         guide_step2 = CaptionLabel("2. You can log in directly using your email and password above for automated session renewal.", guide_card)
+        guide_step2.setWordWrap(True)
         guide_step3 = CaptionLabel("3. Or copy manually: Press F12 → Application → Cookies → copy `__Secure-next-auth.session-token`.", guide_card)
+        guide_step3.setWordWrap(True)
 
         g_layout.addWidget(guide_title)
         g_layout.addWidget(guide_step1)
@@ -204,6 +231,7 @@ class SettingsView(QScrollArea):
         toggle_title.setStyleSheet("font-weight: bold;")
         toggle_desc = CaptionLabel("When active, tracks are searched on Musilon before falling back to YouTube Music.", musilon_card)
         toggle_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        toggle_desc.setWordWrap(True)
         toggle_info.addWidget(toggle_title)
         toggle_info.addWidget(toggle_desc)
 
@@ -226,6 +254,7 @@ class SettingsView(QScrollArea):
             musilon_card
         )
         safe_mode_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        safe_mode_desc.setWordWrap(True)
         safe_mode_info.addWidget(safe_mode_title)
         safe_mode_info.addWidget(safe_mode_desc)
 
@@ -244,6 +273,7 @@ class SettingsView(QScrollArea):
         cooldown_title.setStyleSheet("font-weight: bold;")
         cooldown_desc = CaptionLabel("Randomized pause between min and max seconds mimics human listening and evades bot detection.", musilon_card)
         cooldown_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        cooldown_desc.setWordWrap(True)
         cooldown_info.addWidget(cooldown_title)
         cooldown_info.addWidget(cooldown_desc)
 
@@ -298,6 +328,7 @@ class SettingsView(QScrollArea):
             spotify_card
         )
         s_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        s_desc.setWordWrap(True)
         s_layout.addWidget(s_desc)
 
         s_btn_row = QHBoxLayout()
@@ -412,6 +443,7 @@ class SettingsView(QScrollArea):
             down_card
         )
         qual_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        qual_desc.setWordWrap(True)
         qual_info.addWidget(qual_title)
         qual_info.addWidget(qual_desc)
 
@@ -439,6 +471,7 @@ class SettingsView(QScrollArea):
             down_card
         )
         fb_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        fb_desc.setWordWrap(True)
         fb_info.addWidget(fb_title)
         fb_info.addWidget(fb_desc)
 
@@ -480,9 +513,13 @@ class SettingsView(QScrollArea):
         yt_guide_title = CaptionLabel("💡 How to fix YouTube bot blocks with cookies.txt:", yt_guide_card)
         yt_guide_title.setStyleSheet("font-weight: bold; color: #1DB954;")
         yt_guide_step1 = CaptionLabel("1. Install 'Get cookies.txt LOCALLY' extension in Chrome, Edge, or Firefox.", yt_guide_card)
+        yt_guide_step1.setWordWrap(True)
         yt_guide_step2 = CaptionLabel("2. Open youtube.com and ensure you are logged into your Google account.", yt_guide_card)
+        yt_guide_step2.setWordWrap(True)
         yt_guide_step3 = CaptionLabel("3. Click the extension icon and click 'Export As cookies.txt'.", yt_guide_card)
+        yt_guide_step3.setWordWrap(True)
         yt_guide_step4 = CaptionLabel("4. Select the exported file via 'Browse...' above (or save it as 'cookies.txt' in the app folder).", yt_guide_card)
+        yt_guide_step4.setWordWrap(True)
 
         yt_g_layout.addWidget(yt_guide_title)
         yt_g_layout.addWidget(yt_guide_step1)
@@ -504,6 +541,7 @@ class SettingsView(QScrollArea):
 
         p_desc = CaptionLabel("Optional proxy for YouTube requests. Leave empty for direct connection.", down_card)
         p_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        p_desc.setWordWrap(True)
 
         p_row.addWidget(self.proxy_input, 1)
         p_row.addWidget(p_desc)
@@ -519,6 +557,7 @@ class SettingsView(QScrollArea):
             down_card
         )
         clean_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        clean_desc.setWordWrap(True)
         clean_info.addWidget(clean_title)
         clean_info.addWidget(clean_desc)
 
@@ -552,6 +591,7 @@ class SettingsView(QScrollArea):
             tag_card
         )
         lrc_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        lrc_desc.setWordWrap(True)
         lrc_info.addWidget(lrc_title)
         lrc_info.addWidget(lrc_desc)
 
@@ -577,6 +617,7 @@ class SettingsView(QScrollArea):
         embed_title.setStyleSheet("font-weight: bold;")
         embed_desc = CaptionLabel("Embeds plain lyrics into MP3 ID3 (USLT), FLAC Vorbis (LYRICS), and M4A tags.", tag_card)
         embed_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        embed_desc.setWordWrap(True)
         embed_info.addWidget(embed_title)
         embed_info.addWidget(embed_desc)
 
@@ -595,6 +636,7 @@ class SettingsView(QScrollArea):
         art_title.setStyleSheet("font-weight: bold;")
         art_desc = CaptionLabel("Embeds high-resolution front-cover album artwork directly into the file.", tag_card)
         art_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        art_desc.setWordWrap(True)
         art_info.addWidget(art_title)
         art_info.addWidget(art_desc)
 
@@ -642,6 +684,7 @@ class SettingsView(QScrollArea):
             ffmpeg_card
         )
         ff_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        ff_desc.setWordWrap(True)
         ff_layout.addWidget(ff_desc)
 
         # Download / Reinstall Action Row
@@ -653,6 +696,7 @@ class SettingsView(QScrollArea):
 
         self.ffmpeg_status_label = CaptionLabel("", ffmpeg_card)
         self.ffmpeg_status_label.setStyleSheet("font-size: 11px;")
+        self.ffmpeg_status_label.setWordWrap(True)
 
         ff_action_row.addWidget(self.download_ffmpeg_btn)
         ff_action_row.addWidget(self.ffmpeg_status_label, 1)
@@ -676,6 +720,7 @@ class SettingsView(QScrollArea):
             maint_card
         )
         maint_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        maint_desc.setWordWrap(True)
         maint_layout.addWidget(maint_desc)
 
         btn_row = QHBoxLayout()
@@ -694,6 +739,7 @@ class SettingsView(QScrollArea):
 
         self.maint_status_label = CaptionLabel("", maint_card)
         self.maint_status_label.setStyleSheet("font-size: 11px;")
+        self.maint_status_label.setWordWrap(True)
         maint_layout.addWidget(self.maint_status_label)
 
         main_layout.addWidget(maint_card)
@@ -824,39 +870,42 @@ class SettingsView(QScrollArea):
             cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
             self.cookie_input.setText(cookie_str)
             config.set("musilon.session_cookie", cookie_str)
-            self._set_status_badge(True)
-            InfoBar.success("Login Successful", "Authenticated with Musilon VIP account!", duration=4000, parent=self)
+            self._set_status_badge("active", "Logged In")
+            InfoBar.success("Login Successful", "Authenticated with Musilon account!", duration=3500, parent=self)
             # Auto-refresh connection status and VIP quota display
             self._test_musilon()
         else:
-            self._set_status_badge(False)
+            self._set_status_badge("offline", "Login Failed")
             InfoBar.error("Login Failed", msg, duration=5000, parent=self)
 
     def _test_musilon(self, *args):
         self.test_btn.setEnabled(False)
         self.test_btn.setText("Connecting...")
-        self.result_label.setText("Testing connection to musilon.com...")
+        self.result_label.setText("Testing connection to open.musilon.com...")
 
         def worker():
-            connected, is_vip, msg = self.musilon_engine.test_connection()
-            self.sig_test_result.emit(connected, is_vip, msg)
+            connected, is_auth, is_vip, msg = self.musilon_engine.test_connection()
+            self.sig_test_result.emit(connected, is_auth, is_vip, msg)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_test_finished(self, connected: bool, is_vip: bool, msg: str):
+    def _on_test_finished(self, connected: bool, is_authenticated: bool, is_vip: bool, msg: str):
         self.test_btn.setEnabled(True)
-        self.test_btn.setText("Test Connection & VIP Status")
+        self.test_btn.setText("Test Connection && VIP Status")
         self.result_label.setText(msg)
 
         if is_vip:
-            self._set_status_badge(True)
-            InfoBar.success("VIP Session Valid", msg, duration=4500, parent=self)
+            self._set_status_badge("vip", "VIP Active")
+            InfoBar.success("VIP Active", msg, duration=4500, parent=self)
+        elif is_authenticated:
+            self._set_status_badge("active", "Account Active")
+            InfoBar.warning("VIP Expired", msg, duration=6000, parent=self)
         elif connected:
-            self._set_status_badge(False, text="Guest Connected")
-            InfoBar.warning("Unauthenticated", msg, duration=5000, parent=self)
+            self._set_status_badge("guest", "Guest Mode")
+            InfoBar.info("Guest Mode", msg, duration=4500, parent=self)
         else:
-            self._set_status_badge(False, text="Offline")
-            InfoBar.error("Connection Failed", msg, duration=5000, parent=self)
+            self._set_status_badge("offline", "Offline / Blocked")
+            InfoBar.error("Connection Failed", msg, duration=6000, parent=self)
 
     def _update_status_badge(self):
         cookie = self.cookie_input.text().strip()
@@ -868,21 +917,37 @@ class SettingsView(QScrollArea):
             or cookie.startswith("eyJ")
         )
         has_cred_auth = bool(self.user_input.text().strip() and self.pwd_input.text().strip())
-        self._set_status_badge(has_cookie_auth or has_cred_auth)
+        if has_cookie_auth or has_cred_auth:
+            self._set_status_badge("active", "Credentials Saved")
+        else:
+            self._set_status_badge("guest", "Not Configured")
 
-    def _set_status_badge(self, is_vip: bool, text: str = ""):
-        if is_vip:
-            self.status_badge.setText("VIP Active" if not text else text)
+    def _set_status_badge(self, state: Any, text: str = ""):
+        if state is True or state == "vip":
+            self.status_badge.setText(text or "VIP Active")
             self.status_badge.setStyleSheet(
                 "background-color: rgba(29, 185, 84, 0.2); color: #1ED760; "
-                "padding: 3px 10px; border-radius: 10px; font-weight: bold; border: 1px solid #1DB954;"
+                "padding: 4px 12px; border-radius: 10px; font-weight: bold; border: 1px solid #1DB954;"
+            )
+        elif state == "active":
+            self.status_badge.setText(text or "Account Active")
+            self.status_badge.setStyleSheet(
+                "background-color: rgba(245, 158, 11, 0.2); color: #FBBF24; "
+                "padding: 4px 12px; border-radius: 10px; font-weight: bold; border: 1px solid #F59E0B;"
+            )
+        elif state == "guest":
+            self.status_badge.setText(text or "Guest Mode")
+            self.status_badge.setStyleSheet(
+                "background-color: rgba(156, 163, 175, 0.2); color: #D1D5DB; "
+                "padding: 4px 12px; border-radius: 10px; font-weight: bold; border: 1px solid #6B7280;"
             )
         else:
-            self.status_badge.setText("Not Authenticated" if not text else text)
+            self.status_badge.setText(text or "Offline")
             self.status_badge.setStyleSheet(
-                "background-color: rgba(239, 68, 68, 0.15); color: #F87171; "
-                "padding: 3px 10px; border-radius: 10px; font-weight: bold; border: 1px solid rgba(239, 68, 68, 0.4);"
+                "background-color: rgba(239, 68, 68, 0.2); color: #F87171; "
+                "padding: 4px 12px; border-radius: 10px; font-weight: bold; border: 1px solid rgba(239, 68, 68, 0.5);"
             )
+        self.status_badge.adjustSize()
 
     def _on_sp_id_changed(self, text: str):
         config.set("spotify.client_id", text.strip())

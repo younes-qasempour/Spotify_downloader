@@ -377,7 +377,23 @@ d:\Spotify-Downloader\
      - Process guard via named mutex `FlacifyMutex` to prevent collisions during install/upgrade.
      - Automatic Start Menu and Desktop shortcuts and clean uninstallation registration.
   5. **Automated Build Pipeline (`build_windows.py`):**
-     - Single-command orchestration to clean artifacts, run PyInstaller, auto-detect `ISCC.exe`, and output `dist/installer/Flacify_Setup_v1.0.0.exe`.
+### 33. Musilon Account Authentication, WinError 10013 Handling & Settings GUI Layout Fix
+- **Symptom:**
+  1. Settings view blew out horizontally: cards, buttons, and status labels were clipped/squished on the right, and the Log In button was distorted.
+  2. The app displayed raw Windows socket errors (`[WinError 10013] An attempt was made to access a socket in a way forbidden by its access permissions`).
+  3. When an authenticated Musilon account with an expired VIP subscription logged in, the UI erroneously displayed a red "Guest Connected" badge with an "Unauthenticated" warning popup.
+- **Root Causes:**
+  1. Multi-sentence description labels in `SettingsView` lacked `setWordWrap(True)`, forcing the card widgets to have minimum widths exceeding 1000px, blowing out the layout.
+  2. In `core/musilon.py`, unparsed raw socket traces were returned instead of user-friendly diagnostics, and configured proxies were not applied to `requests.Session`.
+  3. `test_connection()` conflated account authentication with VIP subscription status: an authenticated user whose VIP had expired was reported as unauthenticated.
+  4. In `core/musilon.py`, HTTP 402 / `DOWNLOAD_PREMIUM_REQUIRED` raised a generic HTTP error instead of `MusilonVipError`, causing repetitive retries rather than immediately falling back to YouTube Music.
+- **Fixes:**
+  1. Enabled `setWordWrap(True)` on all description and status labels in `SettingsView`. Constrained all cards to a responsive, minimum-size-friendly layout.
+  2. Redesigned Musilon settings card: clear side-by-side Email and Password inputs, prominent Primary `Log In` and `Test Connection && VIP Status` buttons, dedicated wrapped status frame, and clean session cookie input.
+  3. Distinguished `is_authenticated` from `is_vip`: authenticated accounts with expired VIP subscriptions are cleanly badged as `Account Active (VIP Expired)` with transparent informative status messages.
+  4. Added `format_network_error()` in `core/musilon.py` to translate Windows socket errors (WinError 10013, 10061, 10060, proxy errors) into actionable user guidance.
+  5. Configured system/configured proxy support in `MusilonEngine.session.proxies`.
+  6. Caught HTTP 402 / `DOWNLOAD_PREMIUM_REQUIRED` directly in `download_file()` and `download_track_with_retry()`, short-circuiting retries and seamlessly triggering YouTube Music fallback.
 
 ## 5. Development Cheat Sheet
 

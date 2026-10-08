@@ -16,6 +16,37 @@ from core.utils import clean_watermarks, format_bytes, is_valid_audio_file, dete
 logger = logging.getLogger("core.musilon")
 
 
+def format_network_error(e: Exception) -> str:
+    """Provides user-friendly, actionable diagnostic messages for network/socket errors."""
+    err_str = str(e)
+    err_lower = err_str.lower()
+
+    if "10013" in err_str or "wsaeacces" in err_lower:
+        return (
+            "Windows network access blocked (WinError 10013): Windows Firewall, antivirus, or VPN "
+            "blocked Flacify from accessing open.musilon.com. Please allow Flacify in Windows Firewall "
+            "or check proxy/VPN settings."
+        )
+    if "10061" in err_str or "wsaeconnrefused" in err_lower or "connection refused" in err_lower:
+        return "Connection refused (WinError 10061): Server or proxy refused the connection."
+    if "10060" in err_str or "timed out" in err_lower or "connecttimeout" in err_lower:
+        return "Connection timed out: Musilon server did not respond. Please check internet connection or proxy."
+    if "proxyerror" in type(e).__name__.lower() or "proxy" in err_lower:
+        return f"Proxy connection error: Could not reach Musilon through configured proxy ({e})."
+    if "ssl" in err_lower or "certificate" in err_lower:
+        return f"SSL error connecting to Musilon: {e}"
+
+    clean_msg = err_str
+    if "Max retries exceeded" in clean_msg:
+        m = re.search(r'\(Caused by [^:]+: (.*?)\)', clean_msg)
+        if m:
+            clean_msg = m.group(1).strip()
+        else:
+            clean_msg = clean_msg.split("Max retries exceeded")[0].strip() or clean_msg
+
+    return f"Musilon connection failed: {clean_msg}"
+
+
 class MusilonVipError(Exception):
     """Raised when Musilon requires authentication or returns an unauthorized response."""
     pass
@@ -88,14 +119,29 @@ class MusilonEngine:
             "sec-ch-ua-platform": '"Windows"',
         })
 
+        # Apply network proxy if configured
+        proxy = config.get("download.proxy", "").strip()
+        if proxy:
+            self.session.proxies = {"http": proxy, "https": proxy}
+        else:
+            self.session.proxies = {}
+
         self._last_request_time = 0.0
         self._load_cookie_string(self.session_cookie)
 
     def set_credentials(self, session_cookie: str = "", username: str = "", password: str = "", enabled: bool = True):
+        from core.config import config
         self.enabled = enabled
         self.session_cookie = session_cookie.strip()
         self.username = username.strip()
         self.password = password.strip()
+
+        proxy = config.get("download.proxy", "").strip()
+        if proxy:
+            self.session.proxies = {"http": proxy, "https": proxy}
+        else:
+            self.session.proxies = {}
+
         self._load_cookie_string(self.session_cookie)
 
     def _load_cookie_string(self, cookie_str: str):
@@ -153,6 +199,8 @@ class MusilonEngine:
                 "Accept": "application/json, text/plain, */*",
                 "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
             })
+            if self.session.proxies:
+                login_session.proxies = dict(self.session.proxies)
 
             # Copy challenge cookies if present
             for c in self.session.cookies:
@@ -242,12 +290,12 @@ class MusilonEngine:
 
         except Exception as e:
             logger.error(f"Error logging in to Musilon: {e}")
-            return False, f"Login failed: {e}"
+            return False, f"Login failed: {format_network_error(e)}"
 
-    def test_connection(self, auto_login: bool = True) -> Tuple[bool, bool, str]:
+    def test_connection(self, auto_login: bool = True) -> Tuple[bool, bool, bool, str]:
         """
-        Tests connectivity and VIP authentication status with Musilon.
-        Returns: (connected: bool, is_vip: bool, status_message: str)
+        Tests connectivity and account / VIP status with Musilon.
+        Returns: (connected: bool, is_authenticated: bool, is_vip: bool, status_message: str)
         """
         try:
             r = self._request("GET", f"{self.BASE_URL}/api/auth/session", timeout=10, max_retries=2)
@@ -263,14 +311,17 @@ class MusilonEngine:
                     return self.test_connection(auto_login=False)
 
             if is_authenticated:
-                user_name = user_data.get("display_name") or user_data.get("name") or user_data.get("email") or "VIP User"
+                user_name = user_data.get("display_name") or user_data.get("name") or user_data.get("email") or "User"
                 
                 # Check subscription status and download budget
-                is_premium = True
+                is_premium = False
+                sub_date_until = ""
                 try:
                     r_sub = self._request("GET", f"{self.BASE_URL}/api/subscription/me", timeout=8)
                     if r_sub.status_code == 200:
-                        is_premium = r_sub.json().get("data", {}).get("isPremium", True)
+                        s_data = r_sub.json().get("data", {})
+                        is_premium = bool(s_data.get("isPremium", False))
+                        sub_date_until = str(s_data.get("subscriptionDateUntil", "") or "").strip()
                 except Exception:
                     pass
 
@@ -283,20 +334,29 @@ class MusilonEngine:
                         p_lim = b_data.get("premium", {}).get("limit", 0)
                         s_rem = b_data.get("standard", {}).get("remaining", 0)
                         s_lim = b_data.get("standard", {}).get("limit", 0)
-                        budget_str = f" | Daily Budget: {p_rem}/{p_lim} Lossless, {s_rem}/{s_lim} Standard"
+                        budget_str = f" | Daily Quota: {p_rem}/{p_lim} Lossless, {s_rem}/{s_lim} Standard"
                 except Exception:
                     pass
 
-                vip_text = "VIP Active" if is_premium else "Free Account"
-                return True, is_premium, f"Connected! {vip_text} ({user_name}){budget_str}"
+                if is_premium:
+                    return True, True, True, f"Connected! VIP Active ({user_name}){budget_str}"
+                else:
+                    exp_note = ""
+                    if sub_date_until:
+                        clean_date = sub_date_until.replace("T", " ")[:16]
+                        exp_note = f" (VIP Expired on {clean_date})"
+                    return True, True, False, (
+                        f"Connected! Account Active ({user_name}){exp_note}{budget_str}. "
+                        "Note: Musilon requires active VIP for Lossless CDN downloads (YouTube fallback will be used if VIP is expired)."
+                    )
 
             elif connected:
-                return True, False, "Connected to Musilon (Guest mode). Log in with account credentials in Settings to enable downloads."
+                return True, False, False, "Connected to Musilon (Guest mode). Log in with account credentials in Settings to enable downloads."
             else:
-                return False, False, f"Musilon returned HTTP {r.status_code}"
+                return False, False, False, f"Musilon returned HTTP {r.status_code}"
 
         except Exception as e:
-            return False, False, f"Musilon connection failed: {e}"
+            return False, False, False, format_network_error(e)
 
     def ensure_vip_session(self, force: bool = False) -> bool:
         """
@@ -865,6 +925,9 @@ class MusilonEngine:
                     f"Musilon download limit or daily quota reached (HTTP {resp.status_code})."
                 )
 
+        if resp.status_code == 402 or "download_premium_required" in text_preview or "premium subscription required" in text_preview:
+            raise MusilonVipError("Musilon VIP subscription required or expired (HTTP 402). Fallback to YouTube Music will be used.")
+
         if resp.status_code == 409:
             raise MusilonQualityUnavailableError("Requested quality tier unavailable for this track.")
 
@@ -1066,6 +1129,9 @@ class MusilonEngine:
                 if cancel_check and cancel_check():
                     return False
                 logger.warning(f"Musilon attempt {attempt}/{max_retries} encountered VIP issue: {e_vip}")
+                if "402" in str(e_vip) or "expired" in str(e_vip).lower():
+                    # VIP subscription expired on site; retrying credentials will not help
+                    raise e_vip
                 if self.is_budget_exhausted(current_source.quality_tier):
                     logger.warning(f"Musilon daily budget confirmed exhausted for '{track.title}'. Raising limit error.")
                     raise MusilonRateLimitExceededError(f"Musilon download limit / daily quota reached for '{track.title}'.")
