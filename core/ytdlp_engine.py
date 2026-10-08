@@ -155,14 +155,24 @@ class YtdlpEngine:
         core = re.sub(r'[\(\[]\s*anniversary(?:\s+edition)?\s*[\)\]]', '', core, flags=re.IGNORECASE)
         core = re.sub(r'[\-\–\—]\s*anniversary(?:\s+edition)?\s*$', '', core, flags=re.IGNORECASE)
 
-        # Strip movie / soundtrack / edition trailing tags
-        if " - " in core:
-            parts = core.split(" - ")
-            if len(parts) >= 2:
-                p1 = parts[0].strip()
-                p2 = " - ".join(parts[1:]).strip()
-                if any(k in p2.lower() for k in ["spider-man", "soundtrack", "motion picture", "version", "edition", "deluxe"]):
-                    core = p1
+        # Strip soundtrack / movie / TV / series subtitles in parentheses/brackets
+        core = re.sub(r'[\(\[]\s*(?:music\s+)?(?:from|featured in|soundtrack|theme|ost|score|original series)\b[^\)\]]*[\)\]]', '', core, flags=re.IGNORECASE)
+
+        # Strip movie / soundtrack / edition / series trailing tags after separators
+        for sep in [" - ", " – ", " — "]:
+            if sep in core:
+                parts = core.split(sep)
+                if len(parts) >= 2:
+                    p1 = parts[0].strip()
+                    p2 = sep.join(parts[1:]).strip().lower()
+                    soundtrack_keywords = [
+                        "from ", "soundtrack", "motion picture", "version", "edition", "deluxe",
+                        "series", "original score", "music from", "ost", "theme", "vol.", "vol ",
+                        "spider-man", "netflix", "hbo", "anime", "original soundtrack"
+                    ]
+                    if any(k in p2 for k in soundtrack_keywords):
+                        core = p1
+                        break
 
         core = re.sub(r'\s+', ' ', core).strip()
         return core, featured_artists, flags

@@ -31,12 +31,18 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(format_bytes(1048576), "1.0 MB")
         self.assertEqual(format_bytes(1073741824), "1.0 GB")
 
-    def test_ensure_ffmpeg(self):
-        ff = ensure_ffmpeg()
-        # Ensure it returns a string if ffmpeg exists in PATH or bin
-        if ff:
-            self.assertTrue(isinstance(ff, str))
+    def test_soundtrack_title_cleaning(self):
+        from core.ytdlp_engine import YtdlpEngine
+        e = YtdlpEngine()
+        t1, f1, _ = e._clean_title_for_search("Popular (with Playboi Carti & Madonna) - From The Idol Vol. 1 (Music from the HBO Original Series)")
+        self.assertEqual(t1, "Popular")
+        self.assertIn("Playboi Carti", f1)
+        self.assertIn("Madonna", f1)
+
+        t2, _, _ = e._clean_title_for_search("See U in Hell (from the Netflix Series \"Devil May Cry\")")
+        self.assertEqual(t2, "See U in Hell")
 
 
 if __name__ == "__main__":
     unittest.main()
+

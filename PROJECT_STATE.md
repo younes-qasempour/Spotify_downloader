@@ -400,6 +400,18 @@ d:\Spotify-Downloader\
   - `CompactSpinBox` uses native vertical up/down stepper arrows (`padding: 0px 26px 0 10px`), ensuring numeric values (`0` through `300`) are 100% visible, centered, and legible in dark mode.
   - Bumped version to `v1.0.1` across `core/__init__.py`, `installer.iss`, `version_info.txt`, and `build_windows.py`.
 
+### 35. Musilon Audio Stream text_preview UnboundLocalError & Soundtrack Subtitle Cleaning
+- **Symptoms:**
+  1. Downloads on Musilon failed repeatedly across all 5 retry attempts with `cannot access local variable 'text_preview' where it is not associated with a value`, even though Musilon resolved genuine tracks (e.g., *Popular*, *See U in Hell*).
+  2. Fallback to YouTube Music failed for tracks with soundtrack/TV series subtitles (*From The Idol Vol. 1*, *from the Netflix Series "Devil May Cry"*), reporting no candidate met tolerance.
+- **Causes:**
+  1. In `core/musilon.py`, `text_preview` was defined inside `if resp.status_code != 200 or is_json_or_text:`. For legitimate HTTP 200 audio streams (`audio/mpeg`, `audio/ogg`, `audio/flac`), the block was skipped and `text_preview` remained undefined when evaluated on line 928.
+  2. In `core/ytdlp_engine.py`, `_clean_title_for_search()` did not strip soundtrack/series markers (e.g. `(from the Netflix Series ...)`, ` - From The Idol...`), causing YouTube candidates lacking those extra words to suffer severe missing-word penalties (-15.0 per word).
+- **Fixes:**
+  1. Initialized `text_preview = ""` before the response inspection block in `core/musilon.py` and guarded the downstream premium check.
+  2. Enhanced `_clean_title_for_search()` in `core/ytdlp_engine.py` to strip soundtrack, TV, movie, and series parentheticals and subtitles after separators.
+  3. Added unit tests in `tests/test_utils.py` verifying soundtrack subtitle extraction and clean core title matching.
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:

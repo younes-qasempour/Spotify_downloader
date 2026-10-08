@@ -900,8 +900,8 @@ class MusilonEngine:
         is_json_or_text = any(t in content_type for t in ("application/json", "text/html", "text/plain"))
 
         # Inspect non-200 responses or unexpected payload bodies for quota/budget exhaustion BEFORE raise_for_status()
+        text_preview = ""
         if resp.status_code != 200 or is_json_or_text:
-            text_preview = ""
             try:
                 text_preview = resp.text[:4000].lower() if hasattr(resp, "text") else ""
             except Exception:
@@ -925,7 +925,7 @@ class MusilonEngine:
                     f"Musilon download limit or daily quota reached (HTTP {resp.status_code})."
                 )
 
-        if resp.status_code == 402 or "download_premium_required" in text_preview or "premium subscription required" in text_preview:
+        if resp.status_code == 402 or (text_preview and ("download_premium_required" in text_preview or "premium subscription required" in text_preview)):
             raise MusilonVipError("Musilon VIP subscription required or expired (HTTP 402). Fallback to YouTube Music will be used.")
 
         if resp.status_code == 409:
