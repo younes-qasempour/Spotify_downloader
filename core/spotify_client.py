@@ -17,6 +17,7 @@ except ImportError:
     SpotifyOAuth = None
 
 from core.utils import clean_watermarks, sanitize_filename
+from core.paths import get_cache_dir
 
 logger = logging.getLogger("core.spotify")
 
@@ -133,8 +134,7 @@ class SpotifyClient:
 
     def clear_user_auth(self):
         """Clears the cached OAuth token and resets the API client to unauthenticated."""
-        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
-        token_cache = os.path.join(cache_dir, ".spotify_token_cache")
+        token_cache = os.path.join(str(get_cache_dir()), ".spotify_token_cache")
         if os.path.exists(token_cache):
             try:
                 os.remove(token_cache)
@@ -211,9 +211,7 @@ class SpotifyClient:
             self._oauth = None
             return
 
-        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        token_cache = os.path.join(cache_dir, ".spotify_token_cache")
+        token_cache = os.path.join(str(get_cache_dir()), ".spotify_token_cache")
 
         redirect_uri = "http://127.0.0.1:9900/callback"
         try:

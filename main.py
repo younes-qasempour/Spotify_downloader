@@ -15,6 +15,8 @@ try:
 except Exception:
     pass
 
+from logging.handlers import RotatingFileHandler
+from core.paths import get_logs_dir, get_asset_path
 from core.utils import resource_path
 
 # Global exception logger
@@ -22,7 +24,9 @@ def exception_hook(exctype, value, tb):
     print("\n[CRITICAL ERROR] Uncaught exception occurred:")
     traceback.print_exception(exctype, value, tb)
     try:
-        with open("gui_startup_error.log", "w", encoding="utf-8") as f:
+        crash_log = get_logs_dir() / "crash.log"
+        with open(crash_log, "a", encoding="utf-8") as f:
+            f.write("\n=== CRASH REPORT ===\n")
             traceback.print_exception(exctype, value, tb, file=f)
     except Exception:
         pass
@@ -33,10 +37,22 @@ sys.excepthook = exception_hook
 
 def setup_logging(verbose: bool = False):
     level = logging.DEBUG if verbose else logging.INFO
+    log_format = "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+    date_format = "%H:%M:%S"
+
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    try:
+        log_file = get_logs_dir() / "flacify.log"
+        file_handler = RotatingFileHandler(str(log_file), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        handlers.append(file_handler)
+    except Exception:
+        pass
+
     logging.basicConfig(
         level=level,
-        format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
-        datefmt="%H:%M:%S"
+        format=log_format,
+        datefmt=date_format,
+        handlers=handlers
     )
 
 
@@ -117,18 +133,19 @@ def run_headless_cli(spotify_url: str, output_dir: str | None = None):
 def run_gui():
     """Launches the Windows 11 Fluent Design Desktop Application."""
     print("==================================================", flush=True)
-    print("  Spotify Downloader — High-Fidelity Desktop Suite", flush=True)
+    print("  Flacify — High-Fidelity Audio Scraper", flush=True)
     print("==================================================", flush=True)
     print("Initializing Fluent UI application...", flush=True)
 
     from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
 
     # Fix Windows taskbar icon grouping
     if sys.platform == "win32":
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SpotifyDownloader.HighFidelity.1.0")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Flacify.App.1.0")
         except Exception:
             pass
 
@@ -138,8 +155,13 @@ def run_gui():
     )
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Spotify Downloader")
-    app.setOrganizationName("HighFidelityAudio")
+    app.setApplicationName("Flacify")
+    app.setOrganizationName("Flacify Project")
+
+    # Set application-wide icon
+    icon_path = get_asset_path("assets/icon.ico")
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     from gui.main_window import MainWindow
 

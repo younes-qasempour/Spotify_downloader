@@ -357,13 +357,38 @@ d:\Spotify-Downloader\
   3. Reorganized the Playlist detail batch controls into a responsive 2-row layout (Row 1: Batch size & presets; Row 2: Action buttons).
   4. Synchronized `resolved.quality_badge` and `resolved.file_extension` in `resolver.download_and_tag()` based on actual file headers and extensions.
   5. Implemented a 500-item LRU `OrderedDict` and 4-worker `ThreadPoolExecutor` in `ThumbnailCache`.
-  6. Replaced shell commands with `QDesktopServices.openUrl()`, `os.startfile()`, and added `creationflags=CREATE_NO_WINDOW` across all subprocess calls.
+  ### 13. Production Packaging, Standalone Binary & Windows Installer (Flacify v1.0.0)
+- **Background & Motivations:**
+  Converting the Python / PyQt6 repository into a standalone, distribution-grade Windows executable required solving permissions crashes in `Program Files`, suppressing command prompt consoles, bundling dynamic Fluent resources, multi-resolution application icons, and packaging an automated Inno Setup installer.
+- **Architectural Implementation:**
+  1. **Centralized Runtime Path Architecture (`core/paths.py`):**
+     - Directed all mutable state (`config.json`, `archive.db`, cache, cover artwork, and logs) to `%LOCALAPPDATA%\Flacify`.
+     - Automatically seeds `config.json` and migrates existing `archive.db` on first run.
+     - Resolves static bundled assets through `sys._MEIPASS` when frozen via PyInstaller, or repository root in development.
+  2. **PyInstaller Architecture (`app.spec`):**
+     - Configured as `onedir` windowed build (`console=False`) named `Flacify`.
+     - Excluded ~150MB of unused Qt modules (`QtWebEngine`, `QtQuick`, `Qt3D`, `QtTest`, `scipy`, `pandas`, `matplotlib`).
+     - Bundled `assets/`, `bin/ffmpeg.exe`, `config.example.json`, and dynamic `qfluentwidgets` font/QSS data files.
+     - Embedded Windows PE version resource metadata (`version_info.txt`).
+  3. **Multi-Resolution Windows Icon (`assets/icon.ico`):**
+     - Converted `Icon.jpg` into standard multi-layer `.ico` (16×16, 32×32, 48×48, 64×64, 128×128, 256×256) via Pillow, with standalone generation script `assets/convert_icon.py`.
+  4. **Inno Setup 6 Installer (`installer.iss`):**
+     - Per-user non-admin installation into `{localappdata}\Programs\Flacify`.
+     - Process guard via named mutex `FlacifyMutex` to prevent collisions during install/upgrade.
+     - Automatic Start Menu and Desktop shortcuts and clean uninstallation registration.
+  5. **Automated Build Pipeline (`build_windows.py`):**
+     - Single-command orchestration to clean artifacts, run PyInstaller, auto-detect `ISCC.exe`, and output `dist/installer/Flacify_Setup_v1.0.0.exe`.
 
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:
 ```powershell
 python main.py
+```
+
+### Build the Standalone Windows Executable & Installer:
+```powershell
+python build_windows.py
 ```
 
 ### Run Headless CLI Download:
@@ -374,10 +399,5 @@ python main.py --headless "https://open.spotify.com/track/<track_id>"
 ### Validate Core Modules Without GUI:
 ```powershell
 python -c "from core.spotify_client import SpotifyClient; c = SpotifyClient(); print(c.resolve('https://open.spotify.com/track/3AJwUDP919kvQ9QcozQPxg'))"
-```
-
-### Validate Tagging Pipeline:
-```powershell
-python -c "from core.tagger import AudioTagger; from core.spotify_client import TrackMetadata; t = TrackMetadata(id='1', title='Test', artists=['Artist'], album='Album', release_date='2024', duration_ms=1000); print(AudioTagger())"
 ```
 

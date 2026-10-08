@@ -1,12 +1,13 @@
-# Spotify Downloader — High-Fidelity Desktop Suite
+# Flacify — High-Fidelity Audio Scraper & Desktop Suite
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?logo=windows11&logoColor=white" alt="Windows 11 Fluent">
-  <img src="https://img.shields.io/badge/Audio-Lossless%20FLAC%2016%2F24-emerald?logo=flac" alt="Lossless FLAC">
-  <img src="https://img.shields.io/badge/Safety%20Net-YouTube%20Music%20Opus-red?logo=youtubemusic&logoColor=white" alt="YouTube Music">
-  <img src="https://img.shields.io/badge/Tagging-Mutagen%20%2B%20LRCLIB-orange" alt="Tagging">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+  <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
+  <img src="https://img.shields.io/badge/Release-v1.0.0-blue?style=flat-square" alt="Version 1.0.0">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white&style=flat-square" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?logo=windows11&logoColor=white&style=flat-square" alt="Windows 11 Fluent">
+  <img src="https://img.shields.io/badge/Audio-Lossless%20FLAC%2016%2F24-emerald?logo=flac&style=flat-square" alt="Lossless FLAC">
+  <img src="https://img.shields.io/badge/Safety%20Net-YouTube%20Music%20Opus-red?logo=youtubemusic&logoColor=white&style=flat-square" alt="YouTube Music">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
 </p>
 
 A production-grade, visually stunning Windows 11 desktop application and headless CLI suite designed to download Spotify tracks, albums, and massive playlists (1,000+ tracks) at studio-master fidelity without crashes, rate-limit bans, or UI freezing.
@@ -24,9 +25,9 @@ Every queued track traverses an intelligent cascading resolution ladder to ensur
 3. **Tier 3 (Studio MP3):** Musilon Pristine MP3 320 kbps (Constant Bitrate).
 4. **Tier 4 (Safety Net):** YouTube Music native high-bitrate Opus stream via `yt-dlp` with strict track duration tolerance ($\pm 5$s). **Activates strictly when Musilon catalog has no matching candidate.**
 
-### 🔍 4-Tier Musilon Discovery Engine
+### 🔍 4-Tier Discovery Engine
 Musilon's catalog is probed across four concurrent search vectors with smart scoring to ensure 100% accurate resolution:
-- **Vector 1 (Live REST API):** Queries `/wp-json/play/search?search={query}` used by the Musilon web player for real-time JSON responses.
+- **Vector 1 (Live REST API):** Queries `/wp-json/play/search?search={query}` used by the web player for real-time JSON responses.
 - **Vector 2 (WordPress Station API):** Queries native `/wp-json/wp/v2/station?search={query}&per_page=30`.
 - **Vector 3 (Artist Taxonomy Discography):** Resolves artist taxonomy `/wp-json/wp/v2/artist?search={name}` and scans their complete catalog archive.
 - **Vector 4 (HTML Fallback):** Resilient HTML scraping via `/search/{query}/` and `/?s={query}`.
@@ -40,9 +41,9 @@ Musilon's catalog is probed across four concurrent search vectors with smart sco
 
 ### 📁 Smart Folder Organization
 Downloads are automatically organized into dedicated subdirectories within your chosen download directory based on the Spotify entity:
-- **Playlists:** Saved into a folder named after the playlist (e.g. `downloads/Chill Moody Mix/`).
-- **Albums:** Saved into a separate folder named after the album (e.g. `downloads/Random Access Memories/`).
-- **Singles:** Standalone tracks are neatly placed into a dedicated `downloads/Singles/` folder.
+- **Playlists:** Saved into a folder named after the playlist (e.g. `Music/Chill Moody Mix/`).
+- **Albums:** Saved into a separate folder named after the album (e.g. `Music/Random Access Memories/`).
+- **Singles:** Standalone tracks are neatly placed into a dedicated `Music/Singles/` folder.
 
 ### ⚡ Windows 11 Fluent Design GUI
 - Built with `PyQt6` and `PyQt6-Fluent-Widgets`.
@@ -57,13 +58,22 @@ Downloads are automatically organized into dedicated subdirectories within your 
 ## 🏗️ Architecture
 
 ```
-Spotify-Downloader/
+Flacify/
+├── app.spec                  # PyInstaller configuration for standalone release
+├── build_windows.py          # Automated pipeline orchestrator (PyInstaller + Inno Setup)
+├── installer.iss             # Inno Setup 6 per-user Windows installer configuration
+├── version_info.txt          # Embedded Windows PE version resource metadata
 ├── config.example.json       # Clean template for configuration settings
 ├── requirements.txt          # Python dependencies
-├── build_windows.spec        # PyInstaller specification for standalone binary
 ├── main.py                   # Unified entrypoint (GUI default or --headless CLI)
 │
+├── assets/                   # APPLICATION BRANDING & ICONS
+│   ├── icon.ico              # Multi-resolution icon (16x16 up to 256x256)
+│   ├── icon.png              # High-res 256x256 application logo
+│   └── convert_icon.py       # Reusable icon generation utility
+│
 ├── core/                     # HEADLESS MULTIMEDIA ENGINE (Zero GUI Dependencies)
+│   ├── paths.py              # Centralized path manager (%LOCALAPPDATA%\Flacify)
 │   ├── config.py             # Thread-safe persistent JSON config manager
 │   ├── archive.py            # SQLite music library archive, deduplication & auto-repair
 │   ├── spotify_client.py     # Spotify Web API client + guest scraper fallback
@@ -89,15 +99,22 @@ Spotify-Downloader/
 
 ---
 
-## 🚀 Getting Started
+## 💾 Installation
 
-### Prerequisites
+### Option 1: Standalone Windows Installer (Recommended)
+Download the latest installer from [Releases](https://github.com/younes-qasempour/Spotify_downloader/releases):
+- Download **`Flacify_Setup_v1.0.0.exe`**.
+- Run the setup wizard (installs per-user without requiring administrator privileges).
+- Launch **Flacify** directly from your Start Menu or Desktop shortcut.
+
+### Option 2: Running from Source
+
+#### Prerequisites
 - **Python 3.10+** (tested on Python 3.11 – 3.14 on Windows 11)
-- **Node.js** (required for executing ArvanCloud JS challenges on Musilon)
-- **FFmpeg** (optional for lossless FLAC; recommended for Opus/M4A transcoding. Can be auto-installed via the app Settings tab)
+- **Node.js** (required for solving dynamic JavaScript challenges on Musilon)
+- **FFmpeg** (bundled in binary releases; auto-installable via the Settings tab in source mode)
 
-### Installation
-
+#### Setup Steps
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/younes-qasempour/Spotify_downloader.git
@@ -115,17 +132,16 @@ Spotify-Downloader/
    pip install -r requirements.txt
    ```
 
-4. **Prepare configuration:**
-   Copy `config.example.json` to `config.json`:
+4. **Launch Flacify:**
    ```bash
-   copy config.example.json config.json
+   python main.py
    ```
 
 ---
 
 ## 💻 Usage
 
-### 1. Launch Desktop GUI (Default)
+### 1. Desktop GUI
 ```bash
 python main.py
 ```
@@ -133,7 +149,7 @@ python main.py
 - Click **Analyze & Enqueue**.
 - Click **Start All** to begin high-speed parallel downloads.
 
-### 2. Run Headless CLI Mode
+### 2. Headless CLI Mode
 For automated environments, servers, or terminal workflows:
 ```bash
 # Download a single track
@@ -145,89 +161,39 @@ python main.py --headless "https://open.spotify.com/playlist/37i9dQZF1EIguyCzHJl
 
 ---
 
+## 📦 Building Standalone Installer
+
+To compile the production standalone executable and Inno Setup installer:
+```bash
+python build_windows.py
+```
+This automatically:
+1. Verifies/generates `assets/icon.ico`.
+2. Runs PyInstaller with `app.spec` in `onedir` windowed mode.
+3. Invokes Inno Setup 6 (`ISCC.exe`) to produce `dist/installer/Flacify_Setup_v1.0.0.exe`.
+
+---
+
 ## 🔧 YouTube Fallback & Cookie Setup Guide
 
 The application uses an intelligent multi-tier discovery pipeline:
-- **Tiers 1–3 (Musilon VIP):** High-speed direct CDN access providing MP3 320 kbps, 16-bit FLAC, and 24-bit Hi-Res audio. Musilon covers millions of Western, Pop, Rock, Electronic, and Persian tracks.
+- **Tiers 1–3 (Musilon VIP):** High-speed direct CDN access providing MP3 320 kbps, 16-bit FLAC, and 24-bit Hi-Res audio.
 - **Tier 4 (YouTube Music Fallback):** Automatically triggers when a track is not present on Musilon (e.g. Japanese City Pop, regional releases, indie tracks, video game OSTs, or obscure b-sides).
 
-### Why are Cookies needed for YouTube?
-YouTube enforces strict anti-bot verification (`Sign in to confirm you're not a bot`) against automated downloaders like `yt-dlp`. Providing your browser cookies allows the fallback engine to download seamlessly without blocks:
-
-#### Step-by-Step `cookies.txt` Export:
-1. In your browser (Google Chrome, Microsoft Edge, Brave, or Mozilla Firefox), install the extension:
+### Exporting `cookies.txt` for YouTube
+YouTube enforces anti-bot verification against automated downloaders. Providing your browser cookies allows seamless downloads:
+1. Install a browser extension:
    - **Chrome / Edge / Brave:** [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbngbenkjcffliehddfacccg)
    - **Firefox:** [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
-2. Navigate to [youtube.com](https://youtube.com) and make sure you are logged into your account.
-3. Click the extension icon in your browser toolbar and click **Export** to save `cookies.txt`.
-4. Provide the file to the app:
-   - **Option A (Zero-Config):** Save the exported file directly in the app's root folder (`Spotify-Downloader/cookies.txt`). The app auto-detects it automatically!
-   - **Option B (GUI Picker):** Open the app's **Settings** tab → **Download & Organization** → click **Browse...** under *YouTube Cookies File* and select your file.
-
-### 🌐 Network Proxy Configuration
-If YouTube or Google services are filtered or blocked on your network:
-1. In the app's **Settings** tab, locate **Network Proxy (Optional)**.
-2. Enter your local proxy address:
-   - HTTP Proxy: `http://127.0.0.1:10809`
-   - SOCKS5 Proxy: `socks5://127.0.0.1:10808`
-3. All YouTube requests and streams will be securely routed through your proxy.
-
----
-
-## 🎵 Spotify Playlists & Track Limits Explained
-
-- **Spotify Radio & Algorithmic Mixes (e.g. `...Radio`, `inspiredby-mix`):**
-  - Links starting with `37i9dQZF...` (such as *Miki Matsubara Radio*) are dynamic, algorithmic playlists generated by Spotify.
-  - **Spotify strictly caps all Radio and Mix playlists at exactly 50 tracks.** The app retrieves 100% of the available tracks.
-- **Standard User Playlists & Albums:**
-  - Standard user or editorial playlists have no 50-track limit. The app supports full pagination and enqueues massive libraries (1,000+ tracks) effortlessly.
-
----
-
-## ⚙️ Configuration (`config.json`)
-
-All runtime settings are stored in `config.json` (excluded from git tracking):
-
-| Key | Type | Description | Default |
-|---|---|---|---|
-| `musilon.session_cookie` | String | VIP session cookies for Musilon high-speed CDN access | `""` |
-| `musilon.username` | String | Musilon account email or username | `""` |
-| `musilon.password` | String | Musilon account password | `""` |
-| `musilon.enabled` | Boolean | Enable or disable Musilon Tier 1–3 downloads | `true` |
-| `musilon_max_retries` | Integer | Max VIP download retry attempts before YouTube fallback | `5` |
-| `spotify.client_id` | String | Official Spotify Developer Client ID (required for playlists > 100 tracks) | `""` |
-| `spotify.client_secret`| String | Official Spotify Developer Client Secret (required for playlists > 100 tracks) | `""` |
-| `download.output_dir` | String | Local directory where audio files and collections are saved | `downloads` |
-| `download.naming_template` | String | File naming pattern for playlists & singles (`{artist}`, `{title}`, `{album}`) | `"{artist} - {title}"` |
-| `download.album_naming_template` | String | File naming pattern for albums (`{track_num}`, `{artist}`, `{title}`, `{album}`) | `"{track_num}. {artist} - {title}"` |
-| `download.preferred_quality` | String | Preferred format (`"320"` for MP3 320kbps, `"flac"` for Lossless) | `"320"` |
-| `download.lyrics_mode` | String | Lyrics storage strategy (`"embedded_only"`, `"companion_lrc"`, `"both"`) | `"embedded_only"` |
-| `download.save_lrc` | Boolean | Save external companion `.lrc` file (superseded by `lyrics_mode`) | `false` |
-| `download.embed_lyrics` | Boolean | Embed synchronized lyrics directly into audio container tags | `true` |
-| `download.embed_cover_art`| Boolean | Embed 640×640 JPEG album art into audio container | `true` |
-| `download.allow_fallback` | Boolean | Allow YouTube Music Opus fallback when track is absent on Musilon | `true` |
-| `download.cookies_file` | String | Path to `cookies.txt` for YouTube bot verification bypass | `""` |
-| `download.proxy` | String | HTTP/SOCKS5 proxy URL for YouTube downloads (e.g. `http://127.0.0.1:10809`) | `""` |
-| `download.concurrency` | Integer | Maximum simultaneous background download streams | `2` |
-| `ui.theme` | String | Fluent UI Theme palette (`"Dark"` or `"Light"`) | `"Dark"` |
-| `ui.clipboard_auto_detect` | Boolean | Automatically analyze Spotify URLs detected in clipboard | `true` |
+2. Log into [youtube.com](https://youtube.com) in your browser.
+3. Export `cookies.txt`.
+4. Place the file in `%LOCALAPPDATA%\Flacify\cookies.txt` or select it in the app's **Settings** tab.
 
 ---
 
 ## 🛡️ Security & Privacy
-- **Zero Hardcoded Secrets**: Credentials, session tokens, and account information are strictly saved in `config.json` and kept local.
-- **Git Shield**: `.gitignore` strictly ignores `config.json`, cookies, local music files, scratch test scripts, and third-party binaries (`bin/ffmpeg.exe`).
-
----
-
-## 📦 Building Standalone Windows Executable
-
-To compile a standalone `.exe` installer or portable folder:
-```bash
-pip install pyinstaller
-pyinstaller build_windows.spec
-```
-The output executable will be generated in `dist/SpotifyDownloader/SpotifyDownloader.exe`.
+- **Zero Leaked Secrets**: User credentials, session tokens, and local databases are stored exclusively in `%LOCALAPPDATA%\Flacify` and are never committed to git.
+- **Git Shield**: `.gitignore` strictly protects `config.json`, cookies, local music files, databases (`archive.db`), and third-party binaries.
 
 ---
 

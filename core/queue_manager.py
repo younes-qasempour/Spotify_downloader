@@ -16,6 +16,7 @@ from core.musilon import MusilonRateLimitExceededError
 from core.archive import ArchiveManager
 from core.utils import sanitize_filename, is_valid_audio_file
 from core.config import config
+from core.paths import get_covers_dir
 
 logger = logging.getLogger("core.queue")
 
@@ -340,9 +341,7 @@ class DownloadQueueManager:
             if coll_cover_url and coll_type in ("playlist", "album") and coll_name:
                 try:
                     cache_dir = config.get("download.cache_dir", "")
-                    if not cache_dir:
-                        cache_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache"))
-                    covers_dir = os.path.join(cache_dir, "covers")
+                    covers_dir = os.path.join(cache_dir, "covers") if cache_dir else str(get_covers_dir())
                     os.makedirs(covers_dir, exist_ok=True)
                     safe_coll = sanitize_filename(coll_name, max_length=50)
                     cover_target = os.path.join(covers_dir, f"{coll_type}_{safe_coll}.jpg")

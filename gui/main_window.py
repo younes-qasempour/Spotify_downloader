@@ -18,6 +18,7 @@ from core.resolver import CascadingAudioEngine
 from core.archive import ArchiveManager
 from core.config import config
 from core.utils import resource_path
+from core.paths import get_asset_path
 
 from gui.bridge import EngineSignalBridge
 from gui.views.queue_view import QueueView
@@ -38,10 +39,15 @@ class MainWindow(FluentWindow):
 
     def __init__(self):
         super().__init__()
-        self.setObjectName("spotify_downloader_main_window")
-        self.setWindowTitle("Spotify Downloader — High-Fidelity Suite")
+        self.setObjectName("flacify_main_window")
+        self.setWindowTitle("Flacify — High-Fidelity Audio Scraper")
         self.resize(1060, 720)
         self.setMinimumSize(880, 600)
+
+        # Set Window Icon
+        icon_path = get_asset_path("assets/icon.ico")
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
         # Center on screen
         try:

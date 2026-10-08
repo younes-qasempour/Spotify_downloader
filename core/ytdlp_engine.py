@@ -11,6 +11,7 @@ import yt_dlp
 from core.spotify_client import TrackMetadata
 from core.utils import clean_watermarks, format_bytes, ensure_ffmpeg
 from core.config import config
+from core.paths import get_app_data_dir, get_resource_path
 
 logger = logging.getLogger("core.ytdlp")
 
@@ -53,7 +54,11 @@ class YtdlpEngine:
         cookie_file = config.get("download.cookies_file", "").strip()
         if not cookie_file or not os.path.isfile(cookie_file):
             root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            app_data_dir = str(get_app_data_dir())
             for cand in [
+                os.path.join(app_data_dir, "cookies.txt"),
+                os.path.join(app_data_dir, "youtube_cookies.txt"),
+                str(get_resource_path("cookies.txt")),
                 os.path.join(root_dir, "cookies.txt"),
                 os.path.join(root_dir, "youtube_cookies.txt"),
                 "cookies.txt",

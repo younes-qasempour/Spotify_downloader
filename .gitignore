@@ -44,7 +44,7 @@ scratch/
 build/
 dist/
 *.spec
-!build_windows.spec
+!app.spec
 *.egg-info/
 
 # Virtual environments

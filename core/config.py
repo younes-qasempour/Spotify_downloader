@@ -5,6 +5,8 @@ import threading
 from pathlib import Path
 from typing import Any, Dict
 
+from core.paths import get_config_path, get_cache_dir, get_default_download_dir
+
 logger = logging.getLogger("core.config")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -24,8 +26,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "client_secret": "",
     },
     "download": {
-        "output_dir": os.path.normpath(os.path.expanduser("~/Music/Spotify Downloads")),
-        "cache_dir": os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")),
+        "output_dir": os.path.normpath(str(get_default_download_dir())),
+        "cache_dir": os.path.normpath(str(get_cache_dir())),
         "naming_template": "{artist} - {title}",
         "album_naming_template": "{track_num}. {artist} - {title}",
         "save_lrc": False,
@@ -72,8 +74,8 @@ class ConfigManager:
         if config_path:
             self.config_path = Path(config_path)
         else:
-            # Default to config.json in app directory
-            self.config_path = Path(__file__).resolve().parent.parent / "config.json"
+            # Default to config.json in user AppData directory
+            self.config_path = get_config_path()
         
         self.data: Dict[str, Any] = {}
         self.load()

@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 from typing import Optional, Tuple, Callable
 
+from core.paths import get_resource_path, get_user_bin_dir
+
 logger = logging.getLogger("core.utils")
 
 # Illegal Windows characters: < > : " / \ | ? * and ASCII 0-31
@@ -23,12 +25,7 @@ def resource_path(relative_path: str) -> str:
     """
     Get absolute path to resource, works for dev and for PyInstaller frozen app.
     """
-    try:
-        base_path = sys._MEIPASS  # type: ignore[attr-defined]
-    except Exception:
-        # Resolve to directory of current file's grandparent or current working dir
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    return os.path.normpath(os.path.join(base_path, relative_path))
+    return str(get_resource_path(relative_path))
 
 
 def clean_watermarks(text: str) -> str:
@@ -107,13 +104,16 @@ def ensure_ffmpeg() -> str | None:
     """
     # 1. Check local directory candidates
     app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    user_bin = os.path.join(str(get_user_bin_dir()), "ffmpeg.exe")
     local_candidates = [
-        resource_path("ffmpeg.exe"),
-        resource_path("bin/ffmpeg.exe"),
+        str(get_resource_path("bin", "ffmpeg.exe")),
+        str(get_resource_path("ffmpeg.exe")),
+        user_bin,
         os.path.join(app_root, "bin", "ffmpeg.exe"),
         os.path.join(app_root, "ffmpeg.exe"),
         os.path.join(os.getcwd(), "bin", "ffmpeg.exe"),
         os.path.join(os.getcwd(), "ffmpeg.exe"),
+        os.path.join(os.path.dirname(sys.executable), "bin", "ffmpeg.exe"),
         os.path.join(os.path.dirname(sys.executable), "ffmpeg.exe")
     ]
     for cand in local_candidates:
@@ -134,12 +134,11 @@ def download_ffmpeg(
 ) -> str | None:
     """
     Automatically downloads and extracts the standalone 64-bit Windows FFmpeg
-    executable into bin/ffmpeg.exe (~29MB compressed).
+    executable into %LOCALAPPDATA%/Flacify/bin/ffmpeg.exe (~29MB compressed).
     Returns absolute path to ffmpeg.exe or None on failure.
     """
     if not dest_dir:
-        app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        dest_dir = os.path.join(app_root, "bin")
+        dest_dir = str(get_user_bin_dir())
 
     os.makedirs(dest_dir, exist_ok=True)
     target_exe = os.path.normpath(os.path.join(dest_dir, "ffmpeg.exe"))

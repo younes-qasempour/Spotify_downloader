@@ -9,6 +9,7 @@ from pathlib import Path
 from core.config import config
 from core.spotify_client import TrackMetadata
 from core.utils import extract_embedded_cover, is_valid_audio_file, sanitize_filename
+from core.paths import get_archive_db_path, get_cache_dir, get_covers_dir, get_default_download_dir
 
 logger = logging.getLogger("core.archive")
 
@@ -36,11 +37,7 @@ def resolve_collection_cover(folder_path: str, sample_file: str = "") -> str:
     folder_name = os.path.basename(os.path.normpath(folder_path))
     safe_name = sanitize_filename(folder_name, max_length=50)
 
-    cache_dir = config.get("download.cache_dir", "")
-    if not cache_dir:
-        cache_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache"))
-    covers_dir = os.path.join(cache_dir, "covers")
-    os.makedirs(covers_dir, exist_ok=True)
+    covers_dir = str(get_covers_dir())
 
     # 1. Check if cached cover exists in app cache
     cached_cover = os.path.join(covers_dir, f"{safe_name}.jpg")
@@ -117,8 +114,8 @@ class ArchiveManager:
         if db_path:
             self.db_path = Path(db_path)
         else:
-            # Default to archive.db in the project root directory
-            self.db_path = Path(__file__).resolve().parent.parent / "archive.db"
+            # Default to archive.db in user AppData directory
+            self.db_path = get_archive_db_path()
 
         self._db_lock = threading.RLock()
         self._init_db()
@@ -911,11 +908,7 @@ class ArchiveManager:
         if not target_dir or not os.path.isdir(target_dir):
             return {"purged_corrupt_files": 0, "purged_db_records": 0, "removed_marker_files": 0, "relocated_covers": 0, "reorganized_lyrics": 0}
 
-        cache_dir = config.get("download.cache_dir", "")
-        if not cache_dir:
-            cache_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache"))
-        covers_dir = os.path.join(cache_dir, "covers")
-        os.makedirs(covers_dir, exist_ok=True)
+        covers_dir = str(get_covers_dir())
 
         stats = {
             "purged_corrupt_files": 0,
@@ -1033,9 +1026,9 @@ class ArchiveManager:
         from core.spotify_client import TrackMetadata
 
         if not root_dir:
-            root_dir = config.get("download.output_dir", "downloads")
+            root_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
             if not os.path.isabs(root_dir):
-                root_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), root_dir))
+                root_dir = os.path.normpath(os.path.join(str(get_default_download_dir()), root_dir))
 
         stats = {
             "scanned": 0,
@@ -1244,12 +1237,7 @@ class ArchiveManager:
 
         # Cache cover if remote URL exists
         safe_name = sanitize_filename(name, max_length=50)
-        from core.config import config
-        cache_dir = config.get("download.cache_dir", "")
-        if not cache_dir:
-            cache_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache"))
-        covers_dir = os.path.join(cache_dir, "covers")
-        os.makedirs(covers_dir, exist_ok=True)
+        covers_dir = str(get_covers_dir())
         local_cover = os.path.join(covers_dir, f"playlist_{safe_name}.jpg")
         if cover_url and not os.path.isfile(local_cover):
             def _fetch_cover():
