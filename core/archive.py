@@ -1379,83 +1379,118 @@ class ArchiveManager:
         logger.info(f"Library repair completed: {stats}")
         return stats
 
-    def retag_all_library_genres(
+    def retag_all_library_replaygain(
         self,
         root_dir: str = "",
         progress_callback: Optional[Callable[[int, int, str], None]] = None
     ) -> Dict[str, int]:
         """
-        Deep scan and auto-retag audio files across downloaded tracks and library folders.
-        Resolves genres using GenreResolver, writes multi-genre tags directly to disk
-        in audio files (.flac, .mp3, .m4a, .opus, .ogg), and updates the SQLite database.
+        Deep scans downloaded audio files, computes EBU R128 integrated loudness & true peak
+        using ffmpeg ebur128 filter, and writes non-destructive ReplayGain 2.0 tags.
         """
+        from core.utils import calculate_replaygain
         from core.tagger import AudioTagger
-        from core.genre import GenreResolver
+
+        if not root_dir:
+            root_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
+            if not os.path.isabs(root_dir):
+                root_dir = os.path.normpath(os.path.join(str(get_default_download_dir()), root_dir))
 
         stats = {
             "scanned": 0,
-            "retagged": 0,
-            "already_tagged": 0,
+            "calculated": 0,
             "errors": 0
         }
 
+        if not os.path.isdir(root_dir):
+            return stats
+
         tagger = AudioTagger()
-        resolver = GenreResolver()
-
-        # 1. Fetch all tracks from downloaded_tracks in DB
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
-                cur = conn.execute("SELECT spotify_id, title, artist, album, file_path, genre FROM downloaded_tracks")
-                tracks = [dict(r) for r in cur.fetchall()]
-            finally:
-                conn.close()
-
-        total = len(tracks)
-        for idx, t in enumerate(tracks, 1):
-            stats["scanned"] += 1
-            fpath = t.get("file_path", "")
-            title = t.get("title", "")
-            artist = t.get("artist", "")
-            album = t.get("album", "")
-            current_genre = (t.get("genre") or "").strip()
-
-            if progress_callback:
-                progress_callback(idx, total, f"Retagging {artist} - {title}")
-
-            if not fpath or not os.path.isfile(fpath):
+        audio_files = []
+        for root, dirs, files in os.walk(root_dir):
+            if os.path.basename(root).lower() in ("lyrics", "cache", "logs", "bin"):
                 continue
+            for fname in files:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in (".flac", ".opus", ".mp3", ".m4a", ".ogg"):
+                    audio_files.append(os.path.join(root, fname))
+
+        total_files = len(audio_files)
+        logger.info(f"Starting ReplayGain batch analysis across {total_files} audio files in: {root_dir}")
+
+        for idx, fpath in enumerate(audio_files, 1):
+            stats["scanned"] += 1
+            bname = os.path.basename(fpath)
+            if progress_callback:
+                progress_callback(idx, total_files, f"Analyzing {bname}")
 
             try:
-                genres = [g.strip() for g in current_genre.split(";") if g.strip()] if current_genre else []
-                if not genres:
-                    genres = resolver.resolve(artist=artist, title=title, album=album)
-
-                if genres:
-                    genre_str = "; ".join(genres)
-                    tagged_ok = tagger.tag_genre_only(fpath, genres)
-                    if tagged_ok:
-                        stats["retagged"] += 1
-                        if genre_str != current_genre:
-                            with self._db_lock:
-                                c = self._get_connection()
-                                try:
-                                    with c:
-                                        c.execute("UPDATE downloaded_tracks SET genre = ? WHERE spotify_id = ?", (genre_str, t["spotify_id"]))
-                                        c.execute("UPDATE saved_playlist_tracks SET genre = ? WHERE file_path = ? COLLATE NOCASE", (genre_str, normalize_path(fpath)))
-                                finally:
-                                    c.close()
+                rg = calculate_replaygain(fpath)
+                if rg:
+                    gain_str, peak_str = rg
+                    ok = tagger.tag_replaygain(fpath, gain_str, peak_str)
+                    if ok:
+                        stats["calculated"] += 1
                     else:
                         stats["errors"] += 1
                 else:
-                    stats["already_tagged"] += 1
+                    stats["errors"] += 1
             except Exception as e:
-                logger.error(f"Error retagging genre on {fpath}: {e}")
+                logger.error(f"Error calculating ReplayGain for {fpath}: {e}")
                 stats["errors"] += 1
 
-        resolver.save_cache()
-        logger.info(f"Retag all library genres completed: {stats}")
+        logger.info(f"ReplayGain batch tagging completed: {stats}")
         return stats
+
+    def export_saved_playlist_m3u8(
+        self,
+        playlist_id: str,
+        dest_path: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Exports a saved playlist to a portable standard UTF-8 .m3u8 file.
+        Uses relative paths when audio files reside in the playlist folder, ensuring portability on DAPs and external drives.
+        """
+        pl = self.get_saved_playlist(playlist_id)
+        if not pl:
+            return None
+
+        tracks = self.get_saved_playlist_tracks(playlist_id)
+        valid_tracks = [t for t in tracks if t.get("file_path") and os.path.isfile(t["file_path"])]
+        if not valid_tracks:
+            return None
+
+        name = pl.get("name", "Playlist")
+        safe_name = sanitize_filename(name, max_length=50)
+
+        if not dest_path:
+            output_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
+            pl_folder = os.path.join(output_dir, safe_name)
+            if os.path.isdir(pl_folder):
+                dest_path = os.path.join(pl_folder, f"{safe_name}.m3u8")
+            else:
+                dest_path = os.path.join(output_dir, f"{safe_name}.m3u8")
+
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+            dest_dir = os.path.dirname(os.path.abspath(dest_path))
+            with open(dest_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write("#EXTM3U\n")
+                f.write(f"#PLAYLIST:{name}\n")
+                for t in valid_tracks:
+                    fp = os.path.abspath(t["file_path"])
+                    dur_sec = int(t.get("duration_ms", 0) / 1000) if t.get("duration_ms") else -1
+                    f.write(f"#EXTINF:{dur_sec},{t.get('artist', 'Unknown')} - {t.get('title', 'Unknown')}\n")
+                    try:
+                        rel_p = os.path.relpath(fp, dest_dir)
+                        f.write(f"{rel_p}\n")
+                    except Exception:
+                        f.write(f"{fp}\n")
+            logger.info(f"Exported M3U8 playlist '{name}' to {dest_path}")
+            return dest_path
+        except Exception as e:
+            logger.error(f"Failed to export M3U8 playlist for {playlist_id}: {e}")
+            return None
 
 
     # -------------------------------------------------------------------------
@@ -1592,17 +1627,6 @@ class ArchiveManager:
             finally:
                 conn.close()
 
-    def checkpoint_wal(self):
-        """Forces SQLite to truncate and checkpoint the WAL journal into the main DB file."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                logger.debug("SQLite WAL checkpoint truncated successfully.")
-            except Exception as e:
-                logger.debug(f"SQLite WAL checkpoint failed: {e}")
-            finally:
-                conn.close()
 
     def sync_saved_playlist(self, playlist_id: str, new_tracks: List[TrackMetadata]) -> Dict[str, Any]:
         """

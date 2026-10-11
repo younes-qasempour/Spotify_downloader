@@ -781,9 +781,13 @@ class SettingsView(QScrollArea):
         self.clean_lib_btn = PushButton(FluentIcon.DELETE, "Clean Corrupt Files & Cache", maint_card)
         self.clean_lib_btn.clicked.connect(self._clean_library)
 
+        self.batch_replaygain_btn = PushButton(FluentIcon.MIX_VOLUMES, "Calculate ReplayGain 2.0", maint_card)
+        self.batch_replaygain_btn.clicked.connect(self._batch_replaygain)
+
         btn_row.addWidget(self.repair_lib_btn)
         btn_row.addWidget(self.retag_genres_btn)
         btn_row.addWidget(self.clean_lib_btn)
+        btn_row.addWidget(self.batch_replaygain_btn)
         btn_row.addStretch(1)
         maint_layout.addLayout(btn_row)
 
@@ -1296,4 +1300,36 @@ class SettingsView(QScrollArea):
                 win.sig_reload_library.emit()
         else:
             InfoBar.error("Retag Error", f"Failed to retag genres: {msg}", duration=5000, parent=self)
+
+    def _batch_replaygain(self):
+        from core.archive import ArchiveManager
+        self.batch_replaygain_btn.setEnabled(False)
+        self.batch_replaygain_btn.setText("Calculating Loudness...")
+        self.maint_status_label.setText("Analyzing audio loudness & peak via EBU R128...")
+
+        def progress_cb(cur: int, total: int, msg: str):
+            QTimer.singleShot(0, lambda: self.maint_status_label.setText(f"[{cur}/{total}] {msg}"))
+
+        def worker():
+            try:
+                arc = ArchiveManager()
+                stats = arc.retag_all_library_replaygain(progress_callback=progress_cb)
+                msg = (
+                    f"ReplayGain 2.0 analysis complete: {stats['scanned']} files scanned. "
+                    f"Calculated and embedded loudness tags on {stats['calculated']} files ({stats['errors']} error(s))."
+                )
+                QTimer.singleShot(0, lambda: self._on_replaygain_finished(True, msg))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: self._on_replaygain_finished(False, str(e)))
+
+        threading.Thread(target=worker, daemon=True, name="ReplayGainWorker").start()
+
+    def _on_replaygain_finished(self, success: bool, msg: str):
+        self.batch_replaygain_btn.setEnabled(True)
+        self.batch_replaygain_btn.setText("Calculate ReplayGain 2.0")
+        self.maint_status_label.setText(msg)
+        if success:
+            InfoBar.success("ReplayGain 2.0 Complete", msg, duration=5000, parent=self)
+        else:
+            InfoBar.error("ReplayGain Error", f"Failed to calculate ReplayGain: {msg}", duration=5000, parent=self)
 

@@ -958,6 +958,15 @@ class YtdlpEngine:
     ) -> TrackMetadata:
         """Converts a yt-dlp extracted entry dictionary into a TrackMetadata object."""
         vid_id = str(entry.get("id") or "").strip()
+        if not vid_id:
+            url_cand = str(entry.get("url") or entry.get("webpage_url") or "").strip()
+            if "v=" in url_cand:
+                vid_id = url_cand.split("v=")[-1].split("&")[0]
+            elif "/" in url_cand and not url_cand.endswith("/"):
+                vid_id = url_cand.split("/")[-1]
+            if not vid_id:
+                import hashlib
+                vid_id = hashlib.sha256(f"{entry.get('title')}_{track_number}".encode("utf-8")).hexdigest()[:12]
         raw_title = str(entry.get("title") or "Unknown Title").strip()
 
         uploader = (

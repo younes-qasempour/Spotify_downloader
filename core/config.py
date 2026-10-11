@@ -66,8 +66,11 @@ class ConfigManager:
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self, config_path: str | None = None):
-        if self._initialized:
+    def __init__(self, config_path: str | Path | None = None):
+        if getattr(self, "_initialized", False):
+            if config_path and Path(config_path) != self.config_path:
+                self.config_path = Path(config_path)
+                self.load()
             return
         self._initialized = True
         self._lock = threading.RLock()
@@ -93,19 +96,29 @@ class ConfigManager:
                 except Exception as e:
                     logger.error(f"Failed to read {self.config_path}, fallback to default: {e}")
             
-            self.data = json.loads(json.dumps(DEFAULT_CONFIG))
+            import copy
+            self.data = copy.deepcopy(DEFAULT_CONFIG)
             self.save()
 
     def save(self) -> None:
-        """Persist current configuration to disk."""
+        """Atomically persist current configuration to disk."""
         with self._lock:
+            tmp_path = self.config_path.with_suffix(".tmp")
             try:
                 self.config_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(self.config_path, "w", encoding="utf-8") as f:
+                with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(self.data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self.config_path)
                 logger.info(f"Configuration saved to {self.config_path}")
             except Exception as e:
                 logger.error(f"Failed to save configuration: {e}")
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass
 
     def get(self, key_path: str, default: Any = None) -> Any:
         """
@@ -137,12 +150,13 @@ class ConfigManager:
                 self.save()
 
     def _deep_merge(self, base: dict, override: dict) -> dict:
-        result = json.loads(json.dumps(base))
+        import copy
+        result = copy.deepcopy(base)
         for k, v in override.items():
             if k in result and isinstance(result[k], dict) and isinstance(v, dict):
                 result[k] = self._deep_merge(result[k], v)
             else:
-                result[k] = v
+                result[k] = copy.deepcopy(v) if isinstance(v, (dict, list)) else v
         return result
 
 

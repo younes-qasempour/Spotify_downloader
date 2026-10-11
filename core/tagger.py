@@ -142,9 +142,9 @@ class AudioTagger:
                 return b
 
         # Tier 2: Spotify official oEmbed API (returns 640x640 JPEG)
-        if track.id:
+        if track.id and not track.id.startswith("yt_"):
             try:
-                oembed_url = f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{track.id}"
+                oembed_url = f"https://open.spotify.com/track/{track.id}"
                 resp = self.session.get(oembed_url, timeout=6)
                 if resp.status_code == 200:
                     thumb_url = resp.json().get("thumbnail_url")

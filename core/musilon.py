@@ -1012,9 +1012,7 @@ class MusilonEngine:
                     os.remove(temp_path)
                 return False
 
-            if os.path.exists(dest_path):
-                os.remove(dest_path)
-            os.rename(temp_path, dest_path)
+            os.replace(temp_path, dest_path)
             return True
 
         except Exception:

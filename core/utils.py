@@ -253,10 +253,19 @@ def extract_embedded_cover(file_path: str) -> Optional[bytes]:
             from mutagen.flac import Picture
             audio = mutagen.File(file_path)
             if audio:
-                pics = audio.get("metadata_block_picture", [])
+                pics = audio.get("metadata_block_picture", []) or audio.get("METADATA_BLOCK_PICTURE", [])
                 if pics:
-                    raw = base64.b64decode(pics[0])
-                    return Picture(raw).data
+                    pic_entry = pics[0]
+                    try:
+                        if isinstance(pic_entry, (bytes, bytearray)):
+                            try:
+                                return Picture(pic_entry).data
+                            except Exception:
+                                return bytes(pic_entry)
+                        raw = base64.b64decode(pic_entry)
+                        return Picture(raw).data
+                    except Exception:
+                        pass
         elif ext == ".m4a":
             from mutagen.mp4 import MP4
             audio = MP4(file_path)

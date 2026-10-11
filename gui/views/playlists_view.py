@@ -381,9 +381,14 @@ class PlaylistsView(QWidget):
         self.save_btn = PrimaryPushButton(FluentIcon.ADD, "Save Playlist", self)
         self.save_btn.clicked.connect(self._on_save_playlist_clicked)
 
+        self.sync_all_btn = PushButton(FluentIcon.SYNC, "Sync All", self)
+        self.sync_all_btn.setToolTip("Check all saved playlists for newly added songs online")
+        self.sync_all_btn.clicked.connect(self._sync_all_playlists)
+
         input_layout.addWidget(self.url_input, 1)
         input_layout.addWidget(self.paste_btn)
         input_layout.addWidget(self.save_btn)
+        input_layout.addWidget(self.sync_all_btn)
         list_layout.addWidget(input_container)
 
         # 2b. Spotify API Mode Banner
@@ -595,6 +600,10 @@ class PlaylistsView(QWidget):
         self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Folder", self)
         self.open_folder_btn.clicked.connect(self._open_download_folder)
 
+        self.export_m3u8_btn = PushButton(FluentIcon.SHARE, "Export M3U8", self)
+        self.export_m3u8_btn.setToolTip("Export this playlist to a portable UTF-8 .m3u8 playlist file")
+        self.export_m3u8_btn.clicked.connect(self._on_export_m3u8_clicked)
+
         # Row 1: Batch Size Selection & Quick Presets
         batch_size_layout = QHBoxLayout()
         batch_size_layout.setSpacing(8)
@@ -616,6 +625,7 @@ class PlaylistsView(QWidget):
         batch_action_layout.addWidget(self.stop_btn)
         batch_action_layout.addWidget(self.reset_btn)
         batch_action_layout.addWidget(self.open_folder_btn)
+        batch_action_layout.addWidget(self.export_m3u8_btn)
         batch_action_layout.addStretch(1)
 
         batch_layout.addLayout(batch_size_layout)
@@ -1140,6 +1150,58 @@ class PlaylistsView(QWidget):
             parent=self
         )
 
+    def _sync_all_playlists(self):
+        playlists = self.archive.get_saved_playlists()
+        eligible = [p for p in playlists if p.get("spotify_url")]
+        if not eligible:
+            InfoBar.info("No Playlists", "No saved playlists with online sources found to sync.", duration=3500, parent=self)
+            return
+
+        self.sync_all_btn.setEnabled(False)
+        self.sync_all_btn.setText("Syncing...")
+        InfoBar.info("Syncing All", f"Checking {len(eligible)} saved playlist(s) for online changes...", duration=3500, parent=self)
+
+        def worker():
+            total_added = 0
+            total_removed = 0
+            for pl in eligible:
+                pl_id = pl["id"]
+                pl_url = pl["spotify_url"]
+                try:
+                    if SpotifyClient.parse_url(pl_url):
+                        self.spotify_client.update_credentials(
+                            client_id=config.get("spotify.client_id", ""),
+                            client_secret=config.get("spotify.client_secret", "")
+                        )
+                        tracks = self.spotify_client.resolve(pl_url)
+                    else:
+                        ytdlp_engine = getattr(self.qm.engine, "ytdlp", None)
+                        if not ytdlp_engine:
+                            from core.ytdlp_engine import YtdlpEngine
+                            ytdlp_engine = YtdlpEngine()
+                        tracks = ytdlp_engine.extract_from_url_or_search(pl_url)
+                    if tracks:
+                        res = self.archive.sync_saved_playlist(pl_id, tracks)
+                        total_added += res.get("added", 0)
+                        total_removed += res.get("removed", 0)
+                except Exception as e:
+                    logger.debug(f"Sync error on playlist {pl_id}: {e}")
+
+            def on_finish():
+                self.sync_all_btn.setEnabled(True)
+                self.sync_all_btn.setText("Sync All")
+                self.reload_playlists()
+                msg = f"Checked {len(eligible)} playlist(s): {total_added} new song(s) added, {total_removed} removed."
+                if total_added > 0:
+                    InfoBar.success("Delta Sync Complete", msg, duration=5000, parent=self)
+                else:
+                    InfoBar.info("All Playlists Up to Date", msg, duration=4000, parent=self)
+
+            QTimer.singleShot(0, on_finish)
+
+        threading.Thread(target=worker, daemon=True, name="SyncAllPlaylistsWorker").start()
+
+
     # -------------------------------------------------------------
     # Detail View Logic
     # -------------------------------------------------------------
@@ -1652,6 +1714,8 @@ class PlaylistsView(QWidget):
             menu.addSeparator()
             act_reveal = menu.addAction("Reveal in File Explorer")
 
+        act_m3u8 = menu.addAction("Export Playlist (.m3u8)")
+
         act_reset = None
         if item.status in ("Failed", "Queued", "Stopped"):
             menu.addSeparator()
@@ -1718,6 +1782,18 @@ class PlaylistsView(QWidget):
             item.status = "Pending"
             self.model.update_status(item.track.id, "Pending")
             self._refresh_detail_header()
+        elif action == act_m3u8:
+            self._on_export_m3u8_clicked()
+
+    def _on_export_m3u8_clicked(self):
+        if not self.current_playlist_id:
+            return
+        dest_p = self.archive.export_saved_playlist_m3u8(self.current_playlist_id)
+        if dest_p:
+            InfoBar.success("M3U8 Exported", f"Successfully exported playlist to: {os.path.basename(dest_p)}", duration=4000, parent=self)
+        else:
+            InfoBar.warning("No Downloaded Tracks", "Please download at least one track before exporting to M3U8.", duration=4000, parent=self)
+
 
     # -------------------------------------------------------------
     # Live Bridging

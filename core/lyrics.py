@@ -28,7 +28,7 @@ class LyricsEngine:
 
     API_URL = "https://lrclib.net/api/get"
     SEARCH_URL = "https://lrclib.net/api/search"
-    USER_AGENT = "Flacify/1.2.0 (https://github.com/younes-qasempour/Spotify_downloader)"
+    USER_AGENT = "Flacify/1.3.0 (https://github.com/younes-qasempour/Spotify_downloader)"
 
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
@@ -195,7 +195,7 @@ class LyricsEngine:
             lrc_path = os.path.join(parent_dir, f"{base_name}.lrc")
 
         try:
-            with open(lrc_path, "w", encoding="utf-8") as f:
+            with open(lrc_path, "w", encoding="utf-8", newline="") as f:
                 f.write(lyrics_data.synced_lyrics)
             logger.info(f"Saved companion .lrc to {lrc_path}")
             return lrc_path

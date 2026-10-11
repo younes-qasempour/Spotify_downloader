@@ -888,8 +888,9 @@ class CompletedView(QWidget):
         show_act = menu.addAction("Show in Explorer")
         copy_act = menu.addAction("Copy Track Title")
         menu.addSeparator()
-        m3u_act = menu.addAction("Export Playlist (.m3u)...")
+        m3u_act = menu.addAction("Export Playlist (.m3u8)...")
         details_act = menu.addAction("View Metadata & Genres")
+        rg_act = menu.addAction("Calculate ReplayGain 2.0")
         menu.addSeparator()
         delete_act = menu.addAction("Remove from Archive")
 
@@ -915,13 +916,40 @@ class CompletedView(QWidget):
             self._export_m3u_playlist()
         elif action == details_act:
             self._show_track_details_dialog(item)
+        elif action == rg_act:
+            if item.output_path and os.path.isfile(item.output_path):
+                self._apply_replaygain_single(item)
+            else:
+                InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == delete_act:
             self.archive.delete_track(item.track.id)
             self.reload_all()
             InfoBar.info("Removed", f"Removed '{item.track.title}' from archive.", duration=2500, parent=self)
 
+    def _apply_replaygain_single(self, item: QueueItem):
+        """Calculates and tags EBU R128 ReplayGain on a single track in background."""
+        fpath = item.output_path
+        title = item.track.title
+        InfoBar.info("Analyzing Loudness", f"Calculating EBU R128 ReplayGain for '{title}'...", duration=3000, parent=self)
+
+        def worker():
+            from core.utils import calculate_replaygain
+            from core.tagger import AudioTagger
+            try:
+                rg = calculate_replaygain(fpath)
+                if rg:
+                    ok = AudioTagger().tag_replaygain(fpath, rg[0], rg[1])
+                    if ok:
+                        QTimer.singleShot(0, lambda: InfoBar.success("ReplayGain Applied", f"Tagged '{title}' ({rg[0]}, peak {rg[1]})", duration=4000, parent=self))
+                        return
+                QTimer.singleShot(0, lambda: InfoBar.warning("Analysis Missed", f"Could not calculate loudness for '{title}'.", duration=4000, parent=self))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: InfoBar.error("ReplayGain Error", str(e), duration=4000, parent=self))
+
+        threading.Thread(target=worker, daemon=True, name=f"RG_{item.track.id}").start()
+
     def _export_m3u_playlist(self):
-        """Exports all tracks currently matching view filters into an M3U playlist file."""
+        """Exports all tracks currently matching view filters into an M3U8/M3U playlist file."""
         from PyQt6.QtWidgets import QFileDialog
         items = [self.model.get_item(i) for i in range(self.model.rowCount())]
         valid_items = [it for it in items if it and it.output_path and os.path.isfile(it.output_path)]
@@ -929,23 +957,31 @@ class CompletedView(QWidget):
             InfoBar.warning("No Tracks", "There are no playable tracks in the current view to export.", parent=self)
             return
 
-        suggested_name = "Playlist.m3u"
+        suggested_name = "Playlist.m3u8"
         if hasattr(self, "genre_combo") and self.genre_combo.currentText() != "All Genres":
-            suggested_name = f"{self.genre_combo.currentText()}.m3u"
+            suggested_name = f"{self.genre_combo.currentText()}.m3u8"
         elif self._current_collection_name:
-            suggested_name = f"{self._current_collection_name}.m3u"
+            suggested_name = f"{self._current_collection_name}.m3u8"
 
-        file_path, _ = QFileDialog.getSaveFileName(self, "Export M3U Playlist", suggested_name, "M3U Playlist (*.m3u)")
+        file_path, _ = QFileDialog.getSaveFileName(self, "Export M3U8 Playlist", suggested_name, "M3U8 Playlist (*.m3u8);;M3U Playlist (*.m3u)")
         if not file_path:
             return
 
         try:
-            with open(file_path, "w", encoding="utf-8") as f:
+            dest_dir = os.path.dirname(os.path.abspath(file_path))
+            with open(file_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write("#EXTM3U\n")
+                if self._current_collection_name:
+                    f.write(f"#PLAYLIST:{self._current_collection_name}\n")
                 for it in valid_items:
                     dur_sec = int(it.track.duration_ms / 1000) if it.track.duration_ms else -1
                     f.write(f"#EXTINF:{dur_sec},{it.track.artist_str} - {it.track.title}\n")
-                    f.write(f"{it.output_path}\n")
+                    abs_audio = os.path.abspath(it.output_path)
+                    try:
+                        rel_path = os.path.relpath(abs_audio, dest_dir)
+                        f.write(f"{rel_path}\n")
+                    except Exception:
+                        f.write(f"{it.output_path}\n")
             InfoBar.success("Playlist Exported", f"Exported {len(valid_items)} tracks to {os.path.basename(file_path)}", duration=4000, parent=self)
         except Exception as e:
             InfoBar.error("Export Failed", f"Could not write playlist: {e}", duration=4000, parent=self)
