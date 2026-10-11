@@ -24,7 +24,7 @@ AllowNoIcons=yes
 
 ; Output Configuration
 OutputDir=dist\installer
-OutputBaseFilename=Flacify_Setup_v1.0.2
+OutputBaseFilename=Flacify_Setup_v1.1.0
 SetupIconFile=assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
@@ -40,12 +40,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 AppMutex={#MyAppMutex}
 
 ; Windows Add/Remove Programs Metadata
-VersionInfoVersion=1.0.2.0
+VersionInfoVersion=1.1.0.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=Flacify High-Fidelity Audio Scraper Setup
 VersionInfoCopyright=Copyright (C) 2026 {#MyAppPublisher}
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=1.0.2.0
+VersionInfoProductVersion=1.1.0.0
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
