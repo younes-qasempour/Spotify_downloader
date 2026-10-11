@@ -429,6 +429,17 @@ d:\Spotify-Downloader\
   5. Fixed `_score_candidate()` missing word checking by validating against `cand_full_words` (candidate's actual full title) and ignoring classical arrangement terms.
   6. Verified verified Persian label channels (`TaranehEnterprise`, `Caltex Records`) for close duration (<=10s) and title matching.
 
+### 37. Core Configuration Hardening, Corrupted File Auto-Preservation, Thread-Safe Pub/Sub (v1.3.1)
+- **Symptoms & Edge Cases Solved:**
+  1. **Data Loss on Corrupted JSON:** Previously, if `config.json` had any syntax error or interrupted write, `ConfigManager.load()` caught `Exception`, loaded `DEFAULT_CONFIG`, and immediately called `self.save()`, wiping out all saved session cookies, Spotify credentials, and custom download directories.
+  2. **Singleton Thread Safety:** Added double-checked locking using a class-level `threading.Lock()` to eliminate initialization race conditions across worker threads.
+  3. **Mutable Reference Leakage:** `get()` now returns deep copies of mutable collections (`dict`, `list`), preventing caller mutations from bypassing locks and dirty states.
+  4. **Scalar Path Overwrite Protection:** `set()` raises `TypeError` instead of silently destroying intermediate scalar config values.
+  5. **Windows Atomic Persistence:** Added exponential backoff retry loop to `os.replace` to gracefully handle transient Windows file locks (antivirus, search indexing).
+  6. **Observer Pattern & Qt Signal Bridge:** Implemented `add_listener`/`remove_listener` pub/sub and connected `EngineSignalBridge.sig_config_changed` for reactive UI and engine synchronization.
+  7. **Diagnostic Credential Masking:** Added `to_dict(mask_secrets=True)` for secure logging without credential leakage.
+  8. Bumped project version to `v1.3.1` across all entry points, build scripts, and metadata.
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:
