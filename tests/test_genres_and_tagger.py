@@ -105,6 +105,40 @@ class TestGenreAndArchive(unittest.TestCase):
         self.assertEqual(len(pop_tracks), 1)
         self.assertEqual(pop_tracks[0]["title"], "Song 2")
 
+    def test_collection_and_playlist_genre_filtering(self):
+        archive = ArchiveManager(db_path=self.db_path)
+        f1 = os.path.join(self.temp_dir.name, "song1.flac")
+        f2 = os.path.join(self.temp_dir.name, "song2.flac")
+        with open(f1, "wb") as f:
+            f.write(b"DATA1")
+        with open(f2, "wb") as f:
+            f.write(b"DATA2")
+
+        t1 = TrackMetadata(id="t1", title="Rock Song", artists=["Rocker"], album="Rock Album", collection_name="Rock Album", collection_type="album")
+        t2 = TrackMetadata(id="t2", title="Pop Song", artists=["Popper"], album="Pop Album", collection_name="Pop Album", collection_type="album")
+
+        archive.add_track(t1, f1, "FLAC 16", "Musilon", genre="Alternative Rock")
+        archive.add_track(t2, f2, "FLAC 16", "Musilon", genre="Synthpop")
+
+        # Test get_albums with genre_filter
+        rock_albums = archive.get_albums(genre_filter="Rock")
+        self.assertEqual(len(rock_albums), 1)
+        self.assertEqual(rock_albums[0]["name"], "Rock Album")
+        self.assertEqual(rock_albums[0]["genre"], "Alternative Rock")
+
+        pop_albums = archive.get_albums(genre_filter="Synthpop")
+        self.assertEqual(len(pop_albums), 1)
+        self.assertEqual(pop_albums[0]["name"], "Pop Album")
+
+        # Test get_collection_tracks with genre_filter
+        col_tracks = archive.get_collection_tracks("Rock Album", "album", genre_filter="Rock")
+        self.assertEqual(len(col_tracks), 1)
+        self.assertEqual(col_tracks[0]["title"], "Rock Song")
+
+        empty_col = archive.get_collection_tracks("Rock Album", "album", genre_filter="Pop")
+        self.assertEqual(len(empty_col), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

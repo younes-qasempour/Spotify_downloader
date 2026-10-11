@@ -600,10 +600,10 @@ class ArchiveManager:
             finally:
                 conn.close()
 
-    def get_playlists(self, search_query: str = "") -> List[Dict[str, Any]]:
+    def get_playlists(self, search_query: str = "", genre_filter: str = "") -> List[Dict[str, Any]]:
         """
         Aggregates downloaded tracks by collection / playlist folder.
-        Returns a list of playlists with track counts, total size, folder paths, and sample tracks.
+        Returns a list of playlists with track counts, total size, folder paths, sample tracks, and genres.
         Excludes albums (which strictly belong in get_albums).
         """
         with self._db_lock:
@@ -616,7 +616,8 @@ class ArchiveManager:
                         COUNT(*) as track_count,
                         COALESCE(SUM(file_size), 0) as total_size,
                         MIN(file_path) as sample_file,
-                        MAX(downloaded_at) as latest_download
+                        MAX(downloaded_at) as latest_download,
+                        GROUP_CONCAT(DISTINCT genre) as all_genres
                     FROM downloaded_tracks
                     WHERE (collection_type IS NULL OR collection_type != 'album')
                       AND LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles')) NOT IN (
@@ -635,6 +636,22 @@ class ArchiveManager:
                     pl_name = r["name"]
                     if q and q not in pl_name.lower():
                         continue
+
+                    # Parse genres
+                    all_genres_raw = r["all_genres"] or ""
+                    genre_tokens = set()
+                    for g_chunk in all_genres_raw.split(";"):
+                        for token in g_chunk.split(","):
+                            clean_t = token.strip()
+                            if clean_t:
+                                genre_tokens.add(clean_t)
+
+                    if genre_filter and genre_filter.strip().lower() not in ("", "all genres"):
+                        gf_lower = genre_filter.strip().lower()
+                        if not any(gf_lower in t.lower() for t in genre_tokens):
+                            continue
+
+                    primary_genre = sorted(list(genre_tokens))[0] if genre_tokens else ""
 
                     sample_file = r["sample_file"] or ""
                     folder_path = os.path.dirname(sample_file) if sample_file else ""
@@ -658,7 +675,9 @@ class ArchiveManager:
                         "size_str": sz_str,
                         "folder_path": folder_path,
                         "cover_path": cover_path,
-                        "latest_download": r["latest_download"]
+                        "latest_download": r["latest_download"],
+                        "genre": primary_genre,
+                        "genres": sorted(list(genre_tokens))
                     })
                 return results
             except Exception as e:
@@ -667,7 +686,7 @@ class ArchiveManager:
             finally:
                 conn.close()
 
-    def get_albums(self, search_query: str = "") -> List[Dict[str, Any]]:
+    def get_albums(self, search_query: str = "", genre_filter: str = "") -> List[Dict[str, Any]]:
         """
         Aggregates downloaded tracks by album.
         Only returns genuine albums (downloaded via album URL or with genuine album metadata,
@@ -683,7 +702,8 @@ class ArchiveManager:
                         COUNT(*) as track_count,
                         COALESCE(SUM(file_size), 0) as total_size,
                         MIN(file_path) as sample_file,
-                        MAX(downloaded_at) as latest_download
+                        MAX(downloaded_at) as latest_download,
+                        GROUP_CONCAT(DISTINCT genre) as all_genres
                     FROM downloaded_tracks
                     WHERE collection_type = 'album'
                        OR (album IS NOT NULL 
@@ -702,6 +722,22 @@ class ArchiveManager:
                     artist_name = r["artist"] or ""
                     if q and (q not in alb_name.lower() and q not in artist_name.lower()):
                         continue
+
+                    # Parse genres
+                    all_genres_raw = r["all_genres"] or ""
+                    genre_tokens = set()
+                    for g_chunk in all_genres_raw.split(";"):
+                        for token in g_chunk.split(","):
+                            clean_t = token.strip()
+                            if clean_t:
+                                genre_tokens.add(clean_t)
+
+                    if genre_filter and genre_filter.strip().lower() not in ("", "all genres"):
+                        gf_lower = genre_filter.strip().lower()
+                        if not any(gf_lower in t.lower() for t in genre_tokens):
+                            continue
+
+                    primary_genre = sorted(list(genre_tokens))[0] if genre_tokens else ""
 
                     sample_file = r["sample_file"] or ""
                     folder_path = os.path.dirname(sample_file) if sample_file else ""
@@ -722,7 +758,9 @@ class ArchiveManager:
                         "size_str": sz_str,
                         "folder_path": folder_path,
                         "cover_path": cover_path,
-                        "latest_download": r["latest_download"]
+                        "latest_download": r["latest_download"],
+                        "genre": primary_genre,
+                        "genres": sorted(list(genre_tokens))
                     })
                 return results
             except Exception as e:
@@ -731,7 +769,7 @@ class ArchiveManager:
             finally:
                 conn.close()
 
-    def get_collection_tracks(self, collection_name: str, collection_type: str = "playlist") -> List[Dict[str, Any]]:
+    def get_collection_tracks(self, collection_name: str, collection_type: str = "playlist", genre_filter: str = "") -> List[Dict[str, Any]]:
         """Retrieves all tracks belonging to a specific collection (playlist or album) ordered by track number."""
         with self._db_lock:
             conn = self._get_connection()
@@ -752,8 +790,11 @@ class ArchiveManager:
                         ORDER BY title ASC, downloaded_at ASC
                     """, (collection_name, collection_name))
                 results = []
+                gf = genre_filter.strip().lower() if genre_filter and genre_filter.strip().lower() not in ("", "all genres") else ""
                 for row in cur.fetchall():
                     item = dict(row)
+                    if gf and gf not in (item.get("genre") or "").lower():
+                        continue
                     if os.path.isfile(item.get("file_path", "")):
                         results.append(item)
                 return results
@@ -1603,9 +1644,10 @@ class ArchiveManager:
         playlist_id: str,
         status: Optional[str] = None,
         search_query: str = "",
-        limit: Optional[int] = None
+        limit: Optional[int] = None,
+        genre_filter: str = ""
     ) -> List[Dict[str, Any]]:
-        """Returns all tracks for a saved playlist, optionally filtered by status, search, and limit."""
+        """Returns all tracks for a saved playlist, optionally filtered by status, search, genre, and limit."""
         with self._db_lock:
             conn = self._get_connection()
             try:
@@ -1614,6 +1656,7 @@ class ArchiveManager:
                         s.id, s.playlist_id, s.spotify_id, s.title, s.artist, s.album,
                         s.duration_ms, s.track_number, s.disc_number, s.isrc, s.cover_url,
                         s.status,
+                        COALESCE(NULLIF(s.genre, ''), d.genre, '') AS genre,
                         COALESCE(NULLIF(s.file_path, ''), d.file_path, '') AS file_path,
                         COALESCE(NULLIF(s.quality_badge, ''), d.quality_badge, '') AS quality_badge,
                         COALESCE(NULLIF(s.source_type, ''), d.source_type, '') AS source_type,
@@ -1630,6 +1673,9 @@ class ArchiveManager:
                     base_sql += " AND (s.title LIKE ? OR s.artist LIKE ? OR s.album LIKE ?)"
                     q = f"%{search_query}%"
                     params.extend([q, q, q])
+                if genre_filter and genre_filter.strip().lower() not in ("", "all genres"):
+                    base_sql += " AND (LOWER(COALESCE(NULLIF(s.genre, ''), d.genre, '')) LIKE ?)"
+                    params.append(f"%{genre_filter.strip().lower()}%")
                 base_sql += " ORDER BY s.track_number ASC, s.id ASC"
                 if limit and limit > 0:
                     base_sql += " LIMIT ?"

@@ -432,10 +432,15 @@ class CompletedView(QWidget):
 
     def _on_genre_changed(self, index: int):
         search_query = self.search_input.text().strip()
-        if self._current_collection_name and self.stacked.currentIndex() == 0:
+        curr_page = self.stacked.currentIndex()
+        if self._current_collection_name and curr_page == 0:
             self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
-        else:
+        elif curr_page == 0:
             self.reload_from_archive(search_query)
+        elif curr_page == 1:
+            self.reload_playlists(search_query)
+        elif curr_page == 2:
+            self.reload_albums(search_query)
 
     def _sort_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         idx = self.sort_combo.currentIndex() if hasattr(self, "sort_combo") else 0
@@ -456,15 +461,25 @@ class CompletedView(QWidget):
         elif idx == 5:  # Recently Added
             return sorted(rows, key=lambda r: r.get("downloaded_at") or "", reverse=True)
         elif idx == 6:  # Genre (A-Z)
-            return sorted(rows, key=lambda r: (r.get("genre") or "").strip().lower())
+            return sorted(rows, key=lambda r: (
+                0 if (r.get("genre") or "").strip() else 1,
+                (r.get("genre") or "").strip().lower(),
+                (r.get("artist") or "").strip().lower(),
+                (r.get("title") or "").strip().lower()
+            ))
         return rows
 
     def _on_sort_changed(self, index: int):
         search_query = self.search_input.text().strip()
-        if self._current_collection_name and self.stacked.currentIndex() == 0:
+        curr_page = self.stacked.currentIndex()
+        if self._current_collection_name and curr_page == 0:
             self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
-        else:
+        elif curr_page == 0:
             self.reload_from_archive(search_query)
+        elif curr_page == 1:
+            self.reload_playlists(search_query)
+        elif curr_page == 2:
+            self.reload_albums(search_query)
 
     def reload_from_archive(self, search_query: str = ""):
         """Loads or filters tracks from SQLite archive into the virtualized TableView."""
@@ -524,7 +539,28 @@ class CompletedView(QWidget):
             if child.widget():
                 child.widget().deleteLater()
 
-        playlists = self.archive.get_playlists(search_query)
+        genre_filter = self.genre_combo.currentText() if hasattr(self, "genre_combo") else ""
+        if genre_filter == "All Genres":
+            genre_filter = ""
+        playlists = self.archive.get_playlists(search_query, genre_filter=genre_filter)
+
+        # Sort playlists
+        sort_idx = self.sort_combo.currentIndex() if hasattr(self, "sort_combo") else 0
+        if sort_idx == 6:  # Genre (A-Z)
+            playlists = sorted(playlists, key=lambda p: (
+                0 if p.get("genre") else 1,
+                (p.get("genre") or "").strip().lower(),
+                p["name"].strip().lower()
+            ))
+        elif sort_idx == 0:  # Title (A-Z)
+            playlists = sorted(playlists, key=lambda p: p["name"].strip().lower())
+        elif sort_idx == 1:  # Track count
+            playlists = sorted(playlists, key=lambda p: p.get("track_count") or 0, reverse=True)
+        elif sort_idx in (3, 4):  # Size
+            playlists = sorted(playlists, key=lambda p: p.get("total_size_bytes") or 0, reverse=(sort_idx == 4))
+        elif sort_idx == 5:  # Recently Added
+            playlists = sorted(playlists, key=lambda p: p.get("latest_download") or "", reverse=True)
+
         if not playlists:
             empty_card = CardWidget(self.playlists_container)
             empty_card.setStyleSheet("background-color: #1e1e1e; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;")
@@ -558,7 +594,8 @@ class CompletedView(QWidget):
             sz_str = pl["size_str"]
             folder = pl["folder_path"]
             cover_path = pl.get("cover_path", "")
-            subtitle = f"{track_count} song(s) • {sz_str}  |  {folder}"
+            genre_str = f" • {pl['genre']}" if pl.get("genre") else ""
+            subtitle = f"{track_count} song(s){genre_str} • {sz_str}  |  {folder}"
 
             card = CollectionCard(
                 title=name,
@@ -578,7 +615,30 @@ class CompletedView(QWidget):
             if child.widget():
                 child.widget().deleteLater()
 
-        albums = self.archive.get_albums(search_query)
+        genre_filter = self.genre_combo.currentText() if hasattr(self, "genre_combo") else ""
+        if genre_filter == "All Genres":
+            genre_filter = ""
+        albums = self.archive.get_albums(search_query, genre_filter=genre_filter)
+
+        sort_idx = self.sort_combo.currentIndex() if hasattr(self, "sort_combo") else 0
+        if sort_idx == 6:  # Genre (A-Z)
+            albums = sorted(albums, key=lambda a: (
+                0 if a.get("genre") else 1,
+                (a.get("genre") or "").strip().lower(),
+                (a.get("artist") or "").strip().lower(),
+                a["name"].strip().lower()
+            ))
+        elif sort_idx == 0:  # Title (A-Z)
+            albums = sorted(albums, key=lambda a: a["name"].strip().lower())
+        elif sort_idx == 2:  # Artist (A-Z)
+            albums = sorted(albums, key=lambda a: (a.get("artist") or "").strip().lower())
+        elif sort_idx == 1:  # Track count
+            albums = sorted(albums, key=lambda a: a.get("track_count") or 0, reverse=True)
+        elif sort_idx in (3, 4):  # Size
+            albums = sorted(albums, key=lambda a: a.get("total_size_bytes") or 0, reverse=(sort_idx == 4))
+        elif sort_idx == 5:  # Recently Added
+            albums = sorted(albums, key=lambda a: a.get("latest_download") or "", reverse=True)
+
         if not albums:
             empty_card = CardWidget(self.albums_container)
             empty_card.setStyleSheet("background-color: #1e1e1e; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;")
@@ -614,7 +674,8 @@ class CompletedView(QWidget):
             sz_str = alb["size_str"]
             folder = alb["folder_path"]
             cover_path = alb.get("cover_path", "")
-            subtitle = f"by {artist} • {track_count} song(s) • {sz_str}"
+            genre_str = f" • {alb['genre']}" if alb.get("genre") else ""
+            subtitle = f"by {artist}{genre_str} • {track_count} song(s) • {sz_str}"
 
             card = CollectionCard(
                 title=name,
@@ -669,14 +730,16 @@ class CompletedView(QWidget):
 
         self.coll_banner.setVisible(True)
 
-        # Update sort selection: albums default to Track Number, playlists default to Title (A-Z)
+        # Update sort selection: preserve user's custom sort if already set (e.g. Genre or Artist)
         if hasattr(self, "sort_combo"):
-            self.sort_combo.blockSignals(True)
-            if coll_type == "album":
-                self.sort_combo.setCurrentIndex(1)  # Track Number
-            else:
-                self.sort_combo.setCurrentIndex(0)  # Title (A-Z)
-            self.sort_combo.blockSignals(False)
+            curr_sort = self.sort_combo.currentIndex()
+            if curr_sort not in (2, 3, 4, 5, 6):
+                self.sort_combo.blockSignals(True)
+                if coll_type == "album":
+                    self.sort_combo.setCurrentIndex(1)  # Track Number
+                else:
+                    self.sort_combo.setCurrentIndex(0)  # Title (A-Z)
+                self.sort_combo.blockSignals(False)
 
         # Clear search input temporarily when opening a collection
         self.search_input.blockSignals(True)
@@ -691,7 +754,10 @@ class CompletedView(QWidget):
 
     def _load_collection_tracks(self, name: str, coll_type: str = "playlist", filter_query: str = ""):
         """Loads all tracks from SQLite archive belonging specifically to this collection."""
-        rows = self.archive.get_collection_tracks(name, coll_type)
+        genre_filter = self.genre_combo.currentText() if hasattr(self, "genre_combo") else ""
+        if genre_filter == "All Genres":
+            genre_filter = ""
+        rows = self.archive.get_collection_tracks(name, coll_type, genre_filter=genre_filter)
         rows = self._sort_rows(rows)
         self.model.clear()
 
@@ -751,10 +817,6 @@ class CompletedView(QWidget):
         target_tab = "albums" if self._current_collection_type == "album" else "playlists"
         target_idx = 2 if self._current_collection_type == "album" else 1
         self._current_collection_name = None
-        if hasattr(self, "sort_combo"):
-            self.sort_combo.blockSignals(True)
-            self.sort_combo.setCurrentIndex(0)
-            self.sort_combo.blockSignals(False)
         self.segmented.setCurrentItem(target_tab)
         self._switch_tab(target_idx)
 

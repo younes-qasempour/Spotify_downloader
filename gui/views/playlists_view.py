@@ -614,12 +614,31 @@ class PlaylistsView(QWidget):
         self.track_search_input.setClearButtonEnabled(True)
         self.track_search_input.textChanged.connect(self._on_track_filter_changed)
 
+        self.sort_combo = ComboBox(self)
+        self.sort_combo.addItems([
+            "Sort: Default Order",
+            "Sort: Genre (A-Z)",
+            "Sort: Title (A-Z)",
+            "Sort: Artist (A-Z)",
+            "Sort: Duration (Shortest)",
+            "Sort: Duration (Longest)"
+        ])
+        self.sort_combo.setFixedWidth(175)
+        self.sort_combo.currentIndexChanged.connect(self._on_track_filter_changed)
+
+        self.genre_combo = ComboBox(self)
+        self.genre_combo.addItems(["All Genres"])
+        self.genre_combo.setFixedWidth(145)
+        self.genre_combo.currentIndexChanged.connect(self._on_track_filter_changed)
+
         self.status_filter_combo = ComboBox(self)
         self.status_filter_combo.addItems(["All Statuses", "Pending Only", "Queued Only", "Downloaded Only"])
         self.status_filter_combo.currentIndexChanged.connect(self._on_track_filter_changed)
-        self.status_filter_combo.setFixedWidth(150)
+        self.status_filter_combo.setFixedWidth(145)
 
         filter_layout.addWidget(self.track_search_input, 1)
+        filter_layout.addWidget(self.sort_combo)
+        filter_layout.addWidget(self.genre_combo)
         filter_layout.addWidget(self.status_filter_combo)
         detail_layout.addLayout(filter_layout)
 
@@ -1061,9 +1080,29 @@ class PlaylistsView(QWidget):
         self.batch_spinbox.setValue(50)
         self._on_batch_size_changed(self.batch_spinbox.value())
 
-        # Reset search and combo
+        # Reset search and combos
         self.track_search_input.clear()
+        if hasattr(self, "sort_combo"):
+            self.sort_combo.blockSignals(True)
+            self.sort_combo.setCurrentIndex(0)
+            self.sort_combo.blockSignals(False)
         self.status_filter_combo.setCurrentIndex(0)
+
+        # Populate genres combo for this playlist
+        all_tracks = self.archive.get_saved_playlist_tracks(self.current_playlist_id)
+        genres_set = set()
+        for t in all_tracks:
+            g_raw = t.get("genre", "") or ""
+            for g in g_raw.split(";"):
+                c = g.strip()
+                if c:
+                    genres_set.add(c)
+        if hasattr(self, "genre_combo"):
+            self.genre_combo.blockSignals(True)
+            self.genre_combo.clear()
+            self.genre_combo.addItems(["All Genres"] + sorted(list(genres_set)))
+            self.genre_combo.setCurrentIndex(0)
+            self.genre_combo.blockSignals(False)
 
         self._load_detail_tracks()
         self.stacked.setCurrentIndex(1)
@@ -1126,6 +1165,25 @@ class PlaylistsView(QWidget):
     def _on_track_filter_changed(self):
         self._load_detail_tracks()
 
+    def _sort_detail_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        idx = self.sort_combo.currentIndex() if hasattr(self, "sort_combo") else 0
+        if idx == 1:  # Genre (A-Z)
+            return sorted(rows, key=lambda r: (
+                0 if (r.get("genre") or "").strip() else 1,
+                (r.get("genre") or "").strip().lower(),
+                (r.get("artist") or "").strip().lower(),
+                (r.get("title") or "").strip().lower()
+            ))
+        elif idx == 2:  # Title (A-Z)
+            return sorted(rows, key=lambda r: (r.get("title") or "").strip().lower())
+        elif idx == 3:  # Artist (A-Z)
+            return sorted(rows, key=lambda r: (r.get("artist") or "").strip().lower())
+        elif idx == 4:  # Duration (Shortest)
+            return sorted(rows, key=lambda r: r.get("duration_ms") or 0)
+        elif idx == 5:  # Duration (Longest)
+            return sorted(rows, key=lambda r: r.get("duration_ms") or 0, reverse=True)
+        return rows
+
     def _load_detail_tracks(self):
         if not self.current_playlist_id:
             return
@@ -1140,11 +1198,17 @@ class PlaylistsView(QWidget):
         elif combo_idx == 3:
             status_filter = "downloaded"
 
+        genre_filter = self.genre_combo.currentText() if hasattr(self, "genre_combo") else ""
+        if genre_filter == "All Genres":
+            genre_filter = ""
+
         rows = self.archive.get_saved_playlist_tracks(
             self.current_playlist_id,
             status=status_filter,
-            search_query=search_query
+            search_query=search_query,
+            genre_filter=genre_filter
         )
+        rows = self._sort_detail_rows(rows)
 
         self.model.clear()
         for r in rows:
