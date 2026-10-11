@@ -306,8 +306,12 @@ class DownloadQueueManager:
                 self._queue.task_done()
                 continue
 
-            self._process_item(item)
-            self._queue.task_done()
+            try:
+                self._process_item(item)
+            except Exception as e_proc:
+                logger.error(f"Unexpected error in _process_item for '{item.track.title}': {e_proc}", exc_info=True)
+            finally:
+                self._queue.task_done()
 
     def _process_item(self, item: QueueItem):
         track = item.track
@@ -454,7 +458,7 @@ class DownloadQueueManager:
                             self.on_track_progress(track_id, 100.0, "Copied", "00:00")
                         if self.on_track_completed:
                             self.on_track_completed(track_id, target_dest)
-                        self.archive.add_track(track, target_dest, item.quality_badge, "Local Archive")
+                        self.archive.add_track(track, target_dest, item.quality_badge, "Local Archive", genre=archived.get("genre", ""))
                         self.archive.mark_saved_track_downloaded(track.id, target_dest, item.quality_badge, item.source_type)
                         logger.info(f"Copied archived track '{track.title}' to {target_dest}")
                         return
@@ -606,7 +610,7 @@ class DownloadQueueManager:
 
             # Record in Archive
             if file_path and os.path.isfile(file_path):
-                self.archive.add_track(track, file_path, item.quality_badge, item.source_type)
+                self.archive.add_track(track, file_path, item.quality_badge, item.source_type, genre=track.genre_str)
                 self.archive.mark_saved_track_downloaded(track.id, file_path, item.quality_badge, item.source_type)
 
             if self.on_track_completed:
@@ -757,7 +761,7 @@ class DownloadQueueManager:
         item.output_path = file_path or ""
         self._update_status(item, "Completed")
         if file_path and os.path.isfile(file_path):
-            self.archive.add_track(track, file_path, item.quality_badge, item.source_type)
+            self.archive.add_track(track, file_path, item.quality_badge, item.source_type, genre=track.genre_str)
             self.archive.mark_saved_track_downloaded(track.id, file_path, item.quality_badge, item.source_type)
         if self.on_track_completed:
             self.on_track_completed(track.id, item.output_path)

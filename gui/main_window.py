@@ -223,5 +223,10 @@ class MainWindow(FluentWindow):
             self.queue_view.url_input.setFocus()
 
     def closeEvent(self, event):
+        try:
+            from core.genre import get_genre_resolver
+            get_genre_resolver().save_cache()
+        except Exception as e_cache:
+            logger.debug(f"Error saving genre cache on exit: {e_cache}")
         self.queue_manager.stop()
         super().closeEvent(event)

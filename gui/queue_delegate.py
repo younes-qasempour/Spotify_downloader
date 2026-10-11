@@ -347,10 +347,12 @@ class TrackCardDelegate(QStyledItemDelegate):
         elided_title = fm_title.elidedText(display_title, Qt.TextElideMode.ElideRight, int(text_w))
         painter.drawText(int(text_x), int(card_rect.y() + 25), elided_title)
 
-        # Subtitle (Artist • Album • Duration)
+        # Subtitle (Artist • Album • Genre • Duration)
         dur_str = format_duration(item.track.duration_ms)
         album_part = f" • {item.track.album}" if (item.track.album and item.track.album.lower() not in ("spotify playlist", "unknown album", "singles", "downloads")) else ""
-        sub_text = f"{item.track.artist_str}{album_part} • {dur_str}"
+        genres = getattr(item.track, "genres", [])
+        genre_part = f" • {genres[0]}" if genres else ""
+        sub_text = f"{item.track.artist_str}{album_part}{genre_part} • {dur_str}"
 
         painter.setPen(TEXT_SECONDARY)
         font_sub = QFont("Segoe UI", 8)

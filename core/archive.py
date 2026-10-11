@@ -121,8 +121,11 @@ class ArchiveManager:
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=15.0)
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA foreign_keys = ON;")
         return conn
 
     def _init_db(self):
@@ -154,6 +157,8 @@ class ArchiveManager:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_artist_title ON downloaded_tracks (artist, title);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_isrc ON downloaded_tracks (isrc);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_downloaded_at ON downloaded_tracks (downloaded_at DESC);")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_path ON downloaded_tracks (file_path COLLATE NOCASE);")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_downloaded_genre ON downloaded_tracks (genre);")
 
                     # Saved Playlists & Tracks Metadata Store (Decoupled ingestion from downloading)
                     conn.execute("""
@@ -192,6 +197,8 @@ class ArchiveManager:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_playlist_id ON saved_playlist_tracks (playlist_id);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_playlist_status ON saved_playlist_tracks (playlist_id, status);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_spotify_id ON saved_playlist_tracks (spotify_id);")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_file_path ON saved_playlist_tracks (file_path COLLATE NOCASE);")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_genre ON saved_playlist_tracks (genre);")
 
                     # Migrations for existing databases
                     try:
@@ -457,11 +464,11 @@ class ArchiveManager:
         """Queries archive for a track by its absolute or normalized file_path."""
         if not file_path:
             return None
-        norm_p = os.path.normpath(file_path).lower()
+        norm_p = normalize_path(file_path)
         with self._db_lock:
             conn = self._get_connection()
             try:
-                cur = conn.execute("SELECT * FROM downloaded_tracks WHERE LOWER(file_path) = ? LIMIT 1", (norm_p,))
+                cur = conn.execute("SELECT * FROM downloaded_tracks WHERE file_path = ? COLLATE NOCASE LIMIT 1", (norm_p,))
                 row = cur.fetchone()
                 if not row:
                     # Also try matching by basename
@@ -475,21 +482,48 @@ class ArchiveManager:
             finally:
                 conn.close()
 
-    def get_all_tracks(self, search_query: str = "") -> List[Dict[str, Any]]:
-        """Retrieves all archived tracks, optionally filtered by title, artist, or album."""
+    def get_all_genres(self) -> List[str]:
+        """Returns all distinct, sorted genre tokens present across downloaded tracks."""
         with self._db_lock:
             conn = self._get_connection()
             try:
+                cur = conn.execute("SELECT DISTINCT genre FROM downloaded_tracks WHERE genre IS NOT NULL AND TRIM(genre) != ''")
+                genres = set()
+                for r in cur.fetchall():
+                    raw = r["genre"] if isinstance(r, sqlite3.Row) else r[0]
+                    for g in raw.split(";"):
+                        g_clean = g.strip()
+                        if g_clean:
+                            genres.add(g_clean)
+                return sorted(list(genres))
+            except Exception as e:
+                logger.debug(f"Failed to fetch genres: {e}")
+                return []
+            finally:
+                conn.close()
+
+    def get_all_tracks(self, search_query: str = "", genre_filter: str = "") -> List[Dict[str, Any]]:
+        """Retrieves all archived tracks, optionally filtered by title/artist/album or genre."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                conditions = []
+                params = []
                 if search_query:
                     q = f"%{search_query.strip().lower()}%"
-                    cur = conn.execute("""
-                        SELECT * FROM downloaded_tracks
-                        WHERE LOWER(title) LIKE ? OR LOWER(artist) LIKE ? OR LOWER(album) LIKE ? OR LOWER(collection_name) LIKE ?
-                        ORDER BY downloaded_at DESC
-                    """, (q, q, q, q))
-                else:
-                    cur = conn.execute("SELECT * FROM downloaded_tracks ORDER BY downloaded_at DESC")
+                    conditions.append("(LOWER(title) LIKE ? OR LOWER(artist) LIKE ? OR LOWER(album) LIKE ? OR LOWER(collection_name) LIKE ?)")
+                    params.extend([q, q, q, q])
+                if genre_filter and genre_filter.strip().lower() not in ("", "all genres"):
+                    g = f"%{genre_filter.strip().lower()}%"
+                    conditions.append("LOWER(genre) LIKE ?")
+                    params.append(g)
 
+                sql = "SELECT * FROM downloaded_tracks"
+                if conditions:
+                    sql += " WHERE " + " AND ".join(conditions)
+                sql += " ORDER BY downloaded_at DESC"
+
+                cur = conn.execute(sql, tuple(params))
                 results: List[Dict[str, Any]] = []
                 stale_ids: List[str] = []
 
@@ -1270,6 +1304,85 @@ class ArchiveManager:
 
         logger.info(f"Library repair completed: {stats}")
         return stats
+
+    def retag_all_library_genres(
+        self,
+        root_dir: str = "",
+        progress_callback: Optional[Callable[[int, int, str], None]] = None
+    ) -> Dict[str, int]:
+        """
+        Deep scan and auto-retag audio files across downloaded tracks and library folders.
+        Resolves genres using GenreResolver, writes multi-genre tags directly to disk
+        in audio files (.flac, .mp3, .m4a, .opus, .ogg), and updates the SQLite database.
+        """
+        from core.tagger import AudioTagger
+        from core.genre import GenreResolver
+
+        stats = {
+            "scanned": 0,
+            "retagged": 0,
+            "already_tagged": 0,
+            "errors": 0
+        }
+
+        tagger = AudioTagger()
+        resolver = GenreResolver()
+
+        # 1. Fetch all tracks from downloaded_tracks in DB
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.execute("SELECT id, title, artist, album, file_path, genre FROM downloaded_tracks")
+                tracks = [dict(r) for r in cur.fetchall()]
+            finally:
+                conn.close()
+
+        total = len(tracks)
+        for idx, t in enumerate(tracks, 1):
+            stats["scanned"] += 1
+            fpath = t.get("file_path", "")
+            title = t.get("title", "")
+            artist = t.get("artist", "")
+            album = t.get("album", "")
+            current_genre = (t.get("genre") or "").strip()
+
+            if progress_callback:
+                progress_callback(idx, total, f"Retagging {artist} - {title}")
+
+            if not fpath or not os.path.isfile(fpath):
+                continue
+
+            try:
+                genres = [g.strip() for g in current_genre.split(";") if g.strip()] if current_genre else []
+                if not genres:
+                    genres = resolver.resolve(artist=artist, title=title, album=album)
+
+                if genres:
+                    genre_str = "; ".join(genres)
+                    tagged_ok = tagger.tag_genre_only(fpath, genres)
+                    if tagged_ok:
+                        stats["retagged"] += 1
+                        if genre_str != current_genre:
+                            with self._db_lock:
+                                c = self._get_connection()
+                                try:
+                                    with c:
+                                        c.execute("UPDATE downloaded_tracks SET genre = ? WHERE id = ?", (genre_str, t["id"]))
+                                        c.execute("UPDATE saved_playlist_tracks SET genre = ? WHERE file_path = ? COLLATE NOCASE", (genre_str, normalize_path(fpath)))
+                                finally:
+                                    c.close()
+                    else:
+                        stats["errors"] += 1
+                else:
+                    stats["already_tagged"] += 1
+            except Exception as e:
+                logger.error(f"Error retagging genre on {fpath}: {e}")
+                stats["errors"] += 1
+
+        resolver.save_cache()
+        logger.info(f"Retag all library genres completed: {stats}")
+        return stats
+
 
     # -------------------------------------------------------------------------
     # Saved Playlists & Tracks Management (Decoupled Metadata Storing & On-Demand Batching)

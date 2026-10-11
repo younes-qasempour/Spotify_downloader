@@ -729,10 +729,14 @@ class SettingsView(QScrollArea):
         self.repair_lib_btn = PushButton(FluentIcon.SYNC, "Scan & Auto-Repair All Tracks", maint_card)
         self.repair_lib_btn.clicked.connect(self._repair_library)
 
+        self.retag_genres_btn = PushButton(FluentIcon.TAG, "Scan & Retag Library Genres", maint_card)
+        self.retag_genres_btn.clicked.connect(self._retag_genres)
+
         self.clean_lib_btn = PushButton(FluentIcon.DELETE, "Clean Corrupt Files & Cache", maint_card)
         self.clean_lib_btn.clicked.connect(self._clean_library)
 
         btn_row.addWidget(self.repair_lib_btn)
+        btn_row.addWidget(self.retag_genres_btn)
         btn_row.addWidget(self.clean_lib_btn)
         btn_row.addStretch(1)
         maint_layout.addLayout(btn_row)
@@ -1210,4 +1214,40 @@ class SettingsView(QScrollArea):
             InfoBar.success("Library Repaired", msg, duration=5000, parent=self)
         else:
             InfoBar.error("Repair Error", f"Failed to repair library: {msg}", duration=5000, parent=self)
+
+    def _retag_genres(self):
+        from core.archive import ArchiveManager
+        self.retag_genres_btn.setEnabled(False)
+        self.retag_genres_btn.setText("Retagging Genres...")
+        self.maint_status_label.setText("Starting multi-source genre retagger across library...")
+
+        def progress_cb(cur: int, total: int, msg: str):
+            QTimer.singleShot(0, lambda: self.maint_status_label.setText(f"[{cur}/{total}] {msg}"))
+
+        def worker():
+            try:
+                arc = ArchiveManager()
+                stats = arc.retag_all_library_genres(progress_callback=progress_cb)
+                msg = (
+                    f"Genre retag complete: {stats['scanned']} files scanned. "
+                    f"Retagged {stats['retagged']} files, "
+                    f"{stats['already_tagged']} already tagged, {stats['errors']} error(s)."
+                )
+                QTimer.singleShot(0, lambda: self._on_retag_finished(True, msg))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: self._on_retag_finished(False, str(e)))
+
+        threading.Thread(target=worker, daemon=True, name="GenreRetaggerWorker").start()
+
+    def _on_retag_finished(self, success: bool, msg: str):
+        self.retag_genres_btn.setEnabled(True)
+        self.retag_genres_btn.setText("Scan & Retag Library Genres")
+        self.maint_status_label.setText(msg)
+        if success:
+            InfoBar.success("Genres Synchronized", msg, duration=5000, parent=self)
+            win = self.window()
+            if hasattr(win, "sig_reload_library"):
+                win.sig_reload_library.emit()
+        else:
+            InfoBar.error("Retag Error", f"Failed to retag genres: {msg}", duration=5000, parent=self)
 

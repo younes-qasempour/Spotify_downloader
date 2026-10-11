@@ -223,10 +223,12 @@ class AudioTagger:
         if track.isrc:
             audio["ISRC"] = track.isrc
 
-        genres = getattr(track, "genres", [])
+        genres = [g.strip() for g in getattr(track, "genres", []) if g and g.strip()]
         if genres:
-            audio["GENRE"] = genres
-            audio["genre"] = genres
+            comb = "; ".join(genres)
+            tag_list = [comb] + [g for g in genres if g != comb]
+            audio["GENRE"] = tag_list
+            audio["genre"] = tag_list
 
         # Populate all standard Vorbis comment lyrics keys so any player finds them
         lyr_to_use = synced_lyrics or plain_lyrics or existing_lyrics
@@ -309,9 +311,11 @@ class AudioTagger:
         if track.isrc:
             audio.add(TSRC(encoding=3, text=track.isrc))
 
-        genres = getattr(track, "genres", [])
+        genres = [g.strip() for g in getattr(track, "genres", []) if g and g.strip()]
         if genres:
-            audio.add(TCON(encoding=3, text=genres))
+            comb = "; ".join(genres)
+            audio.delall("TCON")
+            audio.add(TCON(encoding=3, text=[comb] + [g for g in genres if g != comb]))
 
         main_lyr = synced_lyrics or plain_lyrics
         if main_lyr:
@@ -372,7 +376,7 @@ class AudioTagger:
             audio["disk"] = [(int(getattr(track, "disc_number", 1) or 1), 0)]
         audio["\xa9cmt"] = "Spotify Downloader High-Fidelity Engine"
 
-        genres = getattr(track, "genres", [])
+        genres = [g.strip() for g in getattr(track, "genres", []) if g and g.strip()]
         if genres:
             audio["\xa9gen"] = "; ".join(genres)
 
@@ -441,10 +445,12 @@ class AudioTagger:
         if track.isrc:
             audio["ISRC"] = track.isrc
 
-        genres = getattr(track, "genres", [])
+        genres = [g.strip() for g in getattr(track, "genres", []) if g and g.strip()]
         if genres:
-            audio["GENRE"] = genres
-            audio["genre"] = genres
+            comb = "; ".join(genres)
+            tag_list = [comb] + [g for g in genres if g != comb]
+            audio["GENRE"] = tag_list
+            audio["genre"] = tag_list
 
         # Populate all standard Vorbis comment lyrics keys
         lyr_to_use = synced_lyrics or plain_lyrics or existing_lyr
@@ -497,15 +503,18 @@ class AudioTagger:
         Fast, lightweight, in-place genre tagger for an existing audio file on disk.
         Preserves all existing tags, lyrics, track numbers, and embedded cover art.
         """
-        if not file_path or not os.path.isfile(file_path) or not genres:
+        clean_genres = [g.strip() for g in genres if g and g.strip()]
+        if not clean_genres:
             return False
+        comb = "; ".join(clean_genres)
+        tag_list = [comb] + [g for g in clean_genres if g != comb]
 
         ext = os.path.splitext(file_path)[1].lower()
         try:
             if ext == ".flac":
                 audio = FLAC(file_path)
-                audio["GENRE"] = genres
-                audio["genre"] = genres
+                audio["GENRE"] = tag_list
+                audio["genre"] = tag_list
                 audio.save()
                 return True
             elif ext == ".mp3":
@@ -514,12 +523,12 @@ class AudioTagger:
                 except Exception:
                     audio = ID3()
                 audio.delall("TCON")
-                audio.add(TCON(encoding=3, text=genres))
+                audio.add(TCON(encoding=3, text=tag_list))
                 audio.save(file_path, v2_version=4)
                 return True
             elif ext == ".m4a":
                 audio = MP4(file_path)
-                audio["\xa9gen"] = "; ".join(genres)
+                audio["\xa9gen"] = comb
                 audio.save()
                 return True
             elif ext in (".opus", ".ogg"):
@@ -528,10 +537,13 @@ class AudioTagger:
                 except Exception:
                     from mutagen.oggvorbis import OggVorbis
                     audio = OggVorbis(file_path)
-                audio["GENRE"] = genres
-                audio["genre"] = genres
+                audio["GENRE"] = tag_list
+                audio["genre"] = tag_list
                 audio.save()
                 return True
         except Exception as e:
             logger.error(f"Error tagging genre only on {file_path}: {e}")
         return False
+
+    tag_genre_in_place = tag_genre_only
+

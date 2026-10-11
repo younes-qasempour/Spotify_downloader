@@ -1148,6 +1148,8 @@ class PlaylistsView(QWidget):
 
         self.model.clear()
         for r in rows:
+            genre_raw = r.get("genre", "") or ""
+            track_genres = [g.strip() for g in genre_raw.split(";") if g.strip()]
             track = TrackMetadata(
                 id=r["spotify_id"],
                 title=r["title"],
@@ -1159,7 +1161,8 @@ class PlaylistsView(QWidget):
                 isrc=r.get("isrc", "") or "",
                 cover_url=r.get("cover_url", "") or "",
                 collection_name=self.current_playlist_data.get("name", "Playlist") if self.current_playlist_data else "Playlist",
-                collection_type="playlist"
+                collection_type="playlist",
+                genres=track_genres
             )
 
             status = r.get("status", "pending")

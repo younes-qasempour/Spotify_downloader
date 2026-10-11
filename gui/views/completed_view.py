@@ -228,17 +228,24 @@ class CompletedView(QWidget):
             "Sort: Artist (A-Z)",
             "Sort: Duration (Shortest)",
             "Sort: Duration (Longest)",
-            "Sort: Recently Added"
+            "Sort: Recently Added",
+            "Sort: Genre (A-Z)"
         ])
         self.sort_combo.setCurrentIndex(0)
         self.sort_combo.setFixedWidth(190)
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         nav_row.addWidget(self.sort_combo)
 
+        self.genre_combo = ComboBox(self)
+        self.genre_combo.setFixedWidth(150)
+        self.genre_combo.addItems(["All Genres"])
+        self.genre_combo.currentIndexChanged.connect(self._on_genre_changed)
+        nav_row.addWidget(self.genre_combo)
+
         self.search_input = LineEdit(self)
         self.search_input.setPlaceholderText("Search songs, artists, albums, or playlists...")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setFixedWidth(300)
+        self.search_input.setFixedWidth(270)
         self.search_input.textChanged.connect(self._on_search_changed)
         nav_row.addWidget(self.search_input)
 
@@ -398,6 +405,9 @@ class CompletedView(QWidget):
 
         self.stats_label.setText(f"{t_count} song(s) • {p_count} collection(s) • {size_str} offline library")
 
+        # Update available genre options dynamically
+        self._update_genre_combo()
+
         # Refresh all tabs so switching is instantaneous
         search_query = self.search_input.text().strip()
         if self._current_collection_name and self.stacked.currentIndex() == 0:
@@ -406,6 +416,26 @@ class CompletedView(QWidget):
             self.reload_from_archive(search_query)
         self.reload_playlists(search_query)
         self.reload_albums(search_query)
+
+    def _update_genre_combo(self):
+        """Populates the genre dropdown with all genres present in the local archive."""
+        if not hasattr(self, "genre_combo"):
+            return
+        curr_text = self.genre_combo.currentText() or "All Genres"
+        all_genres = ["All Genres"] + self.archive.get_all_genres()
+        self.genre_combo.blockSignals(True)
+        self.genre_combo.clear()
+        self.genre_combo.addItems(all_genres)
+        idx = self.genre_combo.findText(curr_text)
+        self.genre_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.genre_combo.blockSignals(False)
+
+    def _on_genre_changed(self, index: int):
+        search_query = self.search_input.text().strip()
+        if self._current_collection_name and self.stacked.currentIndex() == 0:
+            self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
+        else:
+            self.reload_from_archive(search_query)
 
     def _sort_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         idx = self.sort_combo.currentIndex() if hasattr(self, "sort_combo") else 0
@@ -425,6 +455,8 @@ class CompletedView(QWidget):
             return sorted(rows, key=lambda r: r.get("duration_ms") or 0, reverse=True)
         elif idx == 5:  # Recently Added
             return sorted(rows, key=lambda r: r.get("downloaded_at") or "", reverse=True)
+        elif idx == 6:  # Genre (A-Z)
+            return sorted(rows, key=lambda r: (r.get("genre") or "").strip().lower())
         return rows
 
     def _on_sort_changed(self, index: int):
@@ -436,11 +468,16 @@ class CompletedView(QWidget):
 
     def reload_from_archive(self, search_query: str = ""):
         """Loads or filters tracks from SQLite archive into the virtualized TableView."""
-        rows = self.archive.get_all_tracks(search_query)
+        genre_filter = self.genre_combo.currentText() if hasattr(self, "genre_combo") else ""
+        if genre_filter == "All Genres":
+            genre_filter = ""
+        rows = self.archive.get_all_tracks(search_query, genre_filter=genre_filter)
         rows = self._sort_rows(rows)
         self.model.clear()
 
         for r in rows:
+            genre_raw = r.get("genre", "") or ""
+            track_genres = [g.strip() for g in genre_raw.split(";") if g.strip()]
             track = TrackMetadata(
                 id=r["spotify_id"],
                 title=r["title"],
@@ -451,7 +488,8 @@ class CompletedView(QWidget):
                 track_number=r.get("track_number", 1) or 1,
                 disc_number=r.get("disc_number", 1) or 1,
                 collection_name=r.get("collection_name", ""),
-                collection_type=r.get("collection_type", "track")
+                collection_type=r.get("collection_type", "track"),
+                genres=track_genres
             )
             q_badge = r.get("quality_badge") or ""
             f_path = r.get("file_path", "")
@@ -666,6 +704,8 @@ class CompletedView(QWidget):
                 if q not in t_title and q not in t_artist and q not in t_album:
                     continue
 
+            genre_raw = r.get("genre", "") or ""
+            track_genres = [g.strip() for g in genre_raw.split(";") if g.strip()]
             track = TrackMetadata(
                 id=r["spotify_id"],
                 title=r["title"],
@@ -676,7 +716,8 @@ class CompletedView(QWidget):
                 track_number=r.get("track_number", 1) or 1,
                 disc_number=r.get("disc_number", 1) or 1,
                 collection_name=r.get("collection_name", ""),
-                collection_type=r.get("collection_type", coll_type)
+                collection_type=r.get("collection_type", coll_type),
+                genres=track_genres
             )
             q_badge = r.get("quality_badge") or ""
             f_path = r.get("file_path", "")
@@ -781,6 +822,9 @@ class CompletedView(QWidget):
         show_act = menu.addAction("Show in Explorer")
         copy_act = menu.addAction("Copy Track Title")
         menu.addSeparator()
+        m3u_act = menu.addAction("Export Playlist (.m3u)...")
+        details_act = menu.addAction("View Metadata & Genres")
+        menu.addSeparator()
         delete_act = menu.addAction("Remove from Archive")
 
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
@@ -797,7 +841,61 @@ class CompletedView(QWidget):
                 InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == copy_act:
             QApplication.clipboard().setText(f"{item.track.title} - {item.track.artist_str}")
+        elif action == m3u_act:
+            self._export_m3u_playlist()
+        elif action == details_act:
+            self._show_track_details_dialog(item)
         elif action == delete_act:
             self.archive.delete_track(item.track.id)
             self.reload_all()
             InfoBar.info("Removed", f"Removed '{item.track.title}' from archive.", duration=2500, parent=self)
+
+    def _export_m3u_playlist(self):
+        """Exports all tracks currently matching view filters into an M3U playlist file."""
+        from PyQt6.QtWidgets import QFileDialog
+        items = [self.model.get_item(i) for i in range(self.model.rowCount())]
+        valid_items = [it for it in items if it and it.output_path and os.path.isfile(it.output_path)]
+        if not valid_items:
+            InfoBar.warning("No Tracks", "There are no playable tracks in the current view to export.", parent=self)
+            return
+
+        suggested_name = "Playlist.m3u"
+        if hasattr(self, "genre_combo") and self.genre_combo.currentText() != "All Genres":
+            suggested_name = f"{self.genre_combo.currentText()}.m3u"
+        elif self._current_collection_name:
+            suggested_name = f"{self._current_collection_name}.m3u"
+
+        file_path, _ = QFileDialog.getSaveFileName(self, "Export M3U Playlist", suggested_name, "M3U Playlist (*.m3u)")
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write("#EXTM3U\n")
+                for it in valid_items:
+                    dur_sec = int(it.track.duration_ms / 1000) if it.track.duration_ms else -1
+                    f.write(f"#EXTINF:{dur_sec},{it.track.artist_str} - {it.track.title}\n")
+                    f.write(f"{it.output_path}\n")
+            InfoBar.success("Playlist Exported", f"Exported {len(valid_items)} tracks to {os.path.basename(file_path)}", duration=4000, parent=self)
+        except Exception as e:
+            InfoBar.error("Export Failed", f"Could not write playlist: {e}", duration=4000, parent=self)
+
+    def _show_track_details_dialog(self, item: QueueItem):
+        """Displays full metadata and embedded genre tags for the track."""
+        from qfluentwidgets import MessageBox
+        genres_str = item.track.genre_str or "None"
+        content = (
+            f"Title: {item.track.title}\n"
+            f"Artist: {item.track.artist_str}\n"
+            f"Album: {item.track.album or 'N/A'}\n"
+            f"Genre(s): {genres_str}\n"
+            f"Quality: {item.quality_badge or 'Audio'}\n"
+            f"Source: {item.source_type or 'Local Archive'}\n"
+            f"Track #: {item.track.track_number}  |  Disc #: {getattr(item.track, 'disc_number', 1) or 1}\n"
+            f"ISRC: {item.track.isrc or 'N/A'}\n\n"
+            f"Location on disk:\n{item.output_path}"
+        )
+        diag = MessageBox(f"Track Details — {item.track.title}", content, self)
+        diag.yesButton.setText("Close")
+        diag.cancelButton.setVisible(False)
+        diag.exec()
