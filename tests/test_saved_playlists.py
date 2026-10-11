@@ -100,5 +100,11 @@ def run_tests():
 
     print("ALL ARCHIVE SAVED PLAYLIST TESTS PASSED SUCCESSFULLY!", flush=True)
 
+import unittest
+
+class TestSavedPlaylists(unittest.TestCase):
+    def test_saved_playlists_lifecycle(self):
+        run_tests()
+
 if __name__ == "__main__":
-    run_tests()
+    unittest.main()

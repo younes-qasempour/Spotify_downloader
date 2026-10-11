@@ -246,6 +246,23 @@ class ArchiveManager:
                           );
                     """)
 
+                    # Backfill genre for saved playlist tracks from downloaded_tracks
+                    conn.execute("""
+                        UPDATE saved_playlist_tracks
+                        SET genre = (
+                            SELECT genre FROM downloaded_tracks 
+                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                            LIMIT 1
+                        )
+                        WHERE (genre IS NULL OR genre = '')
+                          AND EXISTS (
+                            SELECT 1 FROM downloaded_tracks 
+                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                              AND downloaded_tracks.genre IS NOT NULL
+                              AND downloaded_tracks.genre != ''
+                          );
+                    """)
+
                     # For remaining downloaded tracks without badge, infer from file extension:
                     conn.execute("""
                         UPDATE saved_playlist_tracks
@@ -1373,7 +1390,7 @@ class ArchiveManager:
         with self._db_lock:
             conn = self._get_connection()
             try:
-                cur = conn.execute("SELECT id, title, artist, album, file_path, genre FROM downloaded_tracks")
+                cur = conn.execute("SELECT spotify_id, title, artist, album, file_path, genre FROM downloaded_tracks")
                 tracks = [dict(r) for r in cur.fetchall()]
             finally:
                 conn.close()
@@ -1408,7 +1425,7 @@ class ArchiveManager:
                                 c = self._get_connection()
                                 try:
                                     with c:
-                                        c.execute("UPDATE downloaded_tracks SET genre = ? WHERE id = ?", (genre_str, t["id"]))
+                                        c.execute("UPDATE downloaded_tracks SET genre = ? WHERE spotify_id = ?", (genre_str, t["spotify_id"]))
                                         c.execute("UPDATE saved_playlist_tracks SET genre = ? WHERE file_path = ? COLLATE NOCASE", (genre_str, normalize_path(fpath)))
                                 finally:
                                     c.close()
@@ -1485,7 +1502,7 @@ class ArchiveManager:
                         for i in range(0, len(track_ids), chunk_size):
                             chunk = track_ids[i:i + chunk_size]
                             placeholders = ",".join("?" for _ in chunk)
-                            query = f"SELECT spotify_id, file_path, quality_badge, source_type FROM downloaded_tracks WHERE spotify_id IN ({placeholders})"
+                            query = f"SELECT spotify_id, file_path, quality_badge, source_type, genre FROM downloaded_tracks WHERE spotify_id IN ({placeholders})"
                             rows = conn.execute(query, chunk).fetchall()
                             for r in rows:
                                 fpath = r["file_path"]
@@ -1493,7 +1510,8 @@ class ArchiveManager:
                                     downloaded_map[r["spotify_id"]] = {
                                         "file_path": fpath,
                                         "quality_badge": r["quality_badge"] or "",
-                                        "source_type": r["source_type"] or ""
+                                        "source_type": r["source_type"] or "",
+                                        "genre": r["genre"] or ""
                                     }
 
                     # 3. Batch insert/update tracks
@@ -1503,6 +1521,7 @@ class ArchiveManager:
                         existing_fp = dl_info["file_path"] if dl_info else ""
                         q_badge = dl_info["quality_badge"] if dl_info else ""
                         s_type = dl_info["source_type"] if dl_info else ""
+                        genre_val = (dl_info["genre"] if dl_info else "") or getattr(t, "genre_str", "") or getattr(t, "genre", "") or ""
                         if existing_fp and not q_badge:
                             qb_inf, st_inf = self.infer_badge_from_file(existing_fp)
                             q_badge = qb_inf
@@ -1522,15 +1541,17 @@ class ArchiveManager:
                             status,
                             existing_fp,
                             q_badge,
-                            s_type
+                            s_type,
+                            genre_val
                         ))
 
                     conn.executemany("""
                         INSERT INTO saved_playlist_tracks (
                             playlist_id, spotify_id, title, artist, album,
                             duration_ms, track_number, disc_number, isrc,
-                            cover_url, status, file_path, quality_badge, source_type
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            cover_url, status, file_path, quality_badge, source_type,
+                            genre
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(playlist_id, spotify_id) DO UPDATE SET
                             title = excluded.title,
                             artist = excluded.artist,
@@ -1543,7 +1564,8 @@ class ArchiveManager:
                             status = CASE WHEN saved_playlist_tracks.status = 'downloaded' THEN 'downloaded' ELSE excluded.status END,
                             file_path = CASE WHEN saved_playlist_tracks.file_path != '' THEN saved_playlist_tracks.file_path ELSE excluded.file_path END,
                             quality_badge = CASE WHEN saved_playlist_tracks.quality_badge != '' THEN saved_playlist_tracks.quality_badge ELSE excluded.quality_badge END,
-                            source_type = CASE WHEN saved_playlist_tracks.source_type != '' THEN saved_playlist_tracks.source_type ELSE excluded.source_type END
+                            source_type = CASE WHEN saved_playlist_tracks.source_type != '' THEN saved_playlist_tracks.source_type ELSE excluded.source_type END,
+                            genre = CASE WHEN saved_playlist_tracks.genre != '' THEN saved_playlist_tracks.genre ELSE excluded.genre END
                     """, track_rows)
 
                 logger.info(f"Saved playlist '{name}' ({len(tracks)} tracks) into database.")
@@ -1733,7 +1755,8 @@ class ArchiveManager:
         spotify_id: str,
         file_path: str,
         quality_badge: str = "",
-        source_type: str = ""
+        source_type: str = "",
+        genre: str = ""
     ):
         """Marks a track as downloaded across all saved playlists when download succeeds."""
         if not spotify_id:
@@ -1747,15 +1770,22 @@ class ArchiveManager:
         with self._db_lock:
             conn = self._get_connection()
             try:
+                # If genre wasn't provided, try querying it from downloaded_tracks
+                if not genre:
+                    r = conn.execute("SELECT genre FROM downloaded_tracks WHERE spotify_id = ? LIMIT 1", (spotify_id,)).fetchone()
+                    if r and r["genre"]:
+                        genre = r["genre"]
+
                 with conn:
                     conn.execute("""
                         UPDATE saved_playlist_tracks
                         SET status = 'downloaded',
                             file_path = ?,
                             quality_badge = CASE WHEN ? != '' THEN ? ELSE quality_badge END,
-                            source_type = CASE WHEN ? != '' THEN ? ELSE source_type END
+                            source_type = CASE WHEN ? != '' THEN ? ELSE source_type END,
+                            genre = CASE WHEN ? != '' THEN ? ELSE genre END
                         WHERE spotify_id = ?
-                    """, (norm_fp, quality_badge, quality_badge, source_type, source_type, spotify_id))
+                    """, (norm_fp, quality_badge, quality_badge, source_type, source_type, genre, genre, spotify_id))
             except Exception as e:
                 logger.debug(f"Failed to mark track {spotify_id} downloaded in saved playlists: {e}")
             finally:

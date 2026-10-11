@@ -138,6 +138,50 @@ class TestGenreAndArchive(unittest.TestCase):
         empty_col = archive.get_collection_tracks("Rock Album", "album", genre_filter="Pop")
         self.assertEqual(len(empty_col), 0)
 
+    def test_saved_playlist_tracks_genre_persistence_and_propagation(self):
+        archive = ArchiveManager(db_path=self.db_path)
+        f1 = os.path.join(self.temp_dir.name, "pl_song1.flac")
+        with open(f1, "wb") as f:
+            f.write(b"PL_DATA")
+
+        # 1. Add track to downloaded_tracks
+        t1 = TrackMetadata(id="sp_1", title="Hit Track", artists=["Artist A"], album="Album A")
+        archive.add_track(t1, f1, "FLAC 16", "Musilon", genre="J-Pop; Anime")
+
+        # 2. Save a playlist containing sp_1 and a pending sp_2
+        t2 = TrackMetadata(id="sp_2", title="Pending Track", artists=["Artist B"], album="Album B")
+        saved_pl = archive.save_playlist(
+            playlist_id="pl_test_1",
+            name="My Anime Mix",
+            spotify_url="https://open.spotify.com/playlist/pl_test_1",
+            cover_url="https://example.com/cover.jpg",
+            tracks=[t1, t2]
+        )
+        self.assertTrue(saved_pl)
+
+        # Check saved tracks have genre populated for downloaded track
+        tracks = archive.get_saved_playlist_tracks("pl_test_1")
+        self.assertEqual(len(tracks), 2)
+        tr1 = next(t for t in tracks if t["spotify_id"] == "sp_1")
+        self.assertEqual(tr1["genre"], "J-Pop; Anime")
+        self.assertEqual(tr1["status"], "downloaded")
+
+        # Filter saved playlist tracks by genre
+        jpop_only = archive.get_saved_playlist_tracks("pl_test_1", genre_filter="J-Pop")
+        self.assertEqual(len(jpop_only), 1)
+        self.assertEqual(jpop_only[0]["spotify_id"], "sp_1")
+
+        # 3. Mark pending track downloaded with genre
+        f2 = os.path.join(self.temp_dir.name, "pl_song2.flac")
+        with open(f2, "wb") as f:
+            f.write(b"PL_DATA_2")
+        archive.mark_saved_track_downloaded("sp_2", f2, "FLAC 16", "Musilon", genre="Pop")
+
+        tracks_after = archive.get_saved_playlist_tracks("pl_test_1")
+        tr2 = next(t for t in tracks_after if t["spotify_id"] == "sp_2")
+        self.assertEqual(tr2["status"], "downloaded")
+        self.assertEqual(tr2["genre"], "Pop")
+
 
 if __name__ == "__main__":
     unittest.main()
