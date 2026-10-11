@@ -147,6 +147,7 @@ class ArchiveManager:
                             source_type TEXT DEFAULT 'Musilon',
                             collection_name TEXT,
                             collection_type TEXT,
+                            genre TEXT DEFAULT '',
                             downloaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         );
                     """)
@@ -183,6 +184,7 @@ class ArchiveManager:
                             file_path TEXT DEFAULT '',
                             quality_badge TEXT DEFAULT '',
                             source_type TEXT DEFAULT '',
+                            genre TEXT DEFAULT '',
                             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             UNIQUE(playlist_id, spotify_id)
                         );
@@ -201,11 +203,19 @@ class ArchiveManager:
                     except sqlite3.OperationalError:
                         pass
                     try:
+                        conn.execute("ALTER TABLE downloaded_tracks ADD COLUMN genre TEXT DEFAULT '';")
+                    except sqlite3.OperationalError:
+                        pass
+                    try:
                         conn.execute("ALTER TABLE saved_playlist_tracks ADD COLUMN quality_badge TEXT DEFAULT '';")
                     except sqlite3.OperationalError:
                         pass
                     try:
                         conn.execute("ALTER TABLE saved_playlist_tracks ADD COLUMN source_type TEXT DEFAULT '';")
+                    except sqlite3.OperationalError:
+                        pass
+                    try:
+                        conn.execute("ALTER TABLE saved_playlist_tracks ADD COLUMN genre TEXT DEFAULT '';")
                     except sqlite3.OperationalError:
                         pass
 
@@ -291,7 +301,8 @@ class ArchiveManager:
         file_path: str,
         quality_badge: str,
         source_type: str,
-        file_size: int = 0
+        file_size: int = 0,
+        genre: str = ""
     ) -> bool:
         """Records or updates a successfully downloaded track in the archive."""
         if not file_path or not os.path.isfile(file_path):
@@ -304,6 +315,7 @@ class ArchiveManager:
             except Exception:
                 file_size = 0
 
+        genre_val = genre or getattr(track, "genre_str", "") or ""
         with self._db_lock:
             conn = self._get_connection()
             try:
@@ -313,8 +325,8 @@ class ArchiveManager:
                             spotify_id, isrc, title, artist, album, duration_ms,
                             track_number, disc_number,
                             file_path, file_size, quality_badge, source_type,
-                            collection_name, collection_type, downloaded_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                            collection_name, collection_type, genre, downloaded_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     """, (
                         track.id,
                         track.isrc or "",
@@ -329,12 +341,35 @@ class ArchiveManager:
                         quality_badge,
                         source_type,
                         getattr(track, "collection_name", ""),
-                        getattr(track, "collection_type", "track")
+                        getattr(track, "collection_type", "track"),
+                        genre_val
                     ))
-                logger.debug(f"Archived track '{track.title}' (track #{getattr(track, 'track_number', 1)}) -> {norm_path}")
+                logger.debug(f"Archived track '{track.title}' (track #{getattr(track, 'track_number', 1)}) -> {norm_path} [genre: {genre_val}]")
                 return True
             except Exception as e:
                 logger.error(f"Failed to record track in archive: {e}")
+                return False
+            finally:
+                conn.close()
+
+    def update_track_genre(self, file_path: str = "", genre: str = "", spotify_id: str = "") -> bool:
+        """Updates the genre field for a track in SQLite archive."""
+        if not genre:
+            return False
+        norm_path = normalize_path(file_path) if file_path else ""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    if norm_path:
+                        conn.execute("UPDATE downloaded_tracks SET genre = ? WHERE file_path = ?", (genre, norm_path))
+                        conn.execute("UPDATE saved_playlist_tracks SET genre = ? WHERE file_path = ?", (genre, norm_path))
+                    if spotify_id:
+                        conn.execute("UPDATE downloaded_tracks SET genre = ? WHERE spotify_id = ?", (genre, spotify_id))
+                        conn.execute("UPDATE saved_playlist_tracks SET genre = ? WHERE spotify_id = ?", (genre, spotify_id))
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update track genre in archive: {e}")
                 return False
             finally:
                 conn.close()
@@ -1120,9 +1155,30 @@ class ArchiveManager:
             except Exception:
                 pass
 
-            needs_lyric_healing = (not has_lyrics) or (not has_synced_lyrics) or (not has_crlf)
+            has_genre = False
+            try:
+                if ext in (".flac", ".opus", ".ogg"):
+                    g = aud.get("GENRE") or aud.get("genre")
+                    if g and any(x.strip() for x in g):
+                        has_genre = True
+                elif ext == ".mp3":
+                    for k in aud.keys():
+                        if k.startswith("TCON"):
+                            t = aud[k]
+                            if t and any(str(x).strip() for x in getattr(t, "text", [])):
+                                has_genre = True
+                                break
+                elif ext == ".m4a":
+                    g = aud.get("\xa9gen")
+                    if g and any(str(x).strip() for x in g):
+                        has_genre = True
+            except Exception:
+                pass
 
-            if has_cover and not needs_lyric_healing:
+            needs_lyric_healing = (not has_lyrics) or (not has_synced_lyrics) or (not has_crlf)
+            needs_genre_healing = not has_genre
+
+            if has_cover and not needs_lyric_healing and not needs_genre_healing:
                 continue
 
             if not has_cover:
@@ -1613,5 +1669,144 @@ class ArchiveManager:
                 return 0
             finally:
                 conn.close()
+
+    def retag_all_library_genres(
+        self,
+        root_dir: str = "",
+        progress_callback: Optional[Callable[[int, int, str], None]] = None
+    ) -> Dict[str, int]:
+        """
+        Scans all downloaded audio files in the library, checks for missing genre tags,
+        resolves multi-source genres via GenreResolver, and embeds tags directly into
+        FLAC, MP3, M4A, Opus, and Ogg containers. Also updates SQLite archive records.
+        """
+        from core.tagger import AudioTagger
+        from core.genre import get_genre_resolver
+
+        if not root_dir:
+            root_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
+            if not os.path.isabs(root_dir):
+                root_dir = os.path.normpath(os.path.join(str(get_default_download_dir()), root_dir))
+
+        stats = {
+            "scanned": 0,
+            "missing_genres_found": 0,
+            "retagged": 0,
+            "already_tagged": 0,
+            "errors": 0
+        }
+
+        if not os.path.isdir(root_dir):
+            return stats
+
+        tagger = AudioTagger()
+        genre_resolver = get_genre_resolver()
+
+        audio_files = []
+        for root, dirs, files in os.walk(root_dir):
+            if os.path.basename(root).lower() in ("lyrics", "cache", "logs", "bin"):
+                continue
+            for fname in files:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in (".flac", ".opus", ".mp3", ".m4a", ".ogg"):
+                    audio_files.append(os.path.join(root, fname))
+
+        total_files = len(audio_files)
+        logger.info(f"Starting Genre Retagger across {total_files} audio files in: {root_dir}")
+
+        for idx, fpath in enumerate(audio_files, 1):
+            stats["scanned"] += 1
+            bname = os.path.basename(fpath)
+            if progress_callback:
+                progress_callback(idx, total_files, f"Checking {bname}")
+
+            ext = os.path.splitext(fpath)[1].lower()
+            has_genre = False
+            try:
+                if ext == ".flac":
+                    from mutagen.flac import FLAC
+                    aud = FLAC(fpath)
+                    g = aud.get("GENRE") or aud.get("genre")
+                    if g and any(x.strip() for x in g):
+                        has_genre = True
+                elif ext in (".opus", ".ogg"):
+                    try:
+                        from mutagen.oggopus import OggOpus
+                        aud = OggOpus(fpath)
+                    except Exception:
+                        from mutagen.oggvorbis import OggVorbis
+                        aud = OggVorbis(fpath)
+                    g = aud.get("GENRE") or aud.get("genre")
+                    if g and any(x.strip() for x in g):
+                        has_genre = True
+                elif ext == ".mp3":
+                    from mutagen.mp3 import MP3
+                    aud = MP3(fpath)
+                    for k in aud.keys():
+                        if k.startswith("TCON"):
+                            t = aud[k]
+                            if t and any(str(x).strip() for x in getattr(t, "text", [])):
+                                has_genre = True
+                                break
+                elif ext == ".m4a":
+                    from mutagen.mp4 import MP4
+                    aud = MP4(fpath)
+                    g = aud.get("\xa9gen")
+                    if g and any(str(x).strip() for x in g):
+                        has_genre = True
+            except Exception:
+                pass
+
+            if has_genre:
+                stats["already_tagged"] += 1
+                continue
+
+            stats["missing_genres_found"] += 1
+
+            # Resolve artist and title
+            meta = self.get_track_by_path(fpath)
+            artist = ""
+            title = ""
+            album = ""
+            if meta:
+                artist = meta.get("artist", "")
+                title = meta.get("title", "")
+                album = meta.get("album", "")
+            else:
+                raw_name = os.path.splitext(bname)[0]
+                import re
+                m_num = re.match(r"^(\d{1,3})[\s.\-_]+(.*)$", raw_name)
+                if m_num:
+                    raw_name = m_num.group(2).strip()
+                if " - " in raw_name:
+                    artist, title = raw_name.split(" - ", 1)
+                else:
+                    title = raw_name
+                album = os.path.basename(os.path.dirname(fpath))
+
+            if progress_callback:
+                progress_callback(idx, total_files, f"Resolving genres for {bname}")
+
+            resolved_genres = genre_resolver.resolve(artist, title, album)
+            if not resolved_genres:
+                resolved_genres = genre_resolver.resolve(artist, "", album)
+
+            if not resolved_genres:
+                resolved_genres = ["Pop"]
+
+            try:
+                ok = tagger.tag_genre_only(fpath, resolved_genres)
+                if ok:
+                    stats["retagged"] += 1
+                    genre_str = "; ".join(resolved_genres)
+                    self.update_track_genre(file_path=fpath, genre=genre_str)
+                else:
+                    stats["errors"] += 1
+            except Exception as e_retag:
+                logger.error(f"Failed to retag {fpath}: {e_retag}")
+                stats["errors"] += 1
+
+        logger.info(f"Library Genre Retag completed: {stats}")
+        return stats
 
 

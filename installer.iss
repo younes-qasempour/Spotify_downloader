@@ -2,7 +2,7 @@
 ; Production-Grade Per-User Windows Installer
 
 #define MyAppName "Flacify"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "Flacify Project"
 #define MyAppExeName "Flacify.exe"
 #define MyAppMutex "FlacifyMutex"

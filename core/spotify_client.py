@@ -37,6 +37,11 @@ class TrackMetadata:
     collection_type: str = "track"   # "track", "album", "playlist"
     collection_name: str = "Singles" # Playlist title, album title, or "Singles"
     collection_cover_url: str = ""   # Playlist or album cover art URL
+    genres: List[str] = field(default_factory=list)
+
+    @property
+    def genre_str(self) -> str:
+        return "; ".join(self.genres) if self.genres else ""
 
     @property
     def primary_artist(self) -> str:
