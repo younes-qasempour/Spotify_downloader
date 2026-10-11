@@ -59,6 +59,21 @@ class CascadingAudioEngine:
         if cancel_check and cancel_check():
             return None
 
+        # 0. Check if direct YouTube video track
+        if getattr(track, "id", "").startswith("yt_"):
+            logger.info(f"Direct YouTube source detected for '{track.title}' (ID: {track.id}); bypassing Musilon.")
+            yt_src = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
+            if yt_src:
+                act_ext = yt_src.audio_format or "opus"
+                badge = "YouTube M4A" if act_ext.lower() == "m4a" else "YouTube Opus"
+                return ResolvedTrackSource(
+                    source_type="YouTube",
+                    quality_badge=badge,
+                    source_obj=yt_src,
+                    file_extension=act_ext
+                )
+            return None
+
         # 1. Try Musilon Tiers 1-3 across all multi-vector search stages
         if self.musilon.enabled and not skip_musilon:
             try:
@@ -289,9 +304,10 @@ class CascadingAudioEngine:
         if cancel_check and cancel_check():
             return None
 
-        if not final_file_path and resolved.source_type == "YouTube Music":
+        if not final_file_path and resolved.source_type in ("YouTube Music", "YouTube"):
+            is_yt_direct = (resolved.source_type == "YouTube")
             if status_callback:
-                status_callback("Downloading (YTM)")
+                status_callback("Downloading (YouTube)" if is_yt_direct else "Downloading (YTM)")
             yt_src: YtdlpSource = resolved.source_obj
             final_file_path = self.ytdlp.download_track(
                 source=yt_src,
@@ -311,7 +327,10 @@ class CascadingAudioEngine:
             if final_file_path and os.path.isfile(final_file_path):
                 act_ext = os.path.splitext(final_file_path)[1].lstrip(".").lower()
                 resolved.file_extension = act_ext
-                resolved.quality_badge = "YTM M4A" if act_ext == "m4a" else "YTM Opus"
+                if is_yt_direct:
+                    resolved.quality_badge = "YouTube M4A" if act_ext == "m4a" else "YouTube Opus"
+                else:
+                    resolved.quality_badge = "YTM M4A" if act_ext == "m4a" else "YTM Opus"
 
         if cancel_check and cancel_check():
             if final_file_path and os.path.exists(final_file_path):

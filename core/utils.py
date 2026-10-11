@@ -63,6 +63,25 @@ def sanitize_filename(name: str, max_length: int = 80) -> str:
     return cleaned
 
 
+def sanitize_path_template(path_str: str, max_segment_length: int = 80) -> str:
+    """
+    Sanitizes a hierarchical path template (e.g. '{artist}/{album}/{title}') by
+    splitting on directory separators and sanitizing each segment individually.
+    """
+    if not path_str:
+        return "unnamed_track"
+
+    # Normalize slashes
+    norm = path_str.replace('\\', '/')
+    segments = norm.split('/')
+    cleaned_segments = [sanitize_filename(seg, max_length=max_segment_length) for seg in segments if seg.strip()]
+
+    if not cleaned_segments:
+        return "track"
+
+    return os.path.normpath(os.path.join(*cleaned_segments))
+
+
 from typing import Callable, Optional
 import gzip
 import urllib.request
@@ -324,5 +343,138 @@ def is_valid_audio_file(file_path: str, min_size: int = 150 * 1024) -> Tuple[boo
 
     except Exception as e:
         return False, f"Integrity check error: {e}"
+
+
+def generate_m3u8_file(folder_path: str, playlist_name: str = "") -> Optional[str]:
+    """
+    Generates or updates a standard UTF-8 .m3u8 playlist file in the target folder.
+    Sorts audio tracks by track number or filename, writing #EXTM3U and #EXTINF metadata.
+    """
+    if not folder_path or not os.path.isdir(folder_path):
+        return None
+
+    try:
+        import mutagen
+        valid_exts = {".flac", ".mp3", ".m4a", ".opus", ".ogg"}
+        files = []
+        for fname in os.listdir(folder_path):
+            ext = os.path.splitext(fname)[1].lower()
+            if ext in valid_exts and not fname.startswith("."):
+                files.append(fname)
+
+        if not files:
+            return None
+
+        # Gather metadata and sort order
+        tracks_data = []
+        for fname in files:
+            fpath = os.path.join(folder_path, fname)
+            ext = os.path.splitext(fname)[1].lower()
+            duration = 0
+            title = os.path.splitext(fname)[0]
+            artist = "Unknown Artist"
+            track_num = 999
+            try:
+                m = mutagen.File(fpath)
+                if m is not None:
+                    duration = int(m.info.length) if hasattr(m.info, "length") else 0
+                    if ext == ".mp3" and m.tags:
+                        title = str(m.tags.get("TIT2", title))
+                        artist = str(m.tags.get("TPE1", artist))
+                        trck = str(m.tags.get("TRCK", ""))
+                        if trck and trck.split("/")[0].isdigit():
+                            track_num = int(trck.split("/")[0])
+                    elif ext in (".flac", ".ogg", ".opus") and m.tags:
+                        title = m.tags.get("TITLE", [title])[0]
+                        artist = m.tags.get("ARTIST", [artist])[0]
+                        trck = m.tags.get("TRACKNUMBER", [""])[0]
+                        if trck and trck.split("/")[0].isdigit():
+                            track_num = int(trck.split("/")[0])
+                    elif ext == ".m4a" and m.tags:
+                        title = m.tags.get("\xa9nam", [title])[0]
+                        artist = m.tags.get("\xa9ART", [artist])[0]
+                        trck = m.tags.get("trkn", [(0, 0)])[0][0]
+                        if trck:
+                            track_num = int(trck)
+            except Exception:
+                pass
+
+            if track_num == 999:
+                match = re.match(r'^(\d+)[\.\s\-]', fname)
+                if match:
+                    track_num = int(match.group(1))
+
+            tracks_data.append((track_num, fname, duration, f"{artist} - {title}"))
+
+        tracks_data.sort(key=lambda x: (x[0], x[1]))
+
+        pl_title = playlist_name or os.path.basename(os.path.normpath(folder_path))
+        safe_pl_title = sanitize_filename(pl_title, max_length=60)
+        m3u8_path = os.path.join(folder_path, f"{safe_pl_title}.m3u8")
+
+        lines = ["#EXTM3U", f"#PLAYLIST:{pl_title}"]
+        for _, fname, dur, label in tracks_data:
+            lines.append(f"#EXTINF:{dur},{label}")
+            lines.append(fname)
+
+        with open(m3u8_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+        logger.info(f"Generated .m3u8 playlist: {m3u8_path} ({len(tracks_data)} tracks)")
+        return m3u8_path
+    except Exception as e:
+        logger.warning(f"Could not generate .m3u8 playlist: {e}")
+        return None
+
+
+def calculate_replaygain(audio_file_path: str) -> Optional[Tuple[str, str]]:
+    """
+    Computes EBU R128 loudness and true peak using FFmpeg ebur128 filter.
+    Returns (gain_str, peak_str), e.g. ("-3.45 dB", "0.985210").
+    Reference loudness is ReplayGain 2.0 standard (-18.0 LUFS).
+    """
+    if not audio_file_path or not os.path.isfile(audio_file_path):
+        return None
+
+    ffmpeg_bin = ensure_ffmpeg()
+    if not ffmpeg_bin:
+        return None
+
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    cmd = [
+        ffmpeg_bin,
+        "-nostats",
+        "-i", audio_file_path,
+        "-filter_complex", "ebur128=peak=true",
+        "-f", "null",
+        "-"
+    ]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=flags)
+        stderr = proc.stderr or ""
+
+        i_match = re.search(r'Integrated loudness:\s+I:\s+([-\d\.]+)\s+LUFS', stderr)
+        peak_match = re.search(r'True peak:\s+Peak:\s+([-\d\.]+)\s+dBFS', stderr)
+
+        if not i_match:
+            return None
+
+        integrated_lufs = float(i_match.group(1))
+        gain_db = -18.0 - integrated_lufs
+        gain_str = f"{gain_db:+.2f} dB"
+
+        if peak_match:
+            peak_dbfs = float(peak_match.group(1))
+            peak_linear = 10.0 ** (peak_dbfs / 20.0)
+            peak_str = f"{peak_linear:.6f}"
+        else:
+            peak_str = "1.000000"
+
+        return gain_str, peak_str
+    except Exception as e:
+        logger.debug(f"ReplayGain calculation failed for {audio_file_path}: {e}")
+        return None
+
 
 

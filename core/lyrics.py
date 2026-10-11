@@ -28,7 +28,7 @@ class LyricsEngine:
 
     API_URL = "https://lrclib.net/api/get"
     SEARCH_URL = "https://lrclib.net/api/search"
-    USER_AGENT = "SpotifyDownloader/1.0.0 (https://github.com/spotify-downloader)"
+    USER_AGENT = "Flacify/1.2.0 (https://github.com/younes-qasempour/Spotify_downloader)"
 
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
@@ -36,6 +36,13 @@ class LyricsEngine:
             "User-Agent": self.USER_AGENT,
             "Accept": "application/json",
         })
+        try:
+            from core.config import config
+            proxy = config.get("download.proxy", "").strip()
+            if proxy:
+                self.session.proxies = {"http": proxy, "https": proxy}
+        except Exception:
+            pass
 
     def fetch_lyrics(self, track: TrackMetadata) -> Optional[LyricsData]:
         """

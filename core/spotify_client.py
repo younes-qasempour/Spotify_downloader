@@ -10,11 +10,12 @@ import requests
 
 try:
     import spotipy
-    from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
+    from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth, CacheFileHandler
 except ImportError:
     spotipy = None
     SpotifyClientCredentials = None
     SpotifyOAuth = None
+    CacheFileHandler = None
 
 from core.utils import clean_watermarks, sanitize_filename
 from core.paths import get_cache_dir
@@ -101,6 +102,13 @@ class SpotifyClient:
                           '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         })
+        try:
+            from core.config import config
+            proxy = config.get("download.proxy", "").strip()
+            if proxy:
+                self._session.proxies = {"http": proxy, "https": proxy}
+        except Exception:
+            pass
 
     def has_credentials(self) -> bool:
         """Returns True if Spotify API client ID and secret are configured."""
@@ -217,6 +225,7 @@ class SpotifyClient:
             return
 
         token_cache = os.path.join(str(get_cache_dir()), ".spotify_token_cache")
+        cache_handler = CacheFileHandler(cache_path=token_cache) if CacheFileHandler else None
 
         redirect_uri = "http://127.0.0.1:9900/callback"
         try:
@@ -229,15 +238,19 @@ class SpotifyClient:
 
         if SpotifyOAuth:
             try:
-                self._oauth = SpotifyOAuth(
-                    client_id=self.client_id,
-                    client_secret=self.client_secret,
-                    redirect_uri=redirect_uri,
-                    scope="playlist-read-private playlist-read-collaborative",
-                    cache_path=token_cache,
-                    show_dialog=True,
-                    open_browser=True
-                )
+                oauth_kwargs = {
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "redirect_uri": redirect_uri,
+                    "scope": "playlist-read-private playlist-read-collaborative",
+                    "show_dialog": True,
+                    "open_browser": True
+                }
+                if cache_handler:
+                    oauth_kwargs["cache_handler"] = cache_handler
+                else:
+                    oauth_kwargs["cache_path"] = token_cache
+                self._oauth = SpotifyOAuth(**oauth_kwargs)
             except Exception as e:
                 logger.warning(f"Could not initialize SpotifyOAuth: {e}")
                 self._oauth = None
@@ -245,11 +258,13 @@ class SpotifyClient:
         # 1. Prefer User-Authorized client if cached token exists
         if self._oauth:
             try:
-                token = self._oauth.get_cached_token()
-                if token:
-                    self._sp = spotipy.Spotify(auth_manager=self._oauth)
-                    logger.info("Initialized official Spotify Web API client with User Authorization.")
-                    return
+                cached = self._oauth.cache_handler.get_cached_token() if hasattr(self._oauth, "cache_handler") and self._oauth.cache_handler else self._oauth.get_cached_token()
+                if cached:
+                    valid_token = self._oauth.validate_token(cached)
+                    if valid_token:
+                        self._sp = spotipy.Spotify(auth_manager=self._oauth)
+                        logger.info("Initialized official Spotify Web API client with User Authorization.")
+                        return
             except Exception as e:
                 logger.debug(f"Cached token check failed: {e}")
 

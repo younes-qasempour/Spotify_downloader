@@ -867,7 +867,11 @@ class CompletedView(QWidget):
     def _on_double_click(self, index):
         item = self.model.get_item(index.row())
         if item and item.output_path and os.path.isfile(item.output_path):
-            os.startfile(item.output_path)
+            main_win = self.window()
+            if hasattr(main_win, "play_audio_track"):
+                main_win.play_audio_track(item.output_path, item.track, item.quality_badge)
+            else:
+                os.startfile(item.output_path)
         else:
             InfoBar.warning("File Missing", "The audio file could not be found on disk.", parent=self)
 
@@ -892,7 +896,11 @@ class CompletedView(QWidget):
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
         if action == play_act:
             if item.output_path and os.path.isfile(item.output_path):
-                os.startfile(item.output_path)
+                main_win = self.window()
+                if hasattr(main_win, "play_audio_track"):
+                    main_win.play_audio_track(item.output_path, item.track, item.quality_badge)
+                else:
+                    os.startfile(item.output_path)
             else:
                 InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == show_act:

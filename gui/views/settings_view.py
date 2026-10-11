@@ -648,6 +648,52 @@ class SettingsView(QScrollArea):
         art_row.addWidget(self.art_switch)
         t_layout.addLayout(art_row)
 
+        # Automatic .m3u8 playlist file generator switch
+        m3u_row = QHBoxLayout()
+        m3u_info = QVBoxLayout()
+        m3u_title = BodyLabel("Generate Companion .m3u8 Playlist Files", tag_card)
+        m3u_title.setStyleSheet("font-weight: bold;")
+        m3u_desc = CaptionLabel(
+            "Automatically generates UTF-8 .m3u8 playlist files in each downloaded playlist folder "
+            "for plug-and-play playback on DAP players, foobar2000, and mobile devices.",
+            tag_card
+        )
+        m3u_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        m3u_desc.setWordWrap(True)
+        m3u_info.addWidget(m3u_title)
+        m3u_info.addWidget(m3u_desc)
+
+        self.m3u_switch = SwitchButton(tag_card)
+        self.m3u_switch.setChecked(config.get("download.generate_m3u8", True))
+        self.m3u_switch.checkedChanged.connect(lambda v: config.set("download.generate_m3u8", v))
+
+        m3u_row.addLayout(m3u_info, 1)
+        m3u_row.addWidget(self.m3u_switch)
+        t_layout.addLayout(m3u_row)
+
+        # ReplayGain 2.0 Normalization Tagging switch
+        rg_row = QHBoxLayout()
+        rg_info = QVBoxLayout()
+        rg_title = BodyLabel("ReplayGain 2.0 Loudness Normalization Tagging", tag_card)
+        rg_title.setStyleSheet("font-weight: bold;")
+        rg_desc = CaptionLabel(
+            "Calculates EBU R128 loudness metrics and embeds non-destructive REPLAYGAIN_TRACK_GAIN and "
+            "REPLAYGAIN_TRACK_PEAK tags for uniform playback volume without audio re-encoding.",
+            tag_card
+        )
+        rg_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        rg_desc.setWordWrap(True)
+        rg_info.addWidget(rg_title)
+        rg_info.addWidget(rg_desc)
+
+        self.rg_switch = SwitchButton(tag_card)
+        self.rg_switch.setChecked(config.get("download.replaygain_tagging", False))
+        self.rg_switch.checkedChanged.connect(lambda v: config.set("download.replaygain_tagging", v))
+
+        rg_row.addLayout(rg_info, 1)
+        rg_row.addWidget(self.rg_switch)
+        t_layout.addLayout(rg_row)
+
         main_layout.addWidget(tag_card)
 
         # =====================================================================

@@ -237,6 +237,11 @@ class DownloadQueueManager:
             except Exception as e_rev:
                 logger.debug(f"Could not revert queued tracks on stop: {e_rev}")
 
+            try:
+                self.archive.checkpoint_wal()
+            except Exception:
+                pass
+
         logger.info("Download queue stopped.")
 
     def enqueue(self, tracks: List[TrackMetadata]):
@@ -612,6 +617,12 @@ class DownloadQueueManager:
             if file_path and os.path.isfile(file_path):
                 self.archive.add_track(track, file_path, item.quality_badge, item.source_type, genre=track.genre_str)
                 self.archive.mark_saved_track_downloaded(track.id, file_path, item.quality_badge, item.source_type)
+                if config.get("download.generate_m3u8", True) and getattr(track, "collection_type", "track") in ("playlist", "album"):
+                    try:
+                        from core.utils import generate_m3u8_file
+                        generate_m3u8_file(os.path.dirname(file_path), getattr(track, "collection_name", ""))
+                    except Exception as e_m3u8:
+                        logger.debug(f"m3u8 playlist file generation note: {e_m3u8}")
 
             if self.on_track_completed:
                 self.on_track_completed(track_id, item.output_path)

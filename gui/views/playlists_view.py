@@ -132,12 +132,14 @@ class SavedPlaylistCard(CardWidget):
         playlist_data: Dict[str, Any],
         on_open=None,
         on_delete=None,
+        on_sync=None,
         parent=None
     ):
         super().__init__(parent)
         self.data = playlist_data
         self.on_open = on_open
         self.on_delete = on_delete
+        self.on_sync = on_sync
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.setStyleSheet("""
@@ -212,6 +214,10 @@ class SavedPlaylistCard(CardWidget):
         self.browse_btn = PrimaryPushButton(FluentIcon.CHEVRON_RIGHT, "Browse & Download", self)
         self.browse_btn.clicked.connect(self._handle_open)
 
+        self.sync_btn = ToolButton(FluentIcon.SYNC, self)
+        self.sync_btn.setToolTip("Sync Playlist (Check for new/removed tracks)")
+        self.sync_btn.clicked.connect(self._handle_sync)
+
         self.copy_btn = ToolButton(FluentIcon.COPY, self)
         self.copy_btn.setToolTip("Copy Spotify Link")
         self.copy_btn.clicked.connect(self._copy_link)
@@ -221,6 +227,7 @@ class SavedPlaylistCard(CardWidget):
         self.delete_btn.clicked.connect(self._handle_delete)
 
         action_layout.addWidget(self.browse_btn)
+        action_layout.addWidget(self.sync_btn)
         action_layout.addWidget(self.copy_btn)
         action_layout.addWidget(self.delete_btn)
 
@@ -270,6 +277,10 @@ class SavedPlaylistCard(CardWidget):
         if self.on_delete:
             self.on_delete(self.data.get("id"))
 
+    def _handle_sync(self):
+        if self.on_sync:
+            self.on_sync(self.data.get("id"))
+
     def _copy_link(self):
         url = self.data.get("spotify_url", "")
         if url:
@@ -291,6 +302,8 @@ class PlaylistsView(QWidget):
     sig_playlist_saved = pyqtSignal(dict)
     sig_save_failed = pyqtSignal(str)
     sig_auth_done = pyqtSignal(bool, str)
+    sig_sync_done = pyqtSignal(str, dict)
+    sig_sync_failed = pyqtSignal(str, str)
 
     def __init__(
         self,
@@ -487,6 +500,11 @@ class PlaylistsView(QWidget):
         detail_info_layout.addWidget(self.detail_progress_bar)
         banner_layout.addLayout(detail_info_layout, 1)
 
+        self.detail_sync_btn = PushButton(FluentIcon.SYNC, "Sync Playlist", self.banner_card)
+        self.detail_sync_btn.setToolTip("Check for newly added or removed songs from online source")
+        self.detail_sync_btn.clicked.connect(self._handle_detail_sync)
+        banner_layout.addWidget(self.detail_sync_btn)
+
         detail_layout.addWidget(self.banner_card)
 
         # 2. Batch Download Controls Panel
@@ -673,6 +691,8 @@ class PlaylistsView(QWidget):
         self.sig_playlist_saved.connect(self._on_playlist_saved)
         self.sig_save_failed.connect(self._on_save_failed)
         self.sig_auth_done.connect(self._on_auth_done)
+        self.sig_sync_done.connect(self._on_sync_done)
+        self.sig_sync_failed.connect(self._on_sync_failed)
 
         # Live bridging from download queue
         self.bridge.sig_completed.connect(self._handle_bridge_completed)
@@ -1013,6 +1033,7 @@ class PlaylistsView(QWidget):
                 playlist_data=p,
                 on_open=self._open_playlist_detail,
                 on_delete=self._delete_playlist,
+                on_sync=self._sync_playlist,
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
@@ -1030,6 +1051,94 @@ class PlaylistsView(QWidget):
             parent=self
         )
         self.reload_playlists()
+
+    def _handle_detail_sync(self):
+        if self.current_playlist_id:
+            self._sync_playlist(self.current_playlist_id)
+
+    def _sync_playlist(self, playlist_id: str):
+        if not playlist_id:
+            return
+        playlists = self.archive.get_saved_playlists()
+        target_pl = next((p for p in playlists if str(p.get("id")) == str(playlist_id)), None)
+        if not target_pl:
+            return
+
+        pl_url = target_pl.get("spotify_url", "")
+        if not pl_url:
+            InfoBar.warning(
+                title="Cannot Sync",
+                content="No source link recorded for this saved playlist.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=3500,
+                parent=self
+            )
+            return
+
+        pl_name = target_pl.get("name", "Playlist")
+        InfoBar.info(
+            title="Syncing Playlist",
+            content=f"Fetching latest tracks for '{pl_name}'...",
+            orient=Qt.Orientation.Horizontal,
+            position=InfoBarPosition.TOP,
+            duration=3500,
+            parent=self
+        )
+
+        def sync_worker():
+            try:
+                if SpotifyClient.parse_url(pl_url):
+                    self.spotify_client.update_credentials(
+                        client_id=config.get("spotify.client_id", ""),
+                        client_secret=config.get("spotify.client_secret", "")
+                    )
+                    tracks = self.spotify_client.resolve(pl_url)
+                else:
+                    ytdlp_engine = getattr(self.qm.engine, "ytdlp", None)
+                    if not ytdlp_engine:
+                        from core.ytdlp_engine import YtdlpEngine
+                        ytdlp_engine = YtdlpEngine()
+                    tracks = ytdlp_engine.extract_from_url_or_search(pl_url)
+
+                if not tracks:
+                    self.sig_sync_failed.emit(playlist_id, "Could not retrieve songs from online source.")
+                    return
+
+                res = self.archive.sync_saved_playlist(playlist_id, tracks)
+                self.sig_sync_done.emit(playlist_id, res)
+            except Exception as e:
+                self.sig_sync_failed.emit(playlist_id, str(e))
+
+        threading.Thread(target=sync_worker, daemon=True, name=f"SyncPlaylist_{playlist_id}").start()
+
+    def _on_sync_done(self, playlist_id: str, summary: Dict[str, Any]):
+        added = summary.get("added", 0)
+        removed = summary.get("removed", 0)
+        total = summary.get("total", 0)
+        InfoBar.success(
+            title="Playlist Synced",
+            content=f"Sync complete: {added} new track(s) added, {removed} removed. Total tracks: {total}.",
+            orient=Qt.Orientation.Horizontal,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+            parent=self
+        )
+        self.reload_playlists()
+        if str(self.current_playlist_id) == str(playlist_id):
+            updated_pl = next((p for p in self.archive.get_saved_playlists() if str(p.get("id")) == str(playlist_id)), None)
+            if updated_pl:
+                self._open_playlist_detail(updated_pl)
+
+    def _on_sync_failed(self, playlist_id: str, err_msg: str):
+        InfoBar.error(
+            title="Sync Failed",
+            content=f"Error syncing playlist tracks: {err_msg}",
+            orient=Qt.Orientation.Horizontal,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+            parent=self
+        )
 
     # -------------------------------------------------------------
     # Detail View Logic
@@ -1475,7 +1584,11 @@ class PlaylistsView(QWidget):
             return
 
         if item.status == "Completed" and item.output_path and os.path.isfile(item.output_path):
-            os.startfile(item.output_path)
+            main_win = self.window()
+            if hasattr(main_win, "play_audio_track"):
+                main_win.play_audio_track(item.output_path, item.track, item.quality_badge)
+            else:
+                os.startfile(item.output_path)
         elif item.status == "Pending":
             # Quick download single track
             t = item.track
@@ -1516,6 +1629,10 @@ class PlaylistsView(QWidget):
             }
         """)
 
+        act_play = None
+        if item.status == "Completed" and item.output_path and os.path.isfile(item.output_path):
+            act_play = menu.addAction("Play Track")
+
         act_download = menu.addAction("Download This Track")
         act_copy_title = menu.addAction("Copy Title & Artist")
         act_copy_url = menu.addAction("Copy Spotify URL")
@@ -1541,7 +1658,16 @@ class PlaylistsView(QWidget):
             act_reset = menu.addAction("Reset Status to Pending")
 
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
-        if action == act_download:
+        if act_play and action == act_play:
+            if item.output_path and os.path.isfile(item.output_path):
+                main_win = self.window()
+                if hasattr(main_win, "play_audio_track"):
+                    main_win.play_audio_track(item.output_path, item.track, item.quality_badge)
+                else:
+                    os.startfile(item.output_path)
+            else:
+                InfoBar.warning(title="File Missing", content="The audio file was not found on disk.", parent=self)
+        elif action == act_download:
             t = item.track
             if self.current_playlist_data:
                 t.collection_name = self.current_playlist_data.get("name", "Playlist")

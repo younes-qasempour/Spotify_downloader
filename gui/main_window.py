@@ -3,11 +3,12 @@ import sys
 import logging
 from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QKeySequence, QShortcut, QColor
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QVBoxLayout
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, FluentIcon,
     setTheme, Theme, isDarkTheme
 )
+from gui.player_bar import MiniPlayerBar
 
 from core.queue_manager import DownloadQueueManager
 from core.musilon import MusilonEngine
@@ -137,6 +138,24 @@ class MainWindow(FluentWindow):
         self.paste_shortcut = QShortcut(QKeySequence("Ctrl+V"), self)
         self.paste_shortcut.activated.connect(self._on_paste_shortcut)
 
+        # Mini-Player Dock
+        self.player_bar = MiniPlayerBar(self)
+        try:
+            right_item = self.layout().itemAt(1)
+            if right_item and right_item.layout():
+                right_lay = right_item.layout()
+                v_player_lay = QVBoxLayout()
+                v_player_lay.setContentsMargins(0, 0, 0, 0)
+                v_player_lay.setSpacing(0)
+                v_player_lay.addWidget(self.stackedWidget, 1)
+                v_player_lay.addWidget(self.player_bar, 0)
+                right_lay.addLayout(v_player_lay)
+        except Exception as e_dock:
+            logger.debug(f"Could not dock player bar into layout: {e_dock}")
+
+        # Windows 11 System Tray Icon & Toasts
+        self._init_system_tray(icon_path)
+
         # Ensure Queue View is selected on initial display
         self.switchTo(self.queue_view)
 
@@ -166,16 +185,90 @@ class MainWindow(FluentWindow):
             NavigationItemPosition.BOTTOM
         )
 
+    def _init_system_tray(self, icon_path):
+        """Initializes Windows 11 System Tray icon with quick actions and toast notifications."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon = None
+            return
+
+        self.tray_icon = QSystemTrayIcon(self)
+        if icon_path and icon_path.exists():
+            self.tray_icon.setIcon(QIcon(str(icon_path)))
+        else:
+            self.tray_icon.setIcon(self.windowIcon())
+        self.tray_icon.setToolTip("Flacify — High-Fidelity Audio Scraper")
+
+        # Context Menu
+        menu = QMenu()
+        open_act = menu.addAction("Open Flacify")
+        open_act.triggered.connect(self._restore_from_tray)
+
+        menu.addSeparator()
+
+        pause_act = menu.addAction("Pause Downloads")
+        pause_act.triggered.connect(self.queue_manager.pause)
+
+        resume_act = menu.addAction("Resume Downloads")
+        resume_act.triggered.connect(self.queue_manager.resume)
+
+        menu.addSeparator()
+
+        exit_act = menu.addAction("Exit")
+        exit_act.triggered.connect(self._quit_application)
+
+        self.tray_icon.setContextMenu(menu)
+        self.tray_icon.activated.connect(self._on_tray_activated)
+        self.tray_icon.show()
+
+    def _restore_from_tray(self):
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+            if self.isVisible():
+                if self.isMinimized():
+                    self.showNormal()
+                self.activateWindow()
+                self.raise_()
+            else:
+                self.showNormal()
+                self.activateWindow()
+                self.raise_()
+
+    def _quit_application(self):
+        if hasattr(self, "player_bar"):
+            self.player_bar.player.stop()
+        self.close()
+        QApplication.quit()
+
+    def play_audio_track(self, file_path: str, track: Optional[TrackMetadata] = None, quality_badge: str = ""):
+        """Plays track via the built-in mini-player dock with synchronized lyrics."""
+        if hasattr(self, "player_bar"):
+            self.player_bar.play_track(file_path, track, quality_badge)
+
     def showEvent(self, event):
         super().showEvent(event)
         self.raise_()
         self.activateWindow()
 
     def _on_track_completed(self, track_id: str, path: str):
+        title_str = os.path.basename(path)
         for it in self.queue_manager.get_items():
             if it.track.id == track_id:
                 self.completed_view.add_completed_item(it)
+                title_str = f"{it.track.title} — {it.track.artist_str}"
                 break
+
+        # Show desktop notification via System Tray
+        if getattr(self, "tray_icon", None) and self.tray_icon.isVisible():
+            self.tray_icon.showMessage(
+                "Download Completed",
+                title_str,
+                QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
 
     def _show_musilon_limit_dialog(self, track, item, decision_callback):
         from qfluentwidgets import MessageBox
@@ -228,5 +321,7 @@ class MainWindow(FluentWindow):
             get_genre_resolver().save_cache()
         except Exception as e_cache:
             logger.debug(f"Error saving genre cache on exit: {e_cache}")
+        if hasattr(self, "player_bar"):
+            self.player_bar.player.stop()
         self.queue_manager.stop()
         super().closeEvent(event)

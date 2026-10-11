@@ -6,7 +6,7 @@ import requests
 from PIL import Image
 import mutagen
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TPOS, TSRC, USLT, APIC, COMM, TCON
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TPOS, TSRC, USLT, APIC, COMM, TCON, TXXX
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
@@ -30,6 +30,13 @@ class AudioTagger:
 
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
+        try:
+            from core.config import config
+            proxy = config.get("download.proxy", "").strip()
+            if proxy:
+                self.session.proxies = {"http": proxy, "https": proxy}
+        except Exception:
+            pass
 
     @staticmethod
     def _normalize_crlf(text: Optional[str]) -> str:
@@ -82,17 +89,31 @@ class AudioTagger:
         synced_lyrics = self._normalize_crlf(synced_lyrics)
 
         try:
+            success = False
             if ext == ".flac":
-                return self._tag_flac(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
+                success = self._tag_flac(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             elif ext == ".mp3":
-                return self._tag_mp3(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
+                success = self._tag_mp3(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             elif ext == ".m4a":
-                return self._tag_m4a(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
+                success = self._tag_m4a(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             elif ext in (".opus", ".ogg"):
-                return self._tag_opus(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
+                success = self._tag_opus(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             else:
                 logger.warning(f"Unsupported extension for tagging: {ext}")
                 return False
+
+            if success:
+                try:
+                    from core.config import config
+                    if config.get("download.replaygain_tagging", False):
+                        from core.utils import calculate_replaygain
+                        rg = calculate_replaygain(file_path)
+                        if rg:
+                            self.tag_replaygain(file_path, rg[0], rg[1])
+                except Exception as e_rg:
+                    logger.debug(f"ReplayGain tagging note: {e_rg}")
+
+            return success
         except Exception as e:
             logger.error(f"Failed to tag {file_path}: {e}")
             return False
@@ -546,4 +567,56 @@ class AudioTagger:
         return False
 
     tag_genre_in_place = tag_genre_only
+
+    def tag_replaygain(self, file_path: str, gain_str: str, peak_str: str) -> bool:
+        """
+        Embeds ReplayGain 2.0 loudness normalization tags into audio container.
+        Compatible with foobar2000, MusicBee, Poweramp, and VLC.
+        """
+        if not file_path or not os.path.isfile(file_path):
+            return False
+
+        ext = os.path.splitext(file_path)[1].lower()
+        try:
+            if ext == ".flac":
+                audio = FLAC(file_path)
+                audio["REPLAYGAIN_TRACK_GAIN"] = gain_str
+                audio["REPLAYGAIN_TRACK_PEAK"] = peak_str
+                audio.save()
+                logger.info(f"Embedded ReplayGain tags in FLAC: {gain_str}, peak {peak_str}")
+                return True
+            elif ext == ".mp3":
+                try:
+                    audio = ID3(file_path)
+                except Exception:
+                    audio = ID3()
+                audio.delall("TXXX:replaygain_track_gain")
+                audio.delall("TXXX:replaygain_track_peak")
+                audio.add(TXXX(encoding=3, desc='replaygain_track_gain', text=gain_str))
+                audio.add(TXXX(encoding=3, desc='replaygain_track_peak', text=peak_str))
+                audio.save(file_path, v2_version=4)
+                logger.info(f"Embedded ReplayGain tags in MP3: {gain_str}, peak {peak_str}")
+                return True
+            elif ext == ".m4a":
+                audio = MP4(file_path)
+                audio["----:com.apple.iTunes:replaygain_track_gain"] = gain_str.encode("utf-8")
+                audio["----:com.apple.iTunes:replaygain_track_peak"] = peak_str.encode("utf-8")
+                audio.save()
+                logger.info(f"Embedded ReplayGain tags in M4A: {gain_str}, peak {peak_str}")
+                return True
+            elif ext in (".opus", ".ogg"):
+                try:
+                    audio = OggOpus(file_path)
+                except Exception:
+                    from mutagen.oggvorbis import OggVorbis
+                    audio = OggVorbis(file_path)
+                audio["REPLAYGAIN_TRACK_GAIN"] = gain_str
+                audio["REPLAYGAIN_TRACK_PEAK"] = peak_str
+                audio.save()
+                logger.info(f"Embedded ReplayGain tags in Opus/OGG: {gain_str}, peak {peak_str}")
+                return True
+        except Exception as e:
+            logger.debug(f"Error embedding ReplayGain tags in {file_path}: {e}")
+        return False
+
 

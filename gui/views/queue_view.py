@@ -90,7 +90,7 @@ class QueueView(QWidget):
         input_layout.setSpacing(10)
 
         self.url_input = LineEdit(self)
-        self.url_input.setPlaceholderText("Paste Spotify track, album, or playlist URL (e.g. https://open.spotify.com/track/...)")
+        self.url_input.setPlaceholderText("Paste Spotify / YouTube link, or enter song title & artist to search...")
         self.url_input.setClearButtonEnabled(True)
         self.url_input.returnPressed.connect(self._on_enqueue_clicked)
 
@@ -211,51 +211,79 @@ class QueueView(QWidget):
             return
 
         parsed = SpotifyClient.parse_url(url)
-        if not parsed:
-            InfoBar.error(
-                title="Invalid Link",
-                content="The link provided is not a supported Spotify track, album, or playlist URL.",
+        if parsed:
+            entity_type, entity_id = parsed
+            self.enqueue_btn.setEnabled(False)
+            self.enqueue_btn.setText("Analyzing...")
+            InfoBar.info(
+                title="Analyzing Spotify Link",
+                content="Resolving metadata and track details...",
                 orient=Qt.Orientation.Horizontal,
                 position=InfoBarPosition.TOP,
-                duration=3500,
+                duration=2500,
                 parent=self
             )
-            return
 
-        entity_type, entity_id = parsed
+            def resolve_worker():
+                try:
+                    tracks = self.spotify_client.resolve(url)
+                    if tracks and entity_type in ("playlist", "album"):
+                        try:
+                            pl_name = tracks[0].collection_name or ("Spotify Playlist" if entity_type == "playlist" else "Spotify Album")
+                            pl_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
+                            self.qm.archive.save_playlist(
+                                name=pl_name,
+                                spotify_url=url,
+                                cover_url=pl_cover,
+                                tracks=tracks,
+                                playlist_id=entity_id
+                            )
+                        except Exception as e_save:
+                            pass
+                    self.sig_resolved_tracks.emit(tracks)
+                except Exception as e:
+                    self.sig_resolve_error.emit(str(e))
 
-        self.enqueue_btn.setEnabled(False)
-        self.enqueue_btn.setText("Analyzing...")
-        InfoBar.info(
-            title="Analyzing Spotify Link",
-            content="Resolving metadata and track details...",
-            orient=Qt.Orientation.Horizontal,
-            position=InfoBarPosition.TOP,
-            duration=2500,
-            parent=self
-        )
+            threading.Thread(target=resolve_worker, daemon=True).start()
+        else:
+            # Universal ingestion via yt-dlp (YouTube URL, playlist, or song search)
+            self.enqueue_btn.setEnabled(False)
+            self.enqueue_btn.setText("Analyzing...")
+            disp_query = url if len(url) <= 40 else f"{url[:37]}..."
+            InfoBar.info(
+                title="Searching / Extracting",
+                content=f"Searching or extracting audio tracks for '{disp_query}'...",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=2500,
+                parent=self
+            )
 
-        def resolve_worker():
-            try:
-                tracks = self.spotify_client.resolve(url)
-                if tracks and entity_type in ("playlist", "album"):
-                    try:
-                        pl_name = tracks[0].collection_name or ("Spotify Playlist" if entity_type == "playlist" else "Spotify Album")
-                        pl_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
-                        self.qm.archive.save_playlist(
-                            name=pl_name,
-                            spotify_url=url,
-                            cover_url=pl_cover,
-                            tracks=tracks,
-                            playlist_id=entity_id
-                        )
-                    except Exception as e_save:
-                        pass
-                self.sig_resolved_tracks.emit(tracks)
-            except Exception as e:
-                self.sig_resolve_error.emit(str(e))
+            def yt_resolve_worker():
+                try:
+                    ytdlp_engine = getattr(self.qm.engine, "ytdlp", None)
+                    if not ytdlp_engine:
+                        from core.ytdlp_engine import YtdlpEngine
+                        ytdlp_engine = YtdlpEngine()
+                    tracks = ytdlp_engine.extract_from_url_or_search(url)
+                    if tracks and any(t.collection_type == "playlist" for t in tracks):
+                        try:
+                            pl_name = tracks[0].collection_name or "YouTube Playlist"
+                            pl_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
+                            self.qm.archive.save_playlist(
+                                name=pl_name,
+                                spotify_url=url if url.startswith("http") else "",
+                                cover_url=pl_cover,
+                                tracks=tracks,
+                                playlist_id=url if url.startswith("http") else ""
+                            )
+                        except Exception:
+                            pass
+                    self.sig_resolved_tracks.emit(tracks)
+                except Exception as e:
+                    self.sig_resolve_error.emit(str(e))
 
-        threading.Thread(target=resolve_worker, daemon=True).start()
+            threading.Thread(target=yt_resolve_worker, daemon=True).start()
 
     def _on_tracks_resolved(self, tracks):
         self.enqueue_btn.setEnabled(True)
@@ -265,7 +293,7 @@ class QueueView(QWidget):
         if not tracks:
             InfoBar.warning(
                 title="No Tracks Found",
-                content="No tracks could be extracted from this Spotify link.",
+                content="No tracks could be found or extracted from this link or query.",
                 orient=Qt.Orientation.Horizontal,
                 position=InfoBarPosition.TOP,
                 duration=3000,
@@ -275,7 +303,8 @@ class QueueView(QWidget):
 
         self.qm.enqueue(tracks)
 
-        if getattr(self.spotify_client, "last_was_truncated", False) or (not self.spotify_client.has_credentials() and len(tracks) == 100):
+        has_spotify = any(not getattr(t, "id", "").startswith("yt_") for t in tracks)
+        if has_spotify and (getattr(self.spotify_client, "last_was_truncated", False) or (not self.spotify_client.has_credentials() and len(tracks) == 100)):
             InfoBar.warning(
                 title="Playlist Capped at 100 Tracks (Guest Limit)",
                 content="Added 100 tracks. In guest mode, Spotify limits playlist embeds to 100 songs max. Add your free Spotify API keys in Settings to enqueue all 1,000+ songs.",

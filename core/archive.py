@@ -291,6 +291,22 @@ class ArchiveManager:
             finally:
                 conn.close()
 
+    def checkpoint_wal(self) -> bool:
+        """Executes PRAGMA wal_checkpoint(TRUNCATE) to keep SQLite database files lean and fast."""
+        with self._db_lock:
+            try:
+                conn = self._get_connection()
+                try:
+                    with conn:
+                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                    logger.debug("Successfully checkpointed SQLite WAL log.")
+                    return True
+                finally:
+                    conn.close()
+            except Exception as e:
+                logger.debug(f"SQLite WAL checkpoint note: {e}")
+                return False
+
     @staticmethod
     def infer_badge_from_file(file_path: str) -> Tuple[str, str]:
         """
@@ -1575,6 +1591,70 @@ class ArchiveManager:
                 return {}
             finally:
                 conn.close()
+
+    def checkpoint_wal(self):
+        """Forces SQLite to truncate and checkpoint the WAL journal into the main DB file."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                logger.debug("SQLite WAL checkpoint truncated successfully.")
+            except Exception as e:
+                logger.debug(f"SQLite WAL checkpoint failed: {e}")
+            finally:
+                conn.close()
+
+    def sync_saved_playlist(self, playlist_id: str, new_tracks: List[TrackMetadata]) -> Dict[str, Any]:
+        """
+        Synchronizes an existing saved playlist with fresh tracks from Spotify/online source.
+        Inserts newly added tracks with pending status, keeps downloaded tracks intact,
+        removes tracks deleted from playlist, and returns dict: {"added": int, "removed": int, "total": int}.
+        """
+        if not playlist_id or not new_tracks:
+            return {"added": 0, "removed": 0, "total": 0}
+
+        with self._db_lock:
+            existing_tracks = self.get_saved_playlist_tracks(playlist_id)
+            existing_ids = {t["spotify_id"] for t in existing_tracks}
+            new_ids = {t.id for t in new_tracks}
+
+            added_count = len(new_ids - existing_ids)
+            removed_ids = existing_ids - new_ids
+            removed_count = len(removed_ids)
+
+            if removed_ids:
+                conn = self._get_connection()
+                try:
+                    placeholders = ",".join("?" for _ in removed_ids)
+                    conn.execute(
+                        f"DELETE FROM saved_playlist_tracks WHERE playlist_id = ? AND spotify_id IN ({placeholders})",
+                        [playlist_id] + list(removed_ids)
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+            pl = self.get_saved_playlist(playlist_id)
+            name = pl.get("name", "Synced Playlist") if pl else "Synced Playlist"
+            spotify_url = pl.get("spotify_url", "") if pl else ""
+            cover_url = pl.get("cover_url", "") if pl else (new_tracks[0].cover_url if new_tracks else "")
+
+            self.save_playlist(
+                name=name,
+                spotify_url=spotify_url,
+                cover_url=cover_url,
+                tracks=new_tracks,
+                playlist_id=playlist_id
+            )
+
+            updated_tracks = self.get_saved_playlist_tracks(playlist_id)
+            after_count = len(updated_tracks)
+            logger.info(f"Synced playlist '{name}': {added_count} new track(s) added, {removed_count} removed, total {after_count}.")
+            return {
+                "added": added_count,
+                "removed": removed_count,
+                "total": after_count
+            }
 
     def get_saved_playlists(self) -> List[Dict[str, Any]]:
         """Returns all saved playlists with aggregate statistics."""

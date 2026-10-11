@@ -57,7 +57,7 @@ PERSIAN_ARTIST_ALIASES: Dict[str, List[str]] = {
     "shadmehr aghili": ["شادمهر عقیلی", "شادمهر", "shadmehr"],
     "hassan shamaizadeh": ["شماعی زاده", "حسن شماعی زاده", "shamaizadeh"],
     "morteza pashaei": ["مرتضی پاشایی", "pashaei"],
-    "salar aghili": ["سالar عقیلی", "aghili"],
+    "salar aghili": ["سالار عقیلی", "aghili"],
     "mohammad esfahani": ["محمد اصفهانی", "esfahani"],
     "delkash": ["دلکش"],
     "marzieh": ["مرضیه"],
@@ -584,6 +584,22 @@ class YtdlpEngine:
         if cancel_check and cancel_check():
             return None
 
+        # Check if direct YouTube video track
+        track_id = getattr(track, "id", "")
+        if track_id.startswith("yt_"):
+            vid_id = track_id[3:]
+            yt_url = f"https://www.youtube.com/watch?v={vid_id}"
+            dur_sec = int((getattr(track, "duration_ms", 0) or 0) / 1000)
+            logger.info(f"Direct YouTube ID detected for '{track.title}' ({vid_id}); bypassing search.")
+            return YtdlpSource(
+                video_id=vid_id,
+                title=track.title,
+                duration=dur_sec,
+                url=yt_url,
+                audio_format="opus",
+                candidate_urls=[yt_url]
+            )
+
         clean_raw_title = clean_watermarks(track.title).strip()
         core_title, feat_artists, flags = self._clean_title_for_search(clean_raw_title)
         artist = track.primary_artist.strip()
@@ -932,3 +948,141 @@ class YtdlpEngine:
 
         logger.error("All YouTube download candidates failed.")
         return None
+
+    def _entry_to_track_metadata(
+        self,
+        entry: Dict[str, Any],
+        collection_name: str = "Singles",
+        collection_type: str = "track",
+        track_number: int = 1
+    ) -> TrackMetadata:
+        """Converts a yt-dlp extracted entry dictionary into a TrackMetadata object."""
+        vid_id = str(entry.get("id") or "").strip()
+        raw_title = str(entry.get("title") or "Unknown Title").strip()
+
+        uploader = (
+            entry.get("artist")
+            or entry.get("uploader")
+            or entry.get("channel")
+            or ""
+        )
+        if isinstance(uploader, str) and uploader.endswith(" - Topic"):
+            uploader = uploader[:-8].strip()
+
+        title = raw_title
+        artist = uploader or "Unknown Artist"
+
+        for sep in [" - ", " – ", " — "]:
+            if sep in raw_title:
+                parts = raw_title.split(sep, 1)
+                cand_artist = parts[0].strip()
+                cand_title = parts[1].strip()
+                if cand_artist and cand_title:
+                    artist = cand_artist
+                    title = cand_title
+                break
+
+        title = clean_watermarks(title).strip()
+        title = re.sub(
+            r'[\(\[](?:official\s+(?:music\s+)?(?:video|audio)|lyrics?|4k|hd|remastered)[\)\]]',
+            '',
+            title,
+            flags=re.IGNORECASE
+        ).strip()
+        if not title:
+            title = raw_title
+
+        dur_sec = entry.get("duration") or 0
+        dur_ms = int(dur_sec * 1000)
+
+        cover_url = ""
+        thumbnails = entry.get("thumbnails")
+        if thumbnails and isinstance(thumbnails, list) and len(thumbnails) > 0:
+            cover_url = thumbnails[-1].get("url") or ""
+        if not cover_url:
+            cover_url = entry.get("thumbnail") or ""
+
+        album = entry.get("album") or (collection_name if collection_type != "track" else "Singles")
+
+        return TrackMetadata(
+            id=f"yt_{vid_id}",
+            title=title,
+            artists=[artist] if artist else ["Unknown Artist"],
+            album=album,
+            release_date=str(entry.get("release_year") or entry.get("upload_date") or ""),
+            duration_ms=dur_ms,
+            track_number=track_number,
+            cover_url=cover_url,
+            collection_type=collection_type,
+            collection_name=collection_name,
+            collection_cover_url=cover_url if collection_type != "track" else ""
+        )
+
+    def extract_from_url_or_search(
+        self,
+        query_or_url: str,
+        cancel_check: Optional[Callable[[], bool]] = None
+    ) -> List[TrackMetadata]:
+        """
+        Parses a YouTube video/playlist URL or plain-text search query into TrackMetadata items.
+        Supports:
+        - YouTube video URLs (e.g. https://www.youtube.com/watch?v=...)
+        - YouTube playlist URLs (e.g. https://www.youtube.com/playlist?list=...)
+        - Generic web audio URLs handled by yt-dlp
+        - Plain text search queries (e.g. 'Adele - Hello')
+        """
+        if cancel_check and cancel_check():
+            return []
+
+        text = query_or_url.strip()
+        if not text:
+            return []
+
+        is_url = text.startswith("http://") or text.startswith("https://")
+        fetch_target = text if is_url else f"ytsearch1:{text}"
+
+        opts = self._get_ydl_auth_opts()
+        opts.update({
+            "extract_flat": True,
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": True,
+        })
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                res = ydl.extract_info(fetch_target, download=False)
+
+            if not res:
+                return []
+
+            if cancel_check and cancel_check():
+                return []
+
+            if "entries" in res and res["entries"] is not None:
+                is_playlist = (res.get("_type") == "playlist") or ("playlist" in text.lower())
+                collection_name = (res.get("title") or "YouTube Playlist") if is_playlist else "Singles"
+                collection_type = "playlist" if is_playlist else "track"
+
+                tracks: List[TrackMetadata] = []
+                for idx, entry in enumerate(res["entries"], 1):
+                    if not entry:
+                        continue
+                    tracks.append(self._entry_to_track_metadata(
+                        entry,
+                        collection_name=collection_name,
+                        collection_type=collection_type,
+                        track_number=idx
+                    ))
+                return tracks
+            else:
+                return [self._entry_to_track_metadata(
+                    res,
+                    collection_name="Singles",
+                    collection_type="track",
+                    track_number=1
+                )]
+        except Exception as e:
+            logger.error(f"Failed to extract tracks from '{query_or_url}': {e}")
+            return []
+
