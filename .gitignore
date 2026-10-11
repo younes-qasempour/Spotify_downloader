@@ -37,6 +37,7 @@ Music/
 # Scratch, Cache & Temporary Testing
 cache/
 scratch/
+scripts/upload_release_asset.py
 *.log
 *.tmp
 
