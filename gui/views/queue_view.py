@@ -159,11 +159,6 @@ class QueueView(QWidget):
         self._init_ui()
         self._connect_signals()
 
-        # Clipboard auto-detect timer
-        self.clipboard_timer = QTimer(self)
-        self.clipboard_timer.timeout.connect(self._check_clipboard)
-        self.clipboard_timer.start(2000)
-
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(24, 18, 24, 18)
@@ -475,15 +470,6 @@ class QueueView(QWidget):
     # -------------------------------------------------------------------------
     # Clipboard & Ingestion Handlers
     # -------------------------------------------------------------------------
-    def _check_clipboard(self):
-        clipboard_text = QApplication.clipboard().text().strip()
-        if SpotifyClient.parse_url(clipboard_text):
-            if not self.url_input.text():
-                self.url_input.setPlaceholderText(f"📋 Spotify link in clipboard: {clipboard_text[:40]}... (Press Ctrl+V)")
-        else:
-            if not self.url_input.text():
-                self.url_input.setPlaceholderText("Paste Spotify / YouTube / SoundCloud link, or enter song title & artist to search...")
-
     def _paste_from_clipboard(self, *args):
         text = QApplication.clipboard().text().strip()
         if text:
