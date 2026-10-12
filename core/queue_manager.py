@@ -292,6 +292,23 @@ class DownloadQueueManager:
                 logger.debug(f"Could not update archive status on cancel: {e_arc}")
         logger.info(f"Cancelled track {track_id}")
 
+    def remove_track(self, track_id: str):
+        """Cancels track if running and removes it completely from queue tracking."""
+        with self._lock:
+            if track_id in self._items:
+                self._items[track_id].cancelled = True
+                del self._items[track_id]
+        logger.info(f"Removed track {track_id} from queue manager.")
+
+    def remove_tracks(self, track_ids: List[str]):
+        """Bulk removal of tracks from queue manager."""
+        with self._lock:
+            for tid in track_ids:
+                if tid in self._items:
+                    self._items[tid].cancelled = True
+                    del self._items[tid]
+        logger.info(f"Removed {len(track_ids)} tracks from queue manager.")
+
     def clear_completed(self):
         with self._lock:
             completed_ids = [tid for tid, it in self._items.items() if it.status == "Completed"]

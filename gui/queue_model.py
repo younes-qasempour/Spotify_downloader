@@ -7,13 +7,17 @@ from core.queue_manager import QueueItem
 class TrackQueueModel(QAbstractTableModel):
     """
     High-capacity virtualized data model for the download queue.
-    Supports thousands of rows with fast lookup and minimal memory overhead.
+    Supports thousands of rows with fast lookup, in-memory filtering,
+    batch additions, and zero UI lockup.
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._all_items: List[QueueItem] = []
         self.items: List[QueueItem] = []
         self._id_to_row: Dict[str, int] = {}
+        self.filter_query: str = ""
+        self.status_filter: str = "All"
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
@@ -35,85 +39,133 @@ class TrackQueueModel(QAbstractTableModel):
 
         return None
 
-    def add_item(self, item: QueueItem):
-        if item.track.id in self._id_to_row:
-            # Update existing row
-            row = self._id_to_row[item.track.id]
-            self.items[row] = item
-            self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
-            return
+    def set_filter(self, query: str = "", status: str = "All"):
+        self.filter_query = query
+        self.status_filter = status
+        self._apply_filter()
 
-        row = len(self.items)
-        self.beginInsertRows(QModelIndex(), row, row)
-        self.items.append(item)
-        self._id_to_row[item.track.id] = row
-        self.endInsertRows()
+    def _apply_filter(self):
+        query = self.filter_query.strip().lower()
+        status_f = self.status_filter.strip().lower()
+
+        filtered: List[QueueItem] = []
+        for it in self._all_items:
+            # 1. Status filter
+            if status_f != "all":
+                s = it.status.lower()
+                if status_f in ("active", "downloading") and s not in ("resolving", "downloading", "tagging", "fetching lyrics"):
+                    continue
+                elif status_f in ("queued", "pending") and s not in ("queued", "paused"):
+                    continue
+                elif status_f == "completed" and s != "completed":
+                    continue
+                elif status_f in ("failed", "stopped") and s not in ("failed", "cancelled", "stopped"):
+                    continue
+
+            # 2. Text query search
+            if query:
+                title = (it.track.title or "").lower()
+                artist = (it.track.artist_str or "").lower()
+                album = (it.track.album or "").lower()
+                if query not in title and query not in artist and query not in album:
+                    continue
+
+            filtered.append(it)
+
+        self.beginResetModel()
+        self.items = filtered
+        self._id_to_row = {it.track.id: idx for idx, it in enumerate(self.items)}
+        self.endResetModel()
+
+    def add_item(self, item: QueueItem):
+        existing_idx = next((i for i, it in enumerate(self._all_items) if it.track.id == item.track.id), -1)
+        if existing_idx >= 0:
+            self._all_items[existing_idx] = item
+        else:
+            self._all_items.append(item)
+        self._apply_filter()
 
     def add_items(self, new_items: List[QueueItem]):
-        """Vectorized batch insertion minimizing Qt layout recalculations for large playlists."""
+        """Vectorized batch insertion minimizing layout recalculations for large playlists."""
         if not new_items:
             return
 
-        to_insert: List[QueueItem] = []
+        existing_ids = {it.track.id: i for i, it in enumerate(self._all_items)}
         for item in new_items:
-            if item.track.id in self._id_to_row:
-                row = self._id_to_row[item.track.id]
-                self.items[row] = item
-                self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
+            if item.track.id in existing_ids:
+                self._all_items[existing_ids[item.track.id]] = item
             else:
-                to_insert.append(item)
+                self._all_items.append(item)
+                existing_ids[item.track.id] = len(self._all_items) - 1
 
-        if not to_insert:
+        self._apply_filter()
+
+    def remove_items(self, track_ids: List[str]):
+        """Removes a list of items by track ID from the model and rebuilds row index."""
+        if not track_ids:
             return
+        id_set = set(track_ids)
+        self._all_items = [it for it in self._all_items if it.track.id not in id_set]
+        self._apply_filter()
 
-        start_row = len(self.items)
-        end_row = start_row + len(to_insert) - 1
-
-        self.beginInsertRows(QModelIndex(), start_row, end_row)
-        for idx, item in enumerate(to_insert, start=start_row):
-            self.items.append(item)
-            self._id_to_row[item.track.id] = idx
-        self.endInsertRows()
+    def remove_item(self, track_id: str):
+        self.remove_items([track_id])
 
     def update_source(self, track_id: str, source_type: str, quality_badge: str):
+        for it in self._all_items:
+            if it.track.id == track_id:
+                it.source_type = source_type
+                it.quality_badge = quality_badge
+                break
         if track_id in self._id_to_row:
             row = self._id_to_row[track_id]
-            item = self.items[row]
-            item.source_type = source_type
-            item.quality_badge = quality_badge
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
     def update_progress(self, track_id: str, percent: float, speed_str: str, eta_str: str):
+        for it in self._all_items:
+            if it.track.id == track_id:
+                it.progress_percent = percent
+                it.speed_str = speed_str
+                it.eta_str = eta_str
+                break
         if track_id in self._id_to_row:
             row = self._id_to_row[track_id]
-            item = self.items[row]
-            item.progress_percent = percent
-            item.speed_str = speed_str
-            item.eta_str = eta_str
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
     def update_status(self, track_id: str, status: str):
-        if track_id in self._id_to_row:
+        for it in self._all_items:
+            if it.track.id == track_id:
+                it.status = status
+                break
+        if self.status_filter != "All":
+            self._apply_filter()
+        elif track_id in self._id_to_row:
             row = self._id_to_row[track_id]
-            item = self.items[row]
-            item.status = status
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
     def mark_completed(self, track_id: str, path: str):
-        if track_id in self._id_to_row:
+        for it in self._all_items:
+            if it.track.id == track_id:
+                it.status = "Completed"
+                it.output_path = path
+                it.progress_percent = 100.0
+                break
+        if self.status_filter != "All":
+            self._apply_filter()
+        elif track_id in self._id_to_row:
             row = self._id_to_row[track_id]
-            item = self.items[row]
-            item.status = "Completed"
-            item.output_path = path
-            item.progress_percent = 100.0
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
     def mark_failed(self, track_id: str, err: str):
-        if track_id in self._id_to_row:
+        for it in self._all_items:
+            if it.track.id == track_id:
+                it.status = "Failed"
+                it.error_message = err
+                break
+        if self.status_filter != "All":
+            self._apply_filter()
+        elif track_id in self._id_to_row:
             row = self._id_to_row[track_id]
-            item = self.items[row]
-            item.status = "Failed"
-            item.error_message = err
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
     def get_item(self, row: int) -> Optional[QueueItem]:
@@ -122,20 +174,16 @@ class TrackQueueModel(QAbstractTableModel):
         return None
 
     def clear(self):
-        self.beginResetModel()
-        self.items.clear()
-        self._id_to_row.clear()
-        self.endResetModel()
+        self._all_items.clear()
+        self._apply_filter()
 
     def clear_completed(self):
-        self.beginResetModel()
-        self.items = [it for it in self.items if it.status != "Completed"]
-        self._id_to_row = {it.track.id: idx for idx, it in enumerate(self.items)}
-        self.endResetModel()
+        self._all_items = [it for it in self._all_items if it.status != "Completed"]
+        self._apply_filter()
 
     def get_stats(self) -> Tuple[int, int, int, int]:
-        total = len(self.items)
-        active = sum(1 for it in self.items if it.status in ("Resolving", "Downloading", "Tagging", "Fetching Lyrics"))
-        completed = sum(1 for it in self.items if it.status == "Completed")
-        failed = sum(1 for it in self.items if it.status in ("Failed", "Cancelled", "Stopped"))
+        total = len(self._all_items)
+        active = sum(1 for it in self._all_items if it.status in ("Resolving", "Downloading", "Tagging", "Fetching Lyrics"))
+        completed = sum(1 for it in self._all_items if it.status == "Completed")
+        failed = sum(1 for it in self._all_items if it.status in ("Failed", "Cancelled", "Stopped"))
         return total, active, completed, failed

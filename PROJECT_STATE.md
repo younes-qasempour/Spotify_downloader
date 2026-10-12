@@ -456,6 +456,20 @@ d:\Spotify-Downloader\
   2. **Universal Audio Transcoder (`core/transcoder.py`, `core/resolver.py`, `gui/views/settings_view.py`):** Built standalone FFmpeg audio transcoder supporting Apple Lossless (`alac` `.m4a`), MP3 320 kbps CBR (`mp3`), FLAC 16/24-bit (`flac`), and Opus 256 kbps (`opus`), selectable directly in Settings.
   3. **ReplayGain 2.0 / EBU R128 Loudness Normalization:** Integrated EBU R128 audio analysis and non-destructive `REPLAYGAIN_TRACK_GAIN` / `REPLAYGAIN_TRACK_PEAK` tagging across FLAC, MP3, M4A, and Opus containers, with single-track and batch library processing.
 
+### 39. Professional Queue Tab Overhaul, Player Artwork Resolution, and Seek Handle Tracking
+- **Player Bar Bug Fixes (`gui/player_bar.py`):**
+  1. **Seek Handle Circle Desynchronization:** In QFluentWidgets `Slider`, the handle widget position is adjusted solely via `self.valueChanged.connect(self._adjustHandlePos)`. Calling `self.seek_slider.blockSignals(True)` blocked `valueChanged`, causing the circle handle to stay frozen while `paintEvent` drew the blue progress groove forward. Removed `blockSignals(True)` and added explicit `_adjustHandlePos()` synchronization.
+  2. **Player Album Artwork Blank / Placeholder:** Previously, `_load_cover()` only searched the file system folder for `cover.jpg` (which Flacify does not write into user music directories to keep them clean) and had `pass` for remote URLs. Implemented high-priority embedded tag artwork extraction via Mutagen (`extract_embedded_cover(file_path)`), collection cache lookup, and asynchronous remote thumbnail retrieval via `ThumbnailCache` with child widget cleanup.
+- **Queue Tab Overhaul & Professional Downloader Features (`gui/views/queue_view.py`, `gui/queue_model.py`, `core/queue_manager.py`):**
+  1. **Button Accelerator Glitch:** Escaped mnemonic ampersand (`"Analyze && Enqueue"`) so Qt does not swallow `&` as a shortcut key.
+  2. **Empty State Card:** Replaced barren black background with a dedicated `EmptyQueueWidget` showcasing supported formats, instructions, clipboard helpers, and quick action buttons.
+  3. **Master Overall Progress Bar:** Added dynamic progress bar above the table showing total batch percentage (`14 / 25 tracks (56%)`), active count, and failure status.
+  4. **Multi-Selection & Batch Actions:** Switched table selection mode to `ExtendedSelection` with `Delete` key removal and `Ctrl+A` select-all shortcuts.
+  5. **Remove from Queue:** Implemented `remove_track`/`remove_tracks` in `DownloadQueueManager` and `TrackQueueModel`.
+  6. **In-Queue Search & Filter Toolbar:** Real-time search query filtering and status dropdown (`All`, `Active`, `Queued`, `Completed`, `Failed`).
+  7. **Drag & Drop URL Ingestion:** Added `setAcceptDrops(True)` to `QueueView` for dragging media URLs directly into the application.
+  8. **Double-Click & Context Menu Enhancements:** Double-clicking completed items immediately initiates playback in the audio dock; context menu upgraded with Play Audio, Show in Explorer, Batch Retry, Batch Cancel, Remove from Queue, and Copy Link.
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:

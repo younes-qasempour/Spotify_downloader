@@ -15,6 +15,8 @@ from qfluentwidgets import (
 )
 
 from core.spotify_client import TrackMetadata
+from core.archive import resolve_collection_cover
+from gui.queue_delegate import extract_embedded_cover, ThumbnailCache
 from gui.styles import TEXT_MUTED, TEXT_PRIMARY, BG_CARD, SPOTIFY_EMERALD
 
 logger = logging.getLogger("gui.player_bar")
@@ -51,6 +53,10 @@ class MiniPlayerBar(QFrame):
         self.player.positionChanged.connect(self._on_player_position_changed)
         self.player.durationChanged.connect(self._on_player_duration_changed)
         self.player.playbackStateChanged.connect(self._on_playback_state_changed)
+
+        # Connect to thumbnail loader
+        self.thumb_cache = ThumbnailCache()
+        self.thumb_cache.emitter.sig_loaded.connect(self._on_thumbnail_loaded)
 
         self._init_ui()
         self.setVisible(False)  # Hidden until track is played
@@ -284,30 +290,77 @@ class MiniPlayerBar(QFrame):
 
         self.setVisible(True)
 
+    def _on_thumbnail_loaded(self, key: str):
+        if not self.isVisible():
+            return
+        current_cover = getattr(self.current_track, "local_cover", "") or (self.current_track.cover_url if self.current_track else "")
+        if key == current_cover or key == self.current_file_path:
+            pix = self.thumb_cache.get(key)
+            if pix and not pix.isNull():
+                for child in self.cover_label.findChildren(QWidget):
+                    child.deleteLater()
+                self.cover_label.setPixmap(pix)
+
     def _load_cover(self, file_path: str, track: Optional[TrackMetadata]):
-        loaded = False
-        # 1. Try local cover file in album/playlist folder
-        folder = os.path.dirname(file_path)
-        for cand in ["cover.jpg", "cover.png", "folder.jpg", "artwork.jpg"]:
-            cand_p = os.path.join(folder, cand)
-            if os.path.isfile(cand_p):
-                img = QImage(cand_p)
-                if not img.isNull():
+        # Clean any existing child icon widgets
+        for child in self.cover_label.findChildren(QWidget):
+            child.deleteLater()
+
+        # 1. High-priority: Extract embedded cover directly from audio tags (<2ms)
+        try:
+            art_bytes = extract_embedded_cover(file_path)
+            if art_bytes:
+                img = QImage()
+                if img.loadFromData(art_bytes) and not img.isNull():
                     self._set_cover_pixmap(img)
-                    loaded = True
-                    break
+                    return
+        except Exception as e:
+            logger.debug(f"Could not extract embedded cover: {e}")
 
-        if not loaded and track and track.cover_url:
-            # We don't block on network download; fallback to icon
-            pass
+        # 2. Check collection cover in app cache or music folder
+        try:
+            folder = os.path.dirname(file_path) if file_path else ""
+            if folder:
+                cached_collection = resolve_collection_cover(folder)
+                if cached_collection and os.path.isfile(cached_collection):
+                    img = QImage(cached_collection)
+                    if not img.isNull():
+                        self._set_cover_pixmap(img)
+                        return
 
-        if not loaded:
-            self.cover_label.clear()
-            icon_w = IconWidget(FluentIcon.MUSIC, self.cover_label)
-            icon_w.setFixedSize(28, 28)
-            icon_w.move(11, 11)
+                for cand in ["cover.jpg", "cover.png", "folder.jpg", "artwork.jpg"]:
+                    cand_p = os.path.join(folder, cand)
+                    if os.path.isfile(cand_p):
+                        img = QImage(cand_p)
+                        if not img.isNull():
+                            self._set_cover_pixmap(img)
+                            return
+        except Exception as e:
+            logger.debug(f"Could not check folder artwork: {e}")
+
+        # 3. Check track cover URL or local cover via async ThumbnailCache
+        thumb_key = ""
+        if track:
+            thumb_key = getattr(track, "local_cover", "") or track.cover_url or ""
+
+        if thumb_key:
+            pix = self.thumb_cache.get(thumb_key)
+            if pix and not pix.isNull():
+                self.cover_label.setPixmap(pix)
+                return
+            else:
+                self.thumb_cache.load_async(thumb_key)
+
+        # 4. Fallback: Sleek music note icon placeholder
+        self.cover_label.clear()
+        icon_w = IconWidget(FluentIcon.MUSIC, self.cover_label)
+        icon_w.setFixedSize(28, 28)
+        icon_w.move(11, 11)
+        icon_w.show()
 
     def _set_cover_pixmap(self, img: QImage):
+        for child in self.cover_label.findChildren(QWidget):
+            child.deleteLater()
         scaled = img.scaled(50, 50, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
         rounded = QPixmap(50, 50)
         rounded.fill(Qt.GlobalColor.transparent)
@@ -380,9 +433,9 @@ class MiniPlayerBar(QFrame):
         dur_ms = self.player.duration()
         if not self._user_seeking and dur_ms > 0:
             val = int(pos_ms / dur_ms * 1000)
-            self.seek_slider.blockSignals(True)
             self.seek_slider.setValue(val)
-            self.seek_slider.blockSignals(False)
+            if hasattr(self.seek_slider, "_adjustHandlePos"):
+                self.seek_slider._adjustHandlePos()
 
         # Update time label (mm:ss / mm:ss)
         curr_str = self._format_ms(pos_ms)
@@ -438,6 +491,8 @@ class MiniPlayerBar(QFrame):
             self.player.setPosition(target_pos)
 
     def _on_slider_value_changed(self, val: int):
+        if hasattr(self.seek_slider, "_adjustHandlePos"):
+            self.seek_slider._adjustHandlePos()
         if self._user_seeking:
             dur_ms = self.player.duration()
             if dur_ms > 0:
