@@ -22,32 +22,35 @@ TEXT_SECONDARY = QColor("#A7A7A7")
 TEXT_MUTED = QColor("#727272")
 
 # Quality Badges
-BADGE_FLAC_16_BG = QColor(212, 175, 55, 45)      # Amber / Gold Tint
+BADGE_FLAC_16_BG = QColor(212, 175, 55, 38)      # Amber / Gold Tint
 BADGE_FLAC_16_TEXT = QColor("#F5C518")
 
-BADGE_FLAC_24_BG = QColor(157, 78, 221, 45)     # Purple Tint
+BADGE_FLAC_24_BG = QColor(157, 78, 221, 38)     # Luxury Purple Tint
 BADGE_FLAC_24_TEXT = QColor("#C77DFF")
 
-BADGE_320K_BG = QColor(29, 185, 84, 45)         # Spotify Green Tint
+BADGE_320K_BG = QColor(29, 185, 84, 38)         # Spotify Emerald Tint
 BADGE_320K_TEXT = QColor("#1ED760")
 
-BADGE_YTM_BG = QColor(255, 71, 126, 45)          # Coral Tint
-BADGE_YTM_TEXT = QColor("#FF758F")
+BADGE_YTM_BG = QColor(239, 68, 68, 38)          # YouTube Red Tint
+BADGE_YTM_TEXT = QColor("#F87171")
 
-# Status Pill Colors
+BADGE_OPUS_BG = QColor(14, 165, 233, 38)        # Opus Sky Blue Tint
+BADGE_OPUS_TEXT = QColor("#38BDF8")
+
+# Status Pill Colors (Background, Text)
 STATUS_COLORS = {
-    "Queued": (QColor(136, 136, 136, 40), QColor("#AAAAAA")),
-    "Resolving": (QColor(59, 130, 246, 40), QColor("#60A5FA")),
-    "Downloading": (QColor(16, 185, 129, 40), QColor("#34D399")),
-    "Tagging": (QColor(245, 158, 11, 40), QColor("#FBBF24")),
-    "Fetching Lyrics": (QColor(139, 92, 246, 40), QColor("#A78BFA")),
-    "Completed": (QColor(29, 185, 84, 40), QColor("#1ED760")),
-    "Paused": (QColor(234, 179, 8, 40), QColor("#EAB308")),
-    "Stopped": (QColor(249, 115, 22, 40), QColor("#F97316")),
-    "Failed": (QColor(239, 68, 68, 40), QColor("#F87171")),
-    "Cancelled": (QColor(107, 114, 128, 40), QColor("#9CA3AF")),
-    "Pending": (QColor(107, 114, 128, 40), QColor("#9CA3AF")),
-    "Saved": (QColor(107, 114, 128, 40), QColor("#9CA3AF")),
+    "Queued": (QColor(255, 255, 255, 14), QColor("#A7A7A7")),
+    "Resolving": (QColor(59, 130, 246, 32), QColor("#60A5FA")),
+    "Downloading": (QColor(16, 185, 129, 32), QColor("#34D399")),
+    "Tagging": (QColor(245, 158, 11, 32), QColor("#FBBF24")),
+    "Fetching Lyrics": (QColor(139, 92, 246, 32), QColor("#A78BFA")),
+    "Completed": (QColor(29, 185, 84, 32), QColor("#1ED760")),
+    "Paused": (QColor(234, 179, 8, 32), QColor("#EAB308")),
+    "Stopped": (QColor(249, 115, 22, 32), QColor("#F97316")),
+    "Failed": (QColor(239, 68, 68, 32), QColor("#F87171")),
+    "Cancelled": (QColor(107, 114, 128, 28), QColor("#9CA3AF")),
+    "Pending": (QColor(107, 114, 128, 28), QColor("#9CA3AF")),
+    "Saved": (QColor(107, 114, 128, 28), QColor("#9CA3AF")),
 }
 
 # Progress Bar

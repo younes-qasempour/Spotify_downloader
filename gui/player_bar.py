@@ -36,10 +36,13 @@ class MiniPlayerBar(QFrame):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setObjectName("mini_player_bar")
-        self.setFixedHeight(82)
+        self.setFixedHeight(88)
 
         self.current_file_path: Optional[str] = None
         self.current_track: Optional[TrackMetadata] = None
+        self.current_quality_badge: str = ""
+        self.playlist: List[Any] = []
+        self.current_index: int = -1
         self.lyrics_timeline: List[Tuple[int, str]] = []  # List of (timestamp_ms, text)
         self.last_lyric_idx: int = -1
         self._user_seeking: bool = False
@@ -53,6 +56,7 @@ class MiniPlayerBar(QFrame):
         self.player.positionChanged.connect(self._on_player_position_changed)
         self.player.durationChanged.connect(self._on_player_duration_changed)
         self.player.playbackStateChanged.connect(self._on_playback_state_changed)
+        self.player.mediaStatusChanged.connect(self._on_media_status_changed)
 
         # Connect to thumbnail loader
         self.thumb_cache = ThumbnailCache()
@@ -64,13 +68,13 @@ class MiniPlayerBar(QFrame):
     def _init_ui(self):
         self.setStyleSheet("""
             QFrame#mini_player_bar {
-                background-color: #1e1e1e;
+                background-color: #1a1a1a;
                 border-top: 1px solid rgba(255, 255, 255, 0.10);
             }
         """)
 
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(18, 8, 18, 8)
+        main_layout.setContentsMargins(18, 6, 18, 6)
         main_layout.setSpacing(16)
 
         # -------------------------------------------------------------
@@ -81,11 +85,11 @@ class MiniPlayerBar(QFrame):
         left_layout.setContentsMargins(0, 0, 0, 0)
 
         self.cover_label = QLabel(self)
-        self.cover_label.setFixedSize(50, 50)
+        self.cover_label.setFixedSize(52, 52)
         self.cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.cover_label.setStyleSheet("""
             QLabel {
-                background-color: #2a2a2a;
+                background-color: #262626;
                 border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 6px;
             }
@@ -98,7 +102,8 @@ class MiniPlayerBar(QFrame):
 
         self.title_label = StrongBodyLabel("No track playing", self)
         self.title_label.setStyleSheet("color: #FFFFFF; font-size: 13px; font-weight: 600;")
-        self.title_label.setMaximumWidth(220)
+        self.title_label.setMinimumWidth(160)
+        self.title_label.setMaximumWidth(340)
 
         meta_row = QHBoxLayout()
         meta_row.setSpacing(6)
@@ -106,7 +111,7 @@ class MiniPlayerBar(QFrame):
 
         self.artist_label = CaptionLabel("Ready", self)
         self.artist_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
-        self.artist_label.setMaximumWidth(150)
+        self.artist_label.setMaximumWidth(220)
 
         self.badge_label = QLabel(self)
         self.badge_label.setStyleSheet("""
@@ -133,7 +138,7 @@ class MiniPlayerBar(QFrame):
         main_layout.addLayout(left_layout, 0)
 
         # -------------------------------------------------------------
-        # Center Section: Live Synchronized Karaoke Banner + Controls + Seek Slider
+        # Center Section: Live Karaoke Banner + Next/Prev Controls + Seek Slider
         # -------------------------------------------------------------
         center_layout = QVBoxLayout()
         center_layout.setSpacing(2)
@@ -151,8 +156,8 @@ class MiniPlayerBar(QFrame):
         self.active_lyric_label.setStyleSheet("""
             QLabel {
                 color: #1ED760;
-                font-size: 13px;
-                font-weight: 700;
+                font-size: 12px;
+                font-weight: 600;
                 background: transparent;
             }
         """)
@@ -172,29 +177,53 @@ class MiniPlayerBar(QFrame):
         karaoke_container.addWidget(self.next_lyric_label)
         center_layout.addLayout(karaoke_container)
 
-        # 2. Controls and Seek Slider Row
-        seek_row = QHBoxLayout()
-        seek_row.setSpacing(10)
-        seek_row.setContentsMargins(0, 0, 0, 0)
+        # 2. Controls Row: Rewind, Previous, Play/Pause, Next, Forward
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.rewind_btn = ToolButton(FluentIcon.PAGE_LEFT, self)
         self.rewind_btn.setToolTip("Rewind 10 seconds")
         self.rewind_btn.setFixedSize(26, 26)
         self.rewind_btn.clicked.connect(lambda: self._seek_relative(-10000))
 
+        self.prev_btn = ToolButton(FluentIcon.SKIP_BACK, self)
+        self.prev_btn.setToolTip("Previous Track")
+        self.prev_btn.setFixedSize(28, 28)
+        self.prev_btn.clicked.connect(self.play_previous)
+
         self.play_btn = ToolButton(FluentIcon.PLAY, self)
         self.play_btn.setToolTip("Play / Pause")
-        self.play_btn.setFixedSize(30, 30)
+        self.play_btn.setFixedSize(32, 32)
         self.play_btn.clicked.connect(self._toggle_play_pause)
+
+        self.next_btn = ToolButton(FluentIcon.SKIP_FORWARD, self)
+        self.next_btn.setToolTip("Next Track")
+        self.next_btn.setFixedSize(28, 28)
+        self.next_btn.clicked.connect(self.play_next)
 
         self.forward_btn = ToolButton(FluentIcon.PAGE_RIGHT, self)
         self.forward_btn.setToolTip("Forward 10 seconds")
         self.forward_btn.setFixedSize(26, 26)
         self.forward_btn.clicked.connect(lambda: self._seek_relative(10000))
 
-        self.time_label = CaptionLabel("00:00 / 00:00", self)
-        self.time_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
-        self.time_label.setFixedWidth(84)
+        btn_row.addWidget(self.rewind_btn)
+        btn_row.addWidget(self.prev_btn)
+        btn_row.addWidget(self.play_btn)
+        btn_row.addWidget(self.next_btn)
+        btn_row.addWidget(self.forward_btn)
+        center_layout.addLayout(btn_row)
+
+        # 3. Seek Slider Row with Time Labels on both sides
+        seek_row = QHBoxLayout()
+        seek_row.setSpacing(8)
+        seek_row.setContentsMargins(0, 0, 0, 0)
+
+        self.curr_time_label = CaptionLabel("00:00", self)
+        self.curr_time_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.curr_time_label.setFixedWidth(38)
+        self.curr_time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.seek_slider = Slider(Qt.Orientation.Horizontal, self)
         self.seek_slider.setRange(0, 1000)
@@ -203,11 +232,14 @@ class MiniPlayerBar(QFrame):
         self.seek_slider.sliderReleased.connect(self._on_seek_finished)
         self.seek_slider.valueChanged.connect(self._on_slider_value_changed)
 
-        seek_row.addWidget(self.rewind_btn)
-        seek_row.addWidget(self.play_btn)
-        seek_row.addWidget(self.forward_btn)
+        self.total_time_label = CaptionLabel("00:00", self)
+        self.total_time_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.total_time_label.setFixedWidth(38)
+        self.total_time_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        seek_row.addWidget(self.curr_time_label)
         seek_row.addWidget(self.seek_slider, 1)
-        seek_row.addWidget(self.time_label)
+        seek_row.addWidget(self.total_time_label)
 
         center_layout.addLayout(seek_row)
         main_layout.addLayout(center_layout, 1)
@@ -249,21 +281,109 @@ class MiniPlayerBar(QFrame):
         main_layout.addLayout(right_layout, 0)
 
     # -------------------------------------------------------------
+    # Playlist & Navigation Engine
+    # -------------------------------------------------------------
+    def set_playlist(self, playlist: List[Any], current_index: int = -1):
+        """Sets the active playlist for Previous/Next song navigation."""
+        self.playlist = list(playlist)
+        self.current_index = current_index
+        self._update_nav_state()
+
+    def _update_nav_state(self):
+        has_items = len(self.playlist) > 0
+        self.prev_btn.setEnabled(has_items)
+        self.next_btn.setEnabled(has_items)
+
+    def play_index(self, index: int):
+        if not self.playlist or index < 0 or index >= len(self.playlist):
+            return
+        self.current_index = index
+        self._play_item(self.playlist[index])
+        self._update_nav_state()
+
+    def play_next(self):
+        """Advances to the next track in the active playlist."""
+        if not self.playlist:
+            return
+        next_idx = self.current_index + 1
+        if next_idx < len(self.playlist):
+            self.play_index(next_idx)
+        elif len(self.playlist) > 1:
+            # Loop back to first song
+            self.play_index(0)
+
+    def play_previous(self):
+        """Plays the previous track in the playlist, or restarts current if played > 3 seconds."""
+        if not self.playlist:
+            if self.player.position() > 3000:
+                self.player.setPosition(0)
+            return
+        if self.player.position() > 3000:
+            self.player.setPosition(0)
+            return
+        prev_idx = self.current_index - 1
+        if prev_idx >= 0:
+            self.play_index(prev_idx)
+        elif len(self.playlist) > 1:
+            self.play_index(len(self.playlist) - 1)
+
+    def _play_item(self, item: Any):
+        if not item:
+            return
+        fpath = ""
+        track = None
+        badge = ""
+        if isinstance(item, (tuple, list)):
+            fpath = item[0] if len(item) > 0 else ""
+            track = item[1] if len(item) > 1 else None
+            badge = item[2] if len(item) > 2 else ""
+        elif isinstance(item, dict):
+            fpath = item.get("file_path", "")
+            track = item.get("track", None)
+            badge = item.get("quality_badge", "")
+        else:
+            fpath = getattr(item, "output_path", "")
+            track = getattr(item, "track", None)
+            badge = getattr(item, "quality_badge", "")
+
+        if fpath and os.path.isfile(fpath):
+            self.play_track(fpath, track, badge, playlist=self.playlist, index=self.current_index)
+
+    def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus):
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            if self.playlist and len(self.playlist) > 0:
+                self.play_next()
+
+    # -------------------------------------------------------------
     # Playback & Lyrics Engine
     # -------------------------------------------------------------
     def play_track(
         self,
         file_path: str,
         track: Optional[TrackMetadata] = None,
-        quality_badge: str = ""
+        quality_badge: str = "",
+        playlist: Optional[List[Any]] = None,
+        index: int = -1
     ):
         """Loads and begins audio playback of a local music file."""
         if not file_path or not os.path.isfile(file_path):
             logger.warning(f"Audio file does not exist: {file_path}")
             return
 
+        if playlist is not None:
+            self.playlist = list(playlist)
+            if index >= 0:
+                self.current_index = index
+            else:
+                self.current_index = next(
+                    (i for i, it in enumerate(self.playlist) if getattr(it, "output_path", "") == file_path or getattr(it, "file_path", "") == file_path),
+                    -1
+                )
+            self._update_nav_state()
+
         self.current_file_path = file_path
         self.current_track = track
+        self.current_quality_badge = quality_badge
 
         # Title & Artist display
         title = track.title if track else os.path.splitext(os.path.basename(file_path))[0]
@@ -361,13 +481,13 @@ class MiniPlayerBar(QFrame):
     def _set_cover_pixmap(self, img: QImage):
         for child in self.cover_label.findChildren(QWidget):
             child.deleteLater()
-        scaled = img.scaled(50, 50, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-        rounded = QPixmap(50, 50)
+        scaled = img.scaled(52, 52, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+        rounded = QPixmap(52, 52)
         rounded.fill(Qt.GlobalColor.transparent)
         p = QPainter(rounded)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         path = QPainterPath()
-        path.addRoundedRect(0, 0, 50, 50, 6, 6)
+        path.addRoundedRect(0, 0, 52, 52, 6, 6)
         p.setClipPath(path)
         p.drawPixmap(0, 0, QPixmap.fromImage(scaled))
         p.end()
@@ -437,10 +557,10 @@ class MiniPlayerBar(QFrame):
             if hasattr(self.seek_slider, "_adjustHandlePos"):
                 self.seek_slider._adjustHandlePos()
 
-        # Update time label (mm:ss / mm:ss)
-        curr_str = self._format_ms(pos_ms)
-        total_str = self._format_ms(dur_ms)
-        self.time_label.setText(f"{curr_str} / {total_str}")
+        # Update time labels
+        self.curr_time_label.setText(self._format_ms(pos_ms))
+        if dur_ms > 0:
+            self.total_time_label.setText(self._format_ms(dur_ms))
 
         # Update live synchronized karaoke lyric
         if self.lyrics_timeline:
@@ -460,9 +580,8 @@ class MiniPlayerBar(QFrame):
                     self.next_lyric_label.setText("")
 
     def _on_player_duration_changed(self, dur_ms: int):
-        curr_str = self._format_ms(self.player.position())
-        total_str = self._format_ms(dur_ms)
-        self.time_label.setText(f"{curr_str} / {total_str}")
+        self.total_time_label.setText(self._format_ms(dur_ms))
+        self.curr_time_label.setText(self._format_ms(self.player.position()))
 
     def _on_playback_state_changed(self, state: QMediaPlayer.PlaybackState):
         if state == QMediaPlayer.PlaybackState.PlayingState:
@@ -497,9 +616,7 @@ class MiniPlayerBar(QFrame):
             dur_ms = self.player.duration()
             if dur_ms > 0:
                 pos_ms = int(val / 1000.0 * dur_ms)
-                curr_str = self._format_ms(pos_ms)
-                total_str = self._format_ms(dur_ms)
-                self.time_label.setText(f"{curr_str} / {total_str}")
+                self.curr_time_label.setText(self._format_ms(pos_ms))
 
     def _on_volume_changed(self, val: int):
         vol_float = val / 100.0

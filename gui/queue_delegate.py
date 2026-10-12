@@ -21,7 +21,8 @@ from gui.styles import (
     BADGE_FLAC_16_BG, BADGE_FLAC_16_TEXT,
     BADGE_FLAC_24_BG, BADGE_FLAC_24_TEXT,
     BADGE_320K_BG, BADGE_320K_TEXT,
-    BADGE_YTM_BG, BADGE_YTM_TEXT
+    BADGE_YTM_BG, BADGE_YTM_TEXT,
+    BADGE_OPUS_BG, BADGE_OPUS_TEXT
 )
 
 
@@ -209,7 +210,7 @@ class TrackCardDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
         rect = option.rect
-        # Draw Card Background with 10px rounded corners
+        # Card Background with 8px rounded corners
         card_rect = QRectF(rect.x() + 6, rect.y() + 3, rect.width() - 12, rect.height() - 6)
 
         is_hover = (index.row() == getattr(self, 'hoverRow', -1)) or bool(option.state & option.state.State_MouseOver)
@@ -226,14 +227,15 @@ class TrackCardDelegate(QStyledItemDelegate):
             pen_color = QColor(0, 0, 0, 0)
 
         path = QPainterPath()
-        path.addRoundedRect(card_rect, 10, 10)
+        path.addRoundedRect(card_rect, 8, 8)
         painter.fillPath(path, QBrush(bg_color))
         if pen_color.alpha() > 0:
             painter.setPen(QPen(pen_color, 1.2))
             painter.drawPath(path)
 
-        # 1. Album Artwork Thumbnail (50x50 at x+18, y+9)
-        thumb_rect = QRectF(card_rect.x() + 12, card_rect.y() + 9, self.THUMB_SIZE, self.THUMB_SIZE)
+        # 1. Album Artwork Thumbnail (50x50, vertically centered)
+        thumb_y = card_rect.y() + (card_rect.height() - self.THUMB_SIZE) / 2.0
+        thumb_rect = QRectF(card_rect.x() + 12, thumb_y, self.THUMB_SIZE, self.THUMB_SIZE)
         thumb_path = QPainterPath()
         thumb_path.addRoundedRect(thumb_rect, 6, 6)
 
@@ -250,93 +252,147 @@ class TrackCardDelegate(QStyledItemDelegate):
             painter.drawPixmap(int(thumb_rect.x()), int(thumb_rect.y()), self.THUMB_SIZE, self.THUMB_SIZE, pixmap)
             painter.restore()
         else:
-            # Sleek placeholder
-            painter.fillPath(thumb_path, QBrush(QColor("#2E2E2E")))
-            painter.setPen(QPen(TEXT_MUTED, 1))
+            painter.fillPath(thumb_path, QBrush(QColor("#282828")))
+            painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
             painter.drawPath(thumb_path)
             painter.setPen(TEXT_MUTED)
-            painter.setFont(QFont("Segoe UI", 14))
+            painter.setFont(QFont("Segoe UI", 13))
             painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter, "♫")
 
-            # Asynchronously fetch or extract thumbnail
             if thumb_key:
                 self.thumb_cache.load_async(thumb_key)
 
-        # Calculate horizontal positions
-        right_margin = card_rect.right() - 14
-
-        # 2. Status Pill (Width: 100px, Height: 24px at far right)
-        status_w = 95
+        # 2. Rightmost Status Pill (92x24)
+        status_w = 92
         status_h = 24
-        status_rect = QRectF(right_margin - status_w, card_rect.y() + (card_rect.height() - status_h) / 2, status_w, status_h)
+        status_rect = QRectF(card_rect.right() - status_w - 14, card_rect.y() + (card_rect.height() - status_h) / 2.0, status_w, status_h)
         bg_status, fg_status = STATUS_COLORS.get(item.status, STATUS_COLORS["Queued"])
 
         status_path = QPainterPath()
         status_path.addRoundedRect(status_rect, 12, 12)
         painter.fillPath(status_path, QBrush(bg_status))
-        painter.setPen(QPen(fg_status, 1))
+        painter.setPen(QPen(fg_status, 0.8))
         painter.drawPath(status_path)
 
+        display_status = "✓ Completed" if item.status == "Completed" else item.status
         painter.setPen(fg_status)
-        font_status = QFont("Segoe UI", 8, QFont.Weight.DemiBold)
-        painter.setFont(font_status)
-        painter.drawText(status_rect, Qt.AlignmentFlag.AlignCenter, item.status)
+        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        painter.drawText(status_rect, Qt.AlignmentFlag.AlignCenter, display_status)
 
-        # 3. Quality Badge & Progress Section (Between text and status pill)
-        center_w = 170
-        center_x = status_rect.left() - center_w - 16
+        # 3. Middle Section: Dynamic layout based on status
+        status_left = status_rect.left() - 14
+        dur_str = format_duration(item.track.duration_ms)
+        middle_left = status_left
 
-        # Source Quality Badge (Width: 105px, Height: 20px)
-        if item.quality_badge:
-            badge_w = 105
-            badge_h = 20
-            badge_rect = QRectF(center_x, card_rect.y() + 11, badge_w, badge_h)
-            badge_bg, badge_fg = self._get_badge_colors(item.quality_badge)
+        if item.status == "Completed":
+            # Completed: Show Duration & Quality Badge cleanly (No duplicate progress bar)
+            dur_w = 46
+            dur_rect = QRectF(status_left - dur_w, card_rect.y(), dur_w, card_rect.height())
+            painter.setPen(TEXT_SECONDARY)
+            painter.setFont(QFont("Segoe UI", 9))
+            painter.drawText(dur_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, dur_str)
+            middle_left = dur_rect.left()
 
-            b_path = QPainterPath()
-            b_path.addRoundedRect(badge_rect, 4, 4)
-            painter.fillPath(b_path, QBrush(badge_bg))
-            painter.setPen(QPen(badge_fg, 0.8))
-            painter.drawPath(b_path)
+            if item.quality_badge:
+                badge_w = 86
+                badge_h = 20
+                badge_rect = QRectF(dur_rect.left() - badge_w - 10, card_rect.y() + (card_rect.height() - badge_h) / 2.0, badge_w, badge_h)
+                badge_bg, badge_fg = self._get_badge_colors(item.quality_badge)
 
-            painter.setPen(badge_fg)
-            font_badge = QFont("Segoe UI", 7, QFont.Weight.Bold)
-            painter.setFont(font_badge)
-            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, item.quality_badge)
+                b_path = QPainterPath()
+                b_path.addRoundedRect(badge_rect, 4, 4)
+                painter.fillPath(b_path, QBrush(badge_bg))
+                painter.setPen(QPen(badge_fg, 0.8))
+                painter.drawPath(b_path)
 
-        # Progress Bar & Speed Text
-        prog_rect = QRectF(center_x, card_rect.y() + 38, center_w, 6)
-        prog_path = QPainterPath()
-        prog_path.addRoundedRect(prog_rect, 3, 3)
-        painter.fillPath(prog_path, QBrush(PROGRESS_BG))
+                painter.setPen(badge_fg)
+                painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+                painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, item.quality_badge)
+                middle_left = badge_rect.left()
 
-        if item.progress_percent > 0.0:
-            fill_w = max(4.0, (item.progress_percent / 100.0) * center_w)
-            fill_rect = QRectF(center_x, card_rect.y() + 38, fill_w, 6)
-            f_path = QPainterPath()
-            f_path.addRoundedRect(fill_rect, 3, 3)
-            painter.fillPath(f_path, QBrush(PROGRESS_FILL))
+        elif item.status in ("Downloading", "Resolving"):
+            # Downloading / Resolving: Show Progress Bar, Percentage, Speed & ETA
+            center_w = 160
+            center_x = status_left - center_w
+            middle_left = center_x
 
-        # Speed and ETA text below or above progress bar
-        speed_text = ""
-        if item.status in ("Downloading", "Resolving") and item.speed_str:
-            speed_text = f"{item.speed_str} • {item.eta_str}"
-        elif item.status == "Completed":
-            speed_text = "100%"
+            # Percentage text on top right
+            pct_val = max(0.0, min(100.0, item.progress_percent))
+            pct_str = f"{int(pct_val)}%"
+            pct_rect = QRectF(center_x + center_w - 45, card_rect.y() + 11, 45, 18)
+            painter.setPen(SPOTIFY_EMERALD)
+            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            painter.drawText(pct_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, pct_str)
 
-        if speed_text:
+            # Quality badge on top left if available
+            if item.quality_badge:
+                badge_w = 80
+                badge_h = 17
+                badge_rect = QRectF(center_x, card_rect.y() + 11, badge_w, badge_h)
+                badge_bg, badge_fg = self._get_badge_colors(item.quality_badge)
+                b_path = QPainterPath()
+                b_path.addRoundedRect(badge_rect, 3, 3)
+                painter.fillPath(b_path, QBrush(badge_bg))
+                painter.setPen(QPen(badge_fg, 0.8))
+                painter.drawPath(b_path)
+                painter.setPen(badge_fg)
+                painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+                painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, item.quality_badge)
+
+            # Sleek progress track
+            prog_rect = QRectF(center_x, card_rect.y() + 33, center_w, 5)
+            prog_path = QPainterPath()
+            prog_path.addRoundedRect(prog_rect, 2.5, 2.5)
+            painter.fillPath(prog_path, QBrush(PROGRESS_BG))
+
+            if pct_val > 0.0:
+                fill_w = max(4.0, (pct_val / 100.0) * center_w)
+                fill_rect = QRectF(center_x, card_rect.y() + 33, fill_w, 5)
+                f_path = QPainterPath()
+                f_path.addRoundedRect(fill_rect, 2.5, 2.5)
+                painter.fillPath(f_path, QBrush(PROGRESS_FILL))
+
+            # Speed and ETA below bar
+            speed_text = f"{item.speed_str} • {item.eta_str}" if item.speed_str else "Connecting to stream..."
             painter.setPen(TEXT_MUTED)
-            painter.setFont(QFont("Segoe UI", 8))
-            text_rect = QRectF(center_x, card_rect.y() + 48, center_w, 16)
-            painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, speed_text)
+            painter.setFont(QFont("Segoe UI", 7.5))
+            speed_rect = QRectF(center_x, card_rect.y() + 43, center_w, 16)
+            painter.drawText(speed_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, speed_text)
 
-        # 4. Title, Artist, and Duration Text
+        else:
+            # Queued, Paused, Stopped, Failed: Show Duration & optional Badge
+            dur_w = 46
+            dur_rect = QRectF(status_left - dur_w, card_rect.y(), dur_w, card_rect.height())
+            painter.setPen(TEXT_MUTED)
+            painter.setFont(QFont("Segoe UI", 9))
+            painter.drawText(dur_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, dur_str)
+            middle_left = dur_rect.left()
+
+            if item.quality_badge:
+                badge_w = 86
+                badge_h = 20
+                badge_rect = QRectF(dur_rect.left() - badge_w - 10, card_rect.y() + (card_rect.height() - badge_h) / 2.0, badge_w, badge_h)
+                badge_bg, badge_fg = self._get_badge_colors(item.quality_badge)
+
+                b_path = QPainterPath()
+                b_path.addRoundedRect(badge_rect, 4, 4)
+                painter.fillPath(b_path, QBrush(badge_bg))
+                painter.setPen(QPen(badge_fg, 0.8))
+                painter.drawPath(b_path)
+
+                painter.setPen(badge_fg)
+                painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+                painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, item.quality_badge)
+                middle_left = badge_rect.left()
+
+        # 4. Title & Artist Text Section
         text_x = thumb_rect.right() + 14
-        text_w = center_x - text_x - 14
+        text_max_right = middle_left - 14
+        text_w = max(60.0, text_max_right - text_x)
 
-        # Title
+        # Track Title
         painter.setPen(TEXT_PRIMARY)
-        font_title = QFont("Segoe UI", 10, QFont.Weight.Bold)
+        font_title = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
         painter.setFont(font_title)
         fm_title = QFontMetrics(font_title)
 
@@ -345,17 +401,18 @@ class TrackCardDelegate(QStyledItemDelegate):
             if not re.match(r"^\d{1,3}[\s.\-_]+", display_title):
                 display_title = f"{item.track.track_number:02d}. {display_title}"
         elided_title = fm_title.elidedText(display_title, Qt.TextElideMode.ElideRight, int(text_w))
-        painter.drawText(int(text_x), int(card_rect.y() + 25), elided_title)
+        painter.drawText(int(text_x), int(card_rect.y() + 26), elided_title)
 
-        # Subtitle (Artist • Album • Genre • Duration)
-        dur_str = format_duration(item.track.duration_ms)
-        album_part = f" • {item.track.album}" if (item.track.album and item.track.album.lower() not in ("spotify playlist", "unknown album", "singles", "downloads")) else ""
-        genres = getattr(item.track, "genres", [])
-        genre_part = f" • {genres[0]}" if genres else ""
-        sub_text = f"{item.track.artist_str}{album_part}{genre_part} • {dur_str}"
+        # Artist & Album Subtitle
+        artist_name = item.track.artist_str
+        album_name = item.track.album
+        if album_name and album_name.lower() not in ("spotify playlist", "unknown album", "singles", "downloads", "") and album_name.lower() != display_title.lower():
+            sub_text = f"{artist_name}   •   {album_name}"
+        else:
+            sub_text = artist_name
 
         painter.setPen(TEXT_SECONDARY)
-        font_sub = QFont("Segoe UI", 8)
+        font_sub = QFont("Segoe UI", 8.5)
         painter.setFont(font_sub)
         fm_sub = QFontMetrics(font_sub)
         elided_sub = fm_sub.elidedText(sub_text, Qt.TextElideMode.ElideRight, int(text_w))
@@ -365,11 +422,13 @@ class TrackCardDelegate(QStyledItemDelegate):
 
     def _get_badge_colors(self, quality_badge: str):
         qb = quality_badge.lower()
-        if "16" in qb:
-            return BADGE_FLAC_16_BG, BADGE_FLAC_16_TEXT
-        elif "24" in qb:
+        if "24" in qb:
             return BADGE_FLAC_24_BG, BADGE_FLAC_24_TEXT
+        elif "16" in qb:
+            return BADGE_FLAC_16_BG, BADGE_FLAC_16_TEXT
         elif "320" in qb:
             return BADGE_320K_BG, BADGE_320K_TEXT
+        elif "opus" in qb:
+            return BADGE_OPUS_BG, BADGE_OPUS_TEXT
         else:
             return BADGE_YTM_BG, BADGE_YTM_TEXT

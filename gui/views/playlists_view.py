@@ -1655,7 +1655,10 @@ class PlaylistsView(QWidget):
         if item.status == "Completed" and item.output_path and os.path.isfile(item.output_path):
             main_win = self.window()
             if hasattr(main_win, "play_audio_track"):
-                main_win.play_audio_track(item.output_path, item.track, item.quality_badge)
+                items = [self.model.get_item(i) for i in range(self.model.rowCount())]
+                valid_items = [it for it in items if it and it.output_path and os.path.isfile(it.output_path)]
+                curr_idx = valid_items.index(item) if item in valid_items else -1
+                main_win.play_audio_track(item.output_path, item.track, item.quality_badge, playlist=valid_items, index=curr_idx)
             else:
                 os.startfile(item.output_path)
         elif item.status == "Pending":
@@ -1733,7 +1736,10 @@ class PlaylistsView(QWidget):
             if item.output_path and os.path.isfile(item.output_path):
                 main_win = self.window()
                 if hasattr(main_win, "play_audio_track"):
-                    main_win.play_audio_track(item.output_path, item.track, item.quality_badge)
+                    items = [self.model.get_item(i) for i in range(self.model.rowCount())]
+                    valid_items = [it for it in items if it and it.output_path and os.path.isfile(it.output_path)]
+                    curr_idx = valid_items.index(item) if item in valid_items else -1
+                    main_win.play_audio_track(item.output_path, item.track, item.quality_badge, playlist=valid_items, index=curr_idx)
                 else:
                     os.startfile(item.output_path)
             else:

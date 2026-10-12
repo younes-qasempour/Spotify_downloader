@@ -28,14 +28,16 @@ class MetricCard(CardWidget):
     """Sleek metric summary card."""
     def __init__(self, title: str, initial_value: str = "0", parent=None):
         super().__init__(parent)
+        self.setMinimumWidth(100)
+        self.setMaximumWidth(135)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(4)
+        layout.setContentsMargins(14, 9, 14, 9)
+        layout.setSpacing(3)
 
         self.title_label = CaptionLabel(title, self)
         self.title_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
         self.value_label = StrongBodyLabel(initial_value, self)
-        self.value_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+        self.value_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #FFFFFF;")
 
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
@@ -782,10 +784,15 @@ class QueueView(QWidget):
             return
 
         if item.status == "Completed" and item.output_path and os.path.isfile(item.output_path):
-            # Play in built-in mini-player dock
+            # Play in built-in mini-player dock with full playlist navigation
+            completed_items = [
+                it for it in self.model._all_items
+                if it.status == "Completed" and it.output_path and os.path.isfile(it.output_path)
+            ]
+            curr_idx = completed_items.index(item) if item in completed_items else -1
             win = self.window()
             if hasattr(win, "player_bar"):
-                win.player_bar.play_track(item.output_path, item.track, item.quality_badge)
+                win.player_bar.play_track(item.output_path, item.track, item.quality_badge, playlist=completed_items, index=curr_idx)
             else:
                 try:
                     os.startfile(item.output_path)
@@ -838,9 +845,14 @@ class QueueView(QWidget):
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
         if action == play_act and play_act:
             it = selected_items[0]
+            completed_items = [
+                x for x in self.model._all_items
+                if x.status == "Completed" and x.output_path and os.path.isfile(x.output_path)
+            ]
+            curr_idx = completed_items.index(it) if it in completed_items else -1
             win = self.window()
             if hasattr(win, "player_bar"):
-                win.player_bar.play_track(it.output_path, it.track, it.quality_badge)
+                win.player_bar.play_track(it.output_path, it.track, it.quality_badge, playlist=completed_items, index=curr_idx)
             else:
                 os.startfile(it.output_path)
         elif action == explore_act and explore_act:

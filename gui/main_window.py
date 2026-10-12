@@ -243,10 +243,17 @@ class MainWindow(FluentWindow):
         self.close()
         QApplication.quit()
 
-    def play_audio_track(self, file_path: str, track: Optional[TrackMetadata] = None, quality_badge: str = ""):
-        """Plays track via the built-in mini-player dock with synchronized lyrics."""
+    def play_audio_track(
+        self,
+        file_path: str,
+        track: Optional[TrackMetadata] = None,
+        quality_badge: str = "",
+        playlist: Optional[List[Any]] = None,
+        index: int = -1
+    ):
+        """Plays track via the built-in mini-player dock with synchronized lyrics and playlist navigation."""
         if hasattr(self, "player_bar"):
-            self.player_bar.play_track(file_path, track, quality_badge)
+            self.player_bar.play_track(file_path, track, quality_badge, playlist=playlist, index=index)
 
     def showEvent(self, event):
         super().showEvent(event)
