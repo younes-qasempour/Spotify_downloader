@@ -3,4 +3,4 @@ Core Multimedia Engine for Spotify Downloader.
 Completely headless with zero GUI dependencies.
 """
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"

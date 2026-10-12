@@ -313,6 +313,8 @@ def detect_audio_header(header_or_path: bytes | str | Path) -> Optional[str]:
         return "m4a"
     if header.startswith(b"RIFF"):
         return "wav"
+    if header.startswith(b"\x1a\x45\xdf\xa3"):
+        return "webm"
 
     return None
 
@@ -343,7 +345,7 @@ def is_valid_audio_file(file_path: str, min_size: int = 150 * 1024) -> Tuple[boo
         try:
             import mutagen
             m = mutagen.File(file_path)
-            if m is None and fmt != "flac":
+            if m is None and fmt not in ("flac", "webm"):
                 pass
         except Exception as e:
             return False, f"Mutagen audio verification failed: {e}"
@@ -364,7 +366,7 @@ def generate_m3u8_file(folder_path: str, playlist_name: str = "") -> Optional[st
 
     try:
         import mutagen
-        valid_exts = {".flac", ".mp3", ".m4a", ".opus", ".ogg"}
+        valid_exts = {".flac", ".mp3", ".m4a", ".opus", ".ogg", ".webm"}
         files = []
         for fname in os.listdir(folder_path):
             ext = os.path.splitext(fname)[1].lower()

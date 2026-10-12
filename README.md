@@ -3,7 +3,7 @@
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
   <strong>Next-Generation High-Fidelity Spotify Audio Downloader & Library Manager for Windows 11</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.2.0-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.2.0"></a>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.3.2-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.3.2"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Fluent">
   <img src="https://img.shields.io/badge/Audio-24bit%20Hi--Res%20%7C%2016bit%20FLAC-00C853?style=for-the-badge&logo=flac&logoColor=white" alt="Lossless FLAC">
@@ -59,24 +59,34 @@ Every queued track automatically traverses an intelligent cascading resolution l
 - **Singles:** Standalone tracks are neatly routed to `{output_dir}/Singles/`.
 - **Isolated App Cache:** Album covers and marker files are stored in `%LOCALAPPDATA%\Flacify\cache`, leaving your music folders 100% clean.
 
-### 💾 Offline Saved Playlists & On-Demand Batch Downloads
+### 💾 Offline Saved Playlists & Differential Sync (v1.3.2)
 - **Metadata Archiving:** Import massive playlists (500 to 5,000+ tracks) and save their full track listings instantly into a local SQLite database without queuing audio downloads.
 - **Flexible Batch Downloading:** Download tracks in custom batches (25, 50, 100, 200, or custom size) with a single click, keeping you comfortably under daily quota limits.
 - **Persistent Progress Tracking:** Visual progress bars, track counters (Total, Downloaded, Pending), and track-level status badges (`Pending`, `Queued`, `Completed`).
-- **Playlist Delta Sync (v1.2.0):** Single-click incremental synchronization detects upstream additions or track updates and fetches only missing items without re-downloading.
+- **Differential Playlist Synchronization (v1.3.2):** Single-click incremental synchronization compares online Spotify playlists against local database storage, purges deleted tracks, and automatically enqueues newly added delta tracks directly into the download queue with live notifications.
+- **Freeze-Free Queue Ingestion:** Vectorized batch model insertions eliminate UI freezes when enqueuing thousands of tracks simultaneously.
 
-### 🎵 In-App Mini-Player & Synchronized Lyrics (v1.2.0)
+### 🎚️ Universal Audio Transcoder & Loudness Normalization (v1.3.2)
+- **Universal Audio Transcoder (`core/transcoder.py`):** User-selectable target container via FFmpeg:
+  - **Original Stream (Default):** Retains pristine native stream without re-encoding.
+  - **Apple Lossless (`alac` `.m4a`):** Bit-perfect lossless container for iPhone, iPad, and Apple Music library integration.
+  - **MP3 320 kbps CBR (`mp3`):** Universal high-bitrate compatibility for legacy car stereos and hardware players.
+  - **FLAC 16/24-bit (`flac`):** High-resolution studio master preservation.
+  - **Opus 256 kbps (`opus`):** Next-gen high-efficiency acoustic fidelity.
+- **ReplayGain 2.0 / EBU R128 Loudness Normalization:** Integrated EBU R128 loudness analysis and non-destructive `REPLAYGAIN_TRACK_GAIN` and `REPLAYGAIN_TRACK_PEAK` tagging across FLAC, MP3, M4A, and Opus containers, with batch library calculation.
+
+### 🎵 In-App Mini-Player & Synchronized Lyrics
 - **Built-in Audio Dock:** Bottom player bar with Play/Pause, Seek scrubber, Volume slider, and Track art/metadata preview.
 - **Live Synchronized Karaoke Lyrics:** Dynamic floating lyrics display with real-time scrolling and active line highlighting synchronized with audio playback.
 - **Instant Library Playback:** Double-click or right-click any track in Completed or Playlists view to play immediately without external media players.
 
-### 🌐 Universal Ingestion & Audiophile Enhancements (v1.2.0)
+### 🌐 Universal Ingestion & Audiophile Enhancements
 - **Universal Input:** Queue arbitrary media links (YouTube, SoundCloud, Bandcamp, Vimeo, etc.) or free-text search queries directly into the queue.
-- **ReplayGain 2.0 Tagging:** Optional ITU-R BS.1770 / EBU R128 loudness normalization embedding non-destructive track and album gain tags into FLAC, MP3, and M4A.
 - **Companion M3U8 Playlists:** Automatically exports UTF-8 relative `.m3u8` playlists alongside downloaded tracks.
 - **Windows 11 System Tray:** Minimize to tray with quick background controls and native notifications.
 
 ### ⚡ Persistent SQLite Library & Instant Deduplication (`archive.db`)
+- **Thread-Safe WAL Architecture:** SQLite database with WAL journal mode and context-managed connections to eliminate Windows file locking conflicts.
 - **Zero-Bandwidth Re-Downloads:** Tracks previously downloaded into any playlist or single folder are instantly detected via Spotify ID, ISRC, or normalized `(artist, title)` and copied locally in ~2ms.
 - **Offline Library View:** Searchable library with Songs, Albums, and Playlists navigation, cover art thumbnails, double-click playback (`os.startfile`), and Explorer reveal.
 - **Deep Scan Auto-Repair:** One-click repair engine scans existing audio files, identifies missing cover art or lyrics, and heals them in-place without re-downloading audio streams.

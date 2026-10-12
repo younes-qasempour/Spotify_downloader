@@ -1126,9 +1126,16 @@ class PlaylistsView(QWidget):
         added = summary.get("added", 0)
         removed = summary.get("removed", 0)
         total = summary.get("total", 0)
+        delta_tracks = summary.get("delta_tracks", [])
+        if delta_tracks:
+            self.qm.enqueue(delta_tracks)
+            msg = f"Sync complete: {added} new track(s) added & enqueued to download, {removed} removed. Total tracks: {total}."
+        else:
+            msg = f"Sync complete: Up to date ({removed} removed). Total tracks: {total}."
+
         InfoBar.success(
             title="Playlist Synced",
-            content=f"Sync complete: {added} new track(s) added, {removed} removed. Total tracks: {total}.",
+            content=msg,
             orient=Qt.Orientation.Horizontal,
             position=InfoBarPosition.TOP,
             duration=5000,

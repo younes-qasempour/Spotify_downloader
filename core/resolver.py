@@ -10,6 +10,7 @@ from core.lyrics import LyricsEngine
 from core.tagger import AudioTagger
 from core.utils import sanitize_filename, is_valid_audio_file
 from core.config import config
+from core.transcoder import transcode_audio
 
 logger = logging.getLogger("core.resolver")
 
@@ -354,6 +355,29 @@ class CascadingAudioEngine:
                 except Exception:
                     pass
             raise RuntimeError(f"Downloaded audio file failed integrity verification ({reason}) for '{track.title}'.")
+
+        if cancel_check and cancel_check():
+            if final_file_path and os.path.exists(final_file_path):
+                try:
+                    os.remove(final_file_path)
+                except Exception:
+                    pass
+            return None
+
+        # Optional audio format transcoding (e.g. ALAC for Apple Music, MP3 320k, FLAC, Opus)
+        target_fmt = str(config.get("download.target_format", "original")).strip().lower()
+        if target_fmt and target_fmt != "original":
+            if status_callback:
+                status_callback(f"Transcoding ({target_fmt.upper()})")
+            try:
+                transcoded_path = transcode_audio(final_file_path, target_format=target_fmt, delete_source=True)
+                if transcoded_path and os.path.isfile(transcoded_path):
+                    final_file_path = transcoded_path
+                    new_ext = os.path.splitext(transcoded_path)[1].lstrip(".").lower()
+                    resolved.file_extension = new_ext
+                    resolved.quality_badge = f"{resolved.quality_badge} [{target_fmt.upper()}]"
+            except Exception as e_trans:
+                logger.warning(f"Audio transcoding skipped or failed: {e_trans}")
 
         if cancel_check and cancel_check():
             if final_file_path and os.path.exists(final_file_path):

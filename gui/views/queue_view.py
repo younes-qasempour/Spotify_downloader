@@ -169,6 +169,7 @@ class QueueView(QWidget):
 
     def _connect_signals(self):
         self.bridge.sig_track_enqueued.connect(self._handle_enqueued)
+        self.bridge.sig_tracks_enqueued.connect(self._handle_tracks_enqueued)
         self.bridge.sig_source_resolved.connect(self._handle_source_resolved)
         self.bridge.sig_progress.connect(self._handle_progress)
         self.bridge.sig_status_changed.connect(self._handle_status_changed)
@@ -410,6 +411,13 @@ class QueueView(QWidget):
         self.model.add_item(item)
         row = self.model.rowCount() - 1
         if row >= 0:
+            self.table.setRowHeight(row, 76)
+        self.table.viewport().update()
+        self._update_metrics()
+
+    def _handle_tracks_enqueued(self, items: list):
+        self.model.add_items(items)
+        for row in range(self.model.rowCount()):
             self.table.setRowHeight(row, 76)
         self.table.viewport().update()
         self._update_metrics()

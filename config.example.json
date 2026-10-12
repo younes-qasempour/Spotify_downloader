@@ -33,7 +33,10 @@
     ],
     "concurrency": 2,
     "cookies_file": "",
-    "proxy": ""
+    "proxy": "",
+    "generate_m3u8": true,
+    "replaygain_tagging": false,
+    "target_format": "original"
   },
   "ui": {
     "theme": "Dark",

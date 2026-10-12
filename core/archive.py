@@ -3,7 +3,8 @@ import sqlite3
 import threading
 import logging
 import shutil
-from typing import Optional, List, Dict, Any, Callable, Tuple
+from contextlib import contextmanager
+from typing import Optional, List, Dict, Any, Callable, Tuple, Generator
 from pathlib import Path
 
 from core.config import config
@@ -107,16 +108,11 @@ class ArchiveManager:
             return cls._instance
 
     def __init__(self, db_path: Optional[str] = None):
-        if getattr(self, "_initialized", False):
+        target_path = Path(db_path) if db_path else get_archive_db_path()
+        if getattr(self, "_initialized", False) and getattr(self, "db_path", None) == target_path:
             return
         self._initialized = True
-
-        if db_path:
-            self.db_path = Path(db_path)
-        else:
-            # Default to archive.db in user AppData directory
-            self.db_path = get_archive_db_path()
-
+        self.db_path = target_path
         self._db_lock = threading.RLock()
         self._init_db()
 
@@ -127,6 +123,19 @@ class ArchiveManager:
         conn.execute("PRAGMA synchronous = NORMAL;")
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
+
+    @contextmanager
+    def connection(self):
+        """Thread-safe context manager guaranteeing connection closure and transaction cleanup."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                yield conn
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _init_db(self):
         """Initializes database tables, performance indexes, and schema migrations."""
@@ -1673,11 +1682,13 @@ class ArchiveManager:
 
             updated_tracks = self.get_saved_playlist_tracks(playlist_id)
             after_count = len(updated_tracks)
+            delta_tracks = [t for t in new_tracks if t.id not in existing_ids]
             logger.info(f"Synced playlist '{name}': {added_count} new track(s) added, {removed_count} removed, total {after_count}.")
             return {
                 "added": added_count,
                 "removed": removed_count,
-                "total": after_count
+                "total": after_count,
+                "delta_tracks": delta_tracks
             }
 
     def get_saved_playlists(self) -> List[Dict[str, Any]]:

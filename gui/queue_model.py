@@ -49,6 +49,32 @@ class TrackQueueModel(QAbstractTableModel):
         self._id_to_row[item.track.id] = row
         self.endInsertRows()
 
+    def add_items(self, new_items: List[QueueItem]):
+        """Vectorized batch insertion minimizing Qt layout recalculations for large playlists."""
+        if not new_items:
+            return
+
+        to_insert: List[QueueItem] = []
+        for item in new_items:
+            if item.track.id in self._id_to_row:
+                row = self._id_to_row[item.track.id]
+                self.items[row] = item
+                self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
+            else:
+                to_insert.append(item)
+
+        if not to_insert:
+            return
+
+        start_row = len(self.items)
+        end_row = start_row + len(to_insert) - 1
+
+        self.beginInsertRows(QModelIndex(), start_row, end_row)
+        for idx, item in enumerate(to_insert, start=start_row):
+            self.items.append(item)
+            self._id_to_row[item.track.id] = idx
+        self.endInsertRows()
+
     def update_source(self, track_id: str, source_type: str, quality_badge: str):
         if track_id in self._id_to_row:
             row = self._id_to_row[track_id]

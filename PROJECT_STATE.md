@@ -440,6 +440,22 @@ d:\Spotify-Downloader\
   7. **Diagnostic Credential Masking:** Added `to_dict(mask_secrets=True)` for secure logging without credential leakage.
   8. Bumped project version to `v1.3.1` across all entry points, build scripts, and metadata.
 
+### 38. Comprehensive Python Architecture Refactor, Universal Transcoding, and Differential Playlist Sync (v1.3.2)
+- **Architectural Enhancements & Domain Hardening:**
+  1. **Strict Type Contracts (`core/types.py`):** Added explicit `DownloadProgressCallback`, `StatusCallback`, `CancelCheckCallback`, `PauseWaitCallback` protocols and `TypedDict` definitions (`ArchivedTrackRecord`, `SavedPlaylistRecord`) for static type-checking and decoupled architecture.
+  2. **Domain Exception Hierarchy (`core/exceptions.py`):** Established `FlacifyError` base with specialized subclasses (`MetadataResolutionError`, `AudioSourceNotFoundError`, `AudioIntegrityError`, `TaggingError`, `TranscodeError`, `PlaylistSyncError`) replacing generic `RuntimeError` and `ValueError` raises.
+  3. **Thread-Safe WAL Connection Context (`core/archive.py`):** Introduced `@contextmanager connection()` pattern enabling SQLite `PRAGMA journal_mode = WAL` and guaranteed connection disposal, preventing `[WinError 32]` file locking issues on Windows.
+- **Bug Fixes:**
+  1. **Spotify oEmbed Endpoint (`core/tagger.py`):** Fixed malformed query structure (`https://open.spotify.com/oembed?url=...`), preventing HTML parse errors on track metadata resolution.
+  2. **640×640 Artwork Auto-Upgrade (`core/tagger.py`):** Automatically upgrades lower-resolution Spotify CDN cover images (`ab67616d00001e02` -> `ab67616d0000b273`) for studio-grade embedded album art.
+  3. **Mutagen MP3 Tag Deletion (`core/tagger.py`):** Replaced unattached `ID3.delete()` call with safe module-level `mutagen.id3.delete(file_path)` when retagging corrupt ID3 headers.
+  4. **WebM Audio Container Tagging & Integrity (`core/utils.py`, `core/tagger.py`):** Added WebM audio header magic bytes (`\x1a\x45\xdf\xa3`) recognition, allowing `.webm` files from `yt-dlp` to pass audio validation and be tagged via Mutagen without corruption.
+  5. **Large Playlist Queue Freeze Elimination (`gui/queue_model.py`, `gui/bridge.py`, `core/queue_manager.py`):** Implemented batched row insertion (`beginInsertRows`/`endInsertRows` wrapping the entire collection) alongside `sig_tracks_enqueued` signal, preventing UI freezes when enqueuing 1,000+ tracks.
+- **New Features:**
+  1. **Differential Playlist Synchronization:** Enhanced `archive.sync_saved_playlist()` to detect deleted/added tracks, cleanly purge removed tracks from SQLite, and return `delta_tracks`. In the UI, newly added tracks are automatically enqueued for download with real-time feedback.
+  2. **Universal Audio Transcoder (`core/transcoder.py`, `core/resolver.py`, `gui/views/settings_view.py`):** Built standalone FFmpeg audio transcoder supporting Apple Lossless (`alac` `.m4a`), MP3 320 kbps CBR (`mp3`), FLAC 16/24-bit (`flac`), and Opus 256 kbps (`opus`), selectable directly in Settings.
+  3. **ReplayGain 2.0 / EBU R128 Loudness Normalization:** Integrated EBU R128 audio analysis and non-destructive `REPLAYGAIN_TRACK_GAIN` / `REPLAYGAIN_TRACK_PEAK` tagging across FLAC, MP3, M4A, and Opus containers, with single-track and batch library processing.
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:

@@ -96,7 +96,7 @@ class AudioTagger:
                 success = self._tag_mp3(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             elif ext == ".m4a":
                 success = self._tag_m4a(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
-            elif ext in (".opus", ".ogg"):
+            elif ext in (".opus", ".ogg", ".webm"):
                 success = self._tag_opus(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             else:
                 logger.warning(f"Unsupported extension for tagging: {ext}")
@@ -141,15 +141,17 @@ class AudioTagger:
             if b:
                 return b
 
-        # Tier 2: Spotify official oEmbed API (returns 640x640 JPEG)
+        # Tier 2: Spotify official oEmbed API (returns pristine 640x640 JPEG)
         if track.id and not track.id.startswith("yt_"):
             try:
-                oembed_url = f"https://open.spotify.com/track/{track.id}"
+                oembed_url = f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{track.id}"
                 resp = self.session.get(oembed_url, timeout=6)
                 if resp.status_code == 200:
-                    thumb_url = resp.json().get("thumbnail_url")
+                    thumb_url = resp.json().get("thumbnail_url", "")
                     if thumb_url:
-                        b = self._download_image(thumb_url)
+                        # Upgrade standard 300x300 thumbnail to pristine 640x640 square cover art
+                        highres_url = thumb_url.replace("ab67616d00001e02", "ab67616d0000b273")
+                        b = self._download_image(highres_url) or self._download_image(thumb_url)
                         if b:
                             logger.info(f"Resolved 640x640 cover art via Spotify oEmbed for '{track.title}'")
                             return b
@@ -308,11 +310,13 @@ class AudioTagger:
         except Exception:
             pass
 
-        audio = ID3()
+        import mutagen.id3
         try:
-            audio.delete(file_path)
+            mutagen.id3.delete(file_path)
         except Exception:
             pass
+
+        audio = ID3()
 
         clean_title = clean_watermarks(track.title)
         clean_album = self._resolve_clean_album(track, clean_title)
@@ -604,7 +608,7 @@ class AudioTagger:
                 audio.save()
                 logger.info(f"Embedded ReplayGain tags in M4A: {gain_str}, peak {peak_str}")
                 return True
-            elif ext in (".opus", ".ogg"):
+            elif ext in (".opus", ".ogg", ".webm"):
                 try:
                     audio = OggOpus(file_path)
                 except Exception:

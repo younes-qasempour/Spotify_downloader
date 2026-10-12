@@ -73,6 +73,7 @@ class DownloadQueueManager:
 
         # Decoupled Event Callbacks
         self.on_track_enqueued: Optional[Callable[[QueueItem], None]] = None
+        self.on_tracks_enqueued: Optional[Callable[[List[QueueItem]], None]] = None
         self.on_track_source_resolved: Optional[Callable[[str, str, str], None]] = None
         self.on_track_progress: Optional[Callable[[str, float, str, str], None]] = None
         self.on_track_status_changed: Optional[Callable[[str, str], None]] = None
@@ -246,6 +247,7 @@ class DownloadQueueManager:
 
     def enqueue(self, tracks: List[TrackMetadata]):
         with self._lock:
+            enqueued_items: List[QueueItem] = []
             for t in tracks:
                 if t.id in self._items:
                     existing = self._items[t.id]
@@ -259,6 +261,7 @@ class DownloadQueueManager:
                     existing.speed_str = ""
                     existing.eta_str = ""
                     self._queue.put(existing)
+                    enqueued_items.append(existing)
                     if self.on_track_status_changed:
                         self.on_track_status_changed(t.id, "Queued")
                     continue
@@ -266,8 +269,13 @@ class DownloadQueueManager:
                 item = QueueItem(track=t, status="Queued")
                 self._items[t.id] = item
                 self._queue.put(item)
-                if self.on_track_enqueued:
+                enqueued_items.append(item)
+                if self.on_track_enqueued and not self.on_tracks_enqueued:
                     self.on_track_enqueued(item)
+
+            if enqueued_items and self.on_tracks_enqueued:
+                self.on_tracks_enqueued(enqueued_items)
+
         logger.info(f"Enqueued {len(tracks)} tracks. Total queue size: {self._queue.qsize()}")
 
     def cancel_track(self, track_id: str):

@@ -460,6 +460,38 @@ class SettingsView(QScrollArea):
         qual_row.addWidget(self.quality_combo)
         d_layout.addLayout(qual_row)
 
+        # Target Audio Format (Universal Transcoder) Row
+        target_fmt_row = QHBoxLayout()
+        target_fmt_info = QVBoxLayout()
+        target_fmt_title = BodyLabel("Target Audio Format (Universal Transcoder)", down_card)
+        target_fmt_title.setStyleSheet("font-weight: bold;")
+        target_fmt_desc = CaptionLabel(
+            "Auto-transcodes downloaded audio to your preferred format via FFmpeg. "
+            "Keep as 'Original' to retain pristine native audio streams (fastest).",
+            down_card
+        )
+        target_fmt_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        target_fmt_desc.setWordWrap(True)
+        target_fmt_info.addWidget(target_fmt_title)
+        target_fmt_info.addWidget(target_fmt_desc)
+
+        self.target_fmt_combo = ComboBox(down_card)
+        self.target_fmt_combo.addItems([
+            "Original / Native Stream (Default)",
+            "Apple Lossless (ALAC .m4a — iPhone & Apple Music)",
+            "MP3 320 kbps CBR (Universal / Car Stereos)",
+            "FLAC 16/24-bit (Lossless Audio)",
+            "Opus 256 kbps (High Efficiency)"
+        ])
+        fmt_map = {"original": 0, "alac": 1, "mp3": 2, "flac": 3, "opus": 4}
+        current_fmt = str(config.get("download.target_format", "original")).strip().lower()
+        self.target_fmt_combo.setCurrentIndex(fmt_map.get(current_fmt, 0))
+        self.target_fmt_combo.currentIndexChanged.connect(self._on_target_format_changed)
+
+        target_fmt_row.addLayout(target_fmt_info, 1)
+        target_fmt_row.addWidget(self.target_fmt_combo)
+        d_layout.addLayout(target_fmt_row)
+
         # Safety-Net Fallback Switch Row
         fb_row = QHBoxLayout()
         fb_info = QVBoxLayout()
@@ -871,6 +903,19 @@ class SettingsView(QScrollArea):
                 "ytm_opus"
             ])
             InfoBar.info("Quality Set: Lossless FLAC", "Musilon downloads will prioritize Lossless FLAC (16/24-bit).", duration=3000, parent=self)
+
+    def _on_target_format_changed(self, index: int):
+        fmt_keys = ["original", "alac", "mp3", "flac", "opus"]
+        fmt_key = fmt_keys[index] if 0 <= index < len(fmt_keys) else "original"
+        config.set("download.target_format", fmt_key)
+        labels = {
+            "original": "Original / Native Stream (No Transcoding)",
+            "alac": "Apple Lossless (ALAC .m4a)",
+            "mp3": "MP3 320 kbps CBR",
+            "flac": "Lossless FLAC",
+            "opus": "Opus 256 kbps"
+        }
+        InfoBar.info("Target Audio Format", f"Transcoder format set to {labels.get(fmt_key, fmt_key)}.", duration=3000, parent=self)
 
     def _on_user_changed(self, text: str):
         val = text.strip()
