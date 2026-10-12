@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QModelIndex, QUrl
 from PyQt6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QHeaderView,
-    QApplication, QMenu, QStackedLayout, QFrame
+    QApplication, QMenu, QStackedLayout, QFrame, QLabel
 )
 from qfluentwidgets import (
     TableView, LineEdit, PrimaryPushButton, PushButton, ToolButton,
@@ -48,6 +48,7 @@ class MetricCard(CardWidget):
 
 class EmptyQueueWidget(CardWidget):
     """Modern Fluent empty state placeholder when the queue has no tracks."""
+
     def __init__(self, on_paste_cb=None, on_browse_folder_cb=None, parent=None):
         super().__init__(parent)
         self.setStyleSheet("""
@@ -58,27 +59,28 @@ class EmptyQueueWidget(CardWidget):
             }
         """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 40, 32, 40)
-        layout.setSpacing(12)
+        layout.setContentsMargins(32, 38, 32, 38)
+        layout.setSpacing(10)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         icon = IconWidget(FluentIcon.DOWNLOAD, self)
-        icon.setFixedSize(54, 54)
+        icon.setFixedSize(52, 52)
         layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignCenter)
 
-        title = StrongBodyLabel("Download Queue is Empty", self)
-        title.setStyleSheet("font-size: 18px; color: #FFFFFF; font-weight: bold;")
+        title = StrongBodyLabel("Your Download Queue is Empty", self)
+        title.setStyleSheet("font-size: 18px; color: #FFFFFF; font-weight: 600;")
         layout.addWidget(title, 0, Qt.AlignmentFlag.AlignCenter)
 
-        desc = CaptionLabel(
-            "Paste a Spotify track, album, or playlist link above, or drag and drop links into this window.\n"
-            "Supports high-fidelity 24-bit/16-bit FLAC, 320k MP3, and YouTube Music streams with synchronized lyrics.",
+        desc = QLabel(
+            "Paste a Spotify, YouTube, or SoundCloud link above to begin downloading,\n"
+            "or drag and drop music links directly into this window.",
             self
         )
-        desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        desc.setStyleSheet("color: #9E9E9E; font-size: 13px; line-height: 1.5; background: transparent;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        desc.setWordWrap(True)
         layout.addWidget(desc, 0, Qt.AlignmentFlag.AlignCenter)
+
+        layout.addSpacing(6)
 
         # Feature highlights pills
         pills_layout = QHBoxLayout()
@@ -86,25 +88,26 @@ class EmptyQueueWidget(CardWidget):
         pills_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         chips = [
-            "🎵 Spotify Lossless FLAC & 320k",
+            "🎵 Lossless FLAC & 320k",
             "⚡ YouTube Music Opus",
             "📜 Embedded Synced Lyrics",
             "🎚️ Multi-Format Transcoder"
         ]
         for chip_text in chips:
-            chip = CaptionLabel(chip_text, self)
+            chip = QLabel(chip_text, self)
             chip.setStyleSheet("""
                 background-color: rgba(255, 255, 255, 0.05);
                 border: 1px solid rgba(255, 255, 255, 0.10);
                 border-radius: 12px;
-                padding: 4px 10px;
-                color: #CCCCCC;
+                padding: 4px 12px;
+                color: #B5B5B5;
                 font-size: 11px;
+                font-weight: 500;
             """)
             pills_layout.addWidget(chip)
 
         layout.addLayout(pills_layout)
-        layout.addSpacing(8)
+        layout.addSpacing(10)
 
         # Quick action buttons
         btn_row = QHBoxLayout()
@@ -166,7 +169,7 @@ class QueueView(QWidget):
         main_layout.setContentsMargins(24, 18, 24, 18)
         main_layout.setSpacing(14)
 
-        # 1. Header Toolbar Row: Title + Output Folder & Format Quick Badges
+        # 1. Header Toolbar Row: Title + Open Downloads Folder Button
         header_row = QHBoxLayout()
         header_row.setSpacing(12)
 
@@ -174,34 +177,11 @@ class QueueView(QWidget):
         header_row.addWidget(title_label)
         header_row.addStretch(1)
 
-        # Quick Output Directory Button
-        out_dir = config.get("download.output_dir", "downloads")
-        folder_display = os.path.basename(os.path.normpath(out_dir)) or out_dir
-        self.folder_quick_btn = ToolButton(FluentIcon.FOLDER, self)
-        self.folder_quick_btn.setToolTip(f"Open Output Directory: {out_dir}")
-        self.folder_quick_btn.clicked.connect(self._open_downloads_folder)
+        self.open_downloads_btn = PushButton(FluentIcon.FOLDER, "Open Downloads Folder", self)
+        self.open_downloads_btn.setToolTip("Open local download directory in Windows Explorer")
+        self.open_downloads_btn.clicked.connect(self._open_downloads_folder)
+        header_row.addWidget(self.open_downloads_btn)
 
-        self.folder_label = CaptionLabel(f"📁 {folder_display}", self)
-        self.folder_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
-        self.folder_label.setToolTip(out_dir)
-
-        # Quick Target Format Badge
-        target_fmt = str(config.get("download.target_format", "original")).upper()
-        self.format_badge = CaptionLabel(f"🎚️ {target_fmt}", self)
-        self.format_badge.setStyleSheet("""
-            background-color: rgba(29, 185, 84, 0.12);
-            color: #1ED760;
-            border: 1px solid rgba(29, 185, 84, 0.25);
-            border-radius: 4px;
-            padding: 2px 8px;
-            font-weight: 600;
-            font-size: 11px;
-        """)
-        self.format_badge.setToolTip("Active Target Transcoder Format (Configured in Settings)")
-
-        header_row.addWidget(self.folder_label)
-        header_row.addWidget(self.folder_quick_btn)
-        header_row.addWidget(self.format_badge)
         main_layout.addLayout(header_row)
 
         # 2. Input Bar & Enqueue Controls
@@ -215,15 +195,10 @@ class QueueView(QWidget):
         self.url_input.setClearButtonEnabled(True)
         self.url_input.returnPressed.connect(self._on_enqueue_clicked)
 
-        self.paste_btn = ToolButton(FluentIcon.PASTE, self)
-        self.paste_btn.setToolTip("Paste from Clipboard")
-        self.paste_btn.clicked.connect(self._paste_from_clipboard)
-
         self.enqueue_btn = PrimaryPushButton(FluentIcon.DOWNLOAD, "Analyze && Enqueue", self)
         self.enqueue_btn.clicked.connect(self._on_enqueue_clicked)
 
         input_layout.addWidget(self.url_input, 1)
-        input_layout.addWidget(self.paste_btn)
         input_layout.addWidget(self.enqueue_btn)
         main_layout.addWidget(input_container)
 
@@ -292,16 +267,13 @@ class QueueView(QWidget):
         self.progress_container.setVisible(False)
         main_layout.addWidget(self.progress_container)
 
-        # 5. Search & Filter Bar
-        filter_layout = QHBoxLayout()
+        # 5. Search & Filter Bar (Embedded in filter_container, hidden when queue is empty)
+        self.filter_container = QWidget(self)
+        filter_layout = QHBoxLayout(self.filter_container)
+        filter_layout.setContentsMargins(0, 0, 0, 0)
         filter_layout.setSpacing(10)
 
-        self.search_input = LineEdit(self)
-        self.search_input.setPlaceholderText("Filter queue by song title, artist, or album...")
-        self.search_input.setClearButtonEnabled(True)
-        self.search_input.textChanged.connect(self._on_filter_changed)
-
-        self.status_combo = ComboBox(self)
+        self.status_combo = ComboBox(self.filter_container)
         self.status_combo.addItems([
             "All Tracks",
             "Active / Downloading",
@@ -312,18 +284,40 @@ class QueueView(QWidget):
         self.status_combo.setFixedWidth(165)
         self.status_combo.currentIndexChanged.connect(self._on_filter_changed)
 
-        self.remove_selected_btn = PushButton(FluentIcon.DELETE, "Remove Selected", self)
+        self.remove_selected_btn = PushButton(FluentIcon.DELETE, "Remove Selected", self.filter_container)
         self.remove_selected_btn.clicked.connect(self._remove_selected_tracks)
         self.remove_selected_btn.setEnabled(False)
 
-        self.sel_count_label = CaptionLabel("", self)
+        self.sel_count_label = CaptionLabel("", self.filter_container)
         self.sel_count_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
 
-        filter_layout.addWidget(self.search_input, 1)
         filter_layout.addWidget(self.status_combo)
         filter_layout.addWidget(self.remove_selected_btn)
         filter_layout.addWidget(self.sel_count_label)
-        main_layout.addLayout(filter_layout)
+        filter_layout.addStretch(1)
+
+        # Shortened & Collapsible Search Bar (appears when user clicks search or presses Ctrl+F)
+        self.search_btn = ToolButton(FluentIcon.SEARCH, self.filter_container)
+        self.search_btn.setToolTip("Search Queue (Ctrl+F)")
+        self.search_btn.clicked.connect(self._toggle_search_bar)
+
+        self.search_input = LineEdit(self.filter_container)
+        self.search_input.setPlaceholderText("Filter queue...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setFixedWidth(220)
+        self.search_input.setVisible(False)
+        self.search_input.textChanged.connect(self._on_filter_changed)
+
+        filter_layout.addWidget(self.search_btn)
+        filter_layout.addWidget(self.search_input)
+
+        self.filter_container.setVisible(False)
+        main_layout.addWidget(self.filter_container)
+
+        # Search shortcut (Ctrl+F)
+        self.search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        self.search_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.search_shortcut.activated.connect(self._on_search_shortcut)
 
         # 6. Central Display Area: Stack between Empty State and TableView
         self.center_container = QWidget(self)
@@ -398,15 +392,40 @@ class QueueView(QWidget):
             event.acceptProposedAction()
 
     # -------------------------------------------------------------------------
-    # Keyboard Shortcuts
+    # Keyboard Shortcuts & Search Toggles
     # -------------------------------------------------------------------------
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Delete:
             self._remove_selected_tracks()
         elif event.matches(QKeySequence.StandardKey.SelectAll):
             self.table.selectAll()
+        elif event.key() == Qt.Key.Key_Escape and self.search_input.isVisible():
+            if not self.search_input.text().strip():
+                self.search_input.setVisible(False)
+            else:
+                self.search_input.clear()
         else:
             super().keyPressEvent(event)
+
+    def _toggle_search_bar(self):
+        """Toggles the compact queue search input on and off."""
+        if self.search_input.isVisible():
+            if not self.search_input.text().strip():
+                self.search_input.setVisible(False)
+            else:
+                self.search_input.setFocus()
+                self.search_input.selectAll()
+        else:
+            self.search_input.setVisible(True)
+            self.search_input.setFocus()
+
+    def _on_search_shortcut(self):
+        """Handles Ctrl+F shortcut to reveal and focus queue search."""
+        if not self.filter_container.isVisible():
+            return
+        self.search_input.setVisible(True)
+        self.search_input.setFocus()
+        self.search_input.selectAll()
 
     # -------------------------------------------------------------------------
     # Filtering & Display Toggles
@@ -433,9 +452,13 @@ class QueueView(QWidget):
         if total_items == 0:
             self.center_layout.setCurrentIndex(0)
             self.progress_container.setVisible(False)
+            self.filter_container.setVisible(False)
+            if self.search_input.isVisible() and not self.search_input.text().strip():
+                self.search_input.setVisible(False)
         else:
             self.center_layout.setCurrentIndex(1)
             self.progress_container.setVisible(True)
+            self.filter_container.setVisible(True)
 
     def _on_selection_changed(self):
         selected_rows = self.table.selectionModel().selectedRows()
@@ -456,10 +479,10 @@ class QueueView(QWidget):
         clipboard_text = QApplication.clipboard().text().strip()
         if SpotifyClient.parse_url(clipboard_text):
             if not self.url_input.text():
-                self.paste_btn.setIcon(FluentIcon.LINK)
-                self.paste_btn.setToolTip(f"Spotify link ready: {clipboard_text[:40]}...")
+                self.url_input.setPlaceholderText(f"📋 Spotify link in clipboard: {clipboard_text[:40]}... (Press Ctrl+V)")
         else:
-            self.paste_btn.setIcon(FluentIcon.PASTE)
+            if not self.url_input.text():
+                self.url_input.setPlaceholderText("Paste Spotify / YouTube / SoundCloud link, or enter song title & artist to search...")
 
     def _paste_from_clipboard(self, *args):
         text = QApplication.clipboard().text().strip()
