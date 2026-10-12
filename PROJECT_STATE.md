@@ -469,6 +469,24 @@ d:\Spotify-Downloader\
   6. **In-Queue Search & Filter Toolbar:** Real-time search query filtering and status dropdown (`All`, `Active`, `Queued`, `Completed`, `Failed`).
   7. **Drag & Drop URL Ingestion:** Added `setAcceptDrops(True)` to `QueueView` for dragging media URLs directly into the application.
   8. **Double-Click & Context Menu Enhancements:** Double-clicking completed items immediately initiates playback in the audio dock; context menu upgraded with Play Audio, Show in Explorer, Batch Retry, Batch Cancel, Remove from Queue, and Copy Link.
+### 40. Release v1.4.0: High-Performance UI Overhaul, Navigation Synchronization, and Library Deduplication
+- **Queue Delegate Crash Elimination & Paint Acceleration (`gui/queue_delegate.py`):**
+  1. Resolved `TypeError: setPixelSize(self, a0: int): argument 1 has unexpected type 'float'` by replacing floating-point font arithmetic with an integer-cached `_get_font(size: int, weight: int)` dictionary.
+  2. Pre-calculated and cached fixed typography metrics (`QFontMetrics`) to avoid millions of allocations during scrolling.
+  3. Added debounced thumbnail repaint throttling (100ms) to prevent UI flooding when rendering remote covers, completely eliminating recurring crash logs.
+- **Atomic Batch Model Ingestion (`gui/queue_model.py`):**
+  1. Implemented atomic batch `set_items()` using single `beginResetModel()`/`endResetModel()` blocks, preventing UI thread lockup on multi-hundred item queue refreshes.
+- **Completed View O(N^2) Reset Elimination (`gui/views/completed_view.py`):**
+  1. Removed full model resets during table population.
+  2. Eliminated per-row `setRowHeight` loops in favor of `setDefaultSectionSize(76)` on the vertical header.
+- **Non-blocking Navigation & View Switching (`gui/views/playlists_view.py`, `gui/views/settings_view.py`, `gui/main_window.py`):**
+  1. Removed synchronous OAuth validation and user profile HTTP requests on tab activation (`allow_network=False` and worker threads).
+  2. Fixed Fluent window view switcher +76px vertical drift by locking stacked widget coordinates to `(0, 0)` and applying smooth 24px Fluent slide transition over 160ms.
+- **Library Deduplication & Album Grouping (`core/archive.py`):**
+  1. Grouped albums strictly by canonical album title and primary artist, resolving multi-artist split album fragmentation (e.g. consolidating split rows into 1 single unified entry).
+  2. Reclassified mislabeled playlist tracks and removed disk-checking I/O blocking from queries.
+- **Release Version Bump (v1.4.0):**
+  - Updated versions across `core/__init__.py`, `main.py`, `installer.iss`, `version_info.txt`, `core/lyrics.py`, `core/genre.py`, `build_windows.py`, and `README.md`.
 
 ## 5. Development Cheat Sheet
 

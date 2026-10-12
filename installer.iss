@@ -2,7 +2,7 @@
 ; Production-Grade Per-User Windows Installer
 
 #define MyAppName "Flacify"
-#define MyAppVersion "1.3.2"
+#define MyAppVersion "1.4.0"
 #define MyAppPublisher "Flacify Project"
 #define MyAppExeName "Flacify.exe"
 #define MyAppMutex "FlacifyMutex"
@@ -24,7 +24,7 @@ AllowNoIcons=yes
 
 ; Output Configuration
 OutputDir=dist\installer
-OutputBaseFilename=Flacify_Setup_v1.3.2
+OutputBaseFilename=Flacify_Setup_v1.4.0
 SetupIconFile=assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
@@ -40,12 +40,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 AppMutex={#MyAppMutex}
 
 ; Windows Add/Remove Programs Metadata
-VersionInfoVersion=1.3.2.0
+VersionInfoVersion=1.4.0.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=Flacify High-Fidelity Audio Scraper Setup
 VersionInfoCopyright=Copyright (C) 2026 {#MyAppPublisher}
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=1.3.2.0
+VersionInfoProductVersion=1.4.0.0
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

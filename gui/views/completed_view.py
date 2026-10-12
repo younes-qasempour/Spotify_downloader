@@ -1,7 +1,8 @@
 import os
 import subprocess
+import threading
 from typing import Optional, List, Dict, Any
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QHeaderView, QMenu, QApplication,
     QStackedWidget, QFrame, QLabel
@@ -172,6 +173,10 @@ class CompletedView(QWidget):
         self._current_collection_name: Optional[str] = None
         self._current_collection_type: str = "playlist"
         self._current_collection_folder: str = ""
+
+        self._tracks_dirty = False
+        self._playlists_dirty = False
+        self._albums_dirty = False
 
         self._init_ui()
         self.reload_all()
@@ -384,15 +389,20 @@ class CompletedView(QWidget):
         if index == 0:
             if self._current_collection_name:
                 self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
-            else:
+            elif getattr(self, "_tracks_dirty", False) or search_query:
                 self.reload_from_archive(search_query)
+                self._tracks_dirty = False
         elif index == 1:
-            self.reload_playlists(search_query)
+            if getattr(self, "_playlists_dirty", False) or search_query:
+                self.reload_playlists(search_query)
+                self._playlists_dirty = False
         elif index == 2:
-            self.reload_albums(search_query)
+            if getattr(self, "_albums_dirty", False) or search_query:
+                self.reload_albums(search_query)
+                self._albums_dirty = False
 
     def reload_all(self):
-        """Refreshes high-level library counters and all view tabs."""
+        """Refreshes high-level library counters and active view tab."""
         stats = self.archive.get_library_stats()
         t_count = stats["total_tracks"]
         p_count = stats["total_playlists"]
@@ -408,14 +418,44 @@ class CompletedView(QWidget):
         # Update available genre options dynamically
         self._update_genre_combo()
 
-        # Refresh all tabs so switching is instantaneous
+        # Refresh only active tab immediately; mark others dirty for lazy load
         search_query = self.search_input.text().strip()
-        if self._current_collection_name and self.stacked.currentIndex() == 0:
-            self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
-        else:
-            self.reload_from_archive(search_query)
-        self.reload_playlists(search_query)
-        self.reload_albums(search_query)
+        curr_idx = self.stacked.currentIndex()
+        if curr_idx == 0:
+            if self._current_collection_name:
+                self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
+            else:
+                self.reload_from_archive(search_query)
+            self._tracks_dirty = False
+            self._playlists_dirty = True
+            self._albums_dirty = True
+        elif curr_idx == 1:
+            self.reload_playlists(search_query)
+            self._tracks_dirty = True
+            self._playlists_dirty = False
+            self._albums_dirty = True
+        elif curr_idx == 2:
+            self.reload_albums(search_query)
+            self._tracks_dirty = True
+            self._playlists_dirty = True
+            self._albums_dirty = False
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        search_query = self.search_input.text().strip()
+        curr_idx = self.stacked.currentIndex()
+        if curr_idx == 0 and getattr(self, "_tracks_dirty", False):
+            if self._current_collection_name:
+                self._load_collection_tracks(self._current_collection_name, self._current_collection_type, search_query)
+            else:
+                self.reload_from_archive(search_query)
+            self._tracks_dirty = False
+        elif curr_idx == 1 and getattr(self, "_playlists_dirty", False):
+            self.reload_playlists(search_query)
+            self._playlists_dirty = False
+        elif curr_idx == 2 and getattr(self, "_albums_dirty", False):
+            self.reload_albums(search_query)
+            self._albums_dirty = False
 
     def _update_genre_combo(self):
         """Populates the genre dropdown with all genres present in the local archive."""
@@ -488,7 +528,7 @@ class CompletedView(QWidget):
             genre_filter = ""
         rows = self.archive.get_all_tracks(search_query, genre_filter=genre_filter)
         rows = self._sort_rows(rows)
-        self.model.clear()
+        items = []
 
         for r in rows:
             genre_raw = r.get("genre", "") or ""
@@ -525,11 +565,9 @@ class CompletedView(QWidget):
                 progress_percent=100.0,
                 output_path=f_path
             )
-            self.model.add_item(item)
-            row = self.model.rowCount() - 1
-            if row >= 0:
-                self.table.setRowHeight(row, 76)
+            items.append(item)
 
+        self.model.set_items(items)
         self.table.viewport().update()
 
     def reload_playlists(self, search_query: str = ""):
@@ -759,7 +797,7 @@ class CompletedView(QWidget):
             genre_filter = ""
         rows = self.archive.get_collection_tracks(name, coll_type, genre_filter=genre_filter)
         rows = self._sort_rows(rows)
-        self.model.clear()
+        items = []
 
         q = filter_query.strip().lower()
         for r in rows:
@@ -804,11 +842,9 @@ class CompletedView(QWidget):
                 progress_percent=100.0,
                 output_path=f_path
             )
-            self.model.add_item(item)
-            row = self.model.rowCount() - 1
-            if row >= 0:
-                self.table.setRowHeight(row, 76)
+            items.append(item)
 
+        self.model.set_items(items)
         self.table.viewport().update()
 
     def _on_back_to_collections(self, *args):
@@ -841,21 +877,38 @@ class CompletedView(QWidget):
             self.reload_albums(text.strip())
 
     def _on_track_completed(self, track_id: str, path: str):
-        # Refresh views when a track finishes
-        self.reload_all()
+        self._tracks_dirty = True
+        self._playlists_dirty = True
+        self._albums_dirty = True
 
     def add_completed_item(self, item: QueueItem):
-        """Immediately updates views upon track completion."""
-        self.reload_all()
+        """Incrementally updates active view or marks dirty upon track completion."""
+        self._playlists_dirty = True
+        self._albums_dirty = True
+        if self.isVisible() and self.stacked.currentIndex() == 0 and not self.search_input.text().strip():
+            self.model.add_item(item)
+            c = self.model.rowCount()
+            self.segmented.setItemText("tracks", f"🎵 All Songs ({c})")
+        else:
+            self._tracks_dirty = True
 
     def _on_rescan_clicked(self, *args):
         out_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))
-        if os.path.isdir(out_dir):
-            indexed = self.archive.scan_and_index_directory(out_dir)
-            self.reload_all()
-            InfoBar.success("Library Synced", f"Scanned folder and synchronized {indexed} file(s).", duration=3000, parent=self)
-        else:
+        if not os.path.isdir(out_dir):
             InfoBar.warning("Folder Not Found", f"Directory does not exist: {out_dir}", parent=self)
+            return
+
+        InfoBar.info("Syncing Library", "Scanning audio folder in background...", duration=3000, parent=self)
+
+        def worker():
+            indexed = self.archive.scan_and_index_directory(out_dir)
+            QTimer.singleShot(0, lambda: self._on_rescan_done(indexed))
+
+        threading.Thread(target=worker, daemon=True, name="ManualRescanWorker").start()
+
+    def _on_rescan_done(self, indexed: int):
+        self.reload_all()
+        InfoBar.success("Library Synced", f"Scanned folder and synchronized {indexed} file(s).", duration=3000, parent=self)
 
     def _open_download_folder(self, *args):
         out_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))

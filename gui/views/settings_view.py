@@ -1071,8 +1071,8 @@ class SettingsView(QScrollArea):
         self.auth_sp_btn.setEnabled(True)
         try:
             client = SpotifyClient(client_id=cid, client_secret=sec)
-            if client.has_user_auth():
-                user_name = client.get_current_user_name()
+            if client.has_user_auth(allow_network=False):
+                user_name = client._cached_user_name or ""
                 user_str = f" as @{user_name}" if user_name else ""
                 self.sp_status_badge.setText(f"Authorized{user_str} (Full Access Active)")
                 self.sp_status_badge.setStyleSheet(
@@ -1080,6 +1080,16 @@ class SettingsView(QScrollArea):
                     "padding: 3px 10px; border-radius: 10px; font-weight: bold; border: 1px solid #1DB954;"
                 )
                 self.auth_sp_btn.setText("Switch Account / Re-Authorize")
+                if not user_name and not getattr(self, "_fetching_sp_user", False):
+                    self._fetching_sp_user = True
+                    def _fetch():
+                        try:
+                            name = client.get_current_user_name()
+                            if name:
+                                QTimer.singleShot(0, self._update_spotify_badge)
+                        finally:
+                            self._fetching_sp_user = False
+                    threading.Thread(target=_fetch, daemon=True, name="SettingsSpotifyNameFetcher").start()
             else:
                 self.sp_status_badge.setText("Keys Set — Authorization Needed for >100 Tracks")
                 self.sp_status_badge.setStyleSheet(

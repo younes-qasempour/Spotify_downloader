@@ -1,7 +1,7 @@
 import os
 import sys
 import logging
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QEasingCurve, QPoint
 from PyQt6.QtGui import QIcon, QKeySequence, QShortcut, QColor
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QVBoxLayout
 from qfluentwidgets import (
@@ -141,17 +141,18 @@ class MainWindow(FluentWindow):
         # Mini-Player Dock
         self.player_bar = MiniPlayerBar(self)
         try:
-            right_item = self.layout().itemAt(1)
-            if right_item and right_item.layout():
-                right_lay = right_item.layout()
-                v_player_lay = QVBoxLayout()
-                v_player_lay.setContentsMargins(0, 0, 0, 0)
-                v_player_lay.setSpacing(0)
-                v_player_lay.addWidget(self.stackedWidget, 1)
-                v_player_lay.addWidget(self.player_bar, 0)
-                right_lay.addLayout(v_player_lay)
+            self.widgetLayout.removeWidget(self.stackedWidget)
+            v_player_lay = QVBoxLayout()
+            v_player_lay.setContentsMargins(0, 0, 0, 0)
+            v_player_lay.setSpacing(0)
+            v_player_lay.addWidget(self.stackedWidget, 1)
+            v_player_lay.addWidget(self.player_bar, 0)
+            self.widgetLayout.addLayout(v_player_lay)
         except Exception as e_dock:
             logger.debug(f"Could not dock player bar into layout: {e_dock}")
+
+        # Optimize tab switching animation: prevent position drift and ensure snappy, smooth transition
+        self._setup_smooth_tab_transitions()
 
         # Windows 11 System Tray Icon & Toasts
         self._init_system_tray(icon_path)
@@ -184,6 +185,38 @@ class MainWindow(FluentWindow):
             "Settings",
             NavigationItemPosition.BOTTOM
         )
+
+    def _setup_smooth_tab_transitions(self):
+        """
+        Hardens PopUpAniStackedWidget tab transitions:
+        - Prevents position drift when switching tabs rapidly
+        - Replaces jarring 76px jump with subtle, elegant 24px Fluent slide
+        - Reduces animation duration from 300ms to a snappy 160ms
+        - Guarantees views are always cleanly positioned at (0, 0)
+        """
+        view = self.stackedWidget.view
+        for info in view.aniInfos:
+            info.deltaY = 24
+
+        orig_setCurrentIndex = view.setCurrentIndex
+
+        def safe_setCurrentIndex(index: int, *args, **kwargs):
+            if index == view.currentIndex():
+                return
+            if view._ani and view._ani.state() == view._ani.State.Running:
+                view._ani.stop()
+            for info in view.aniInfos:
+                info.widget.move(0, 0)
+            return orig_setCurrentIndex(
+                index,
+                needPopOut=False,
+                showNextWidgetDirectly=True,
+                duration=160,
+                easingCurve=QEasingCurve.Type.OutCubic
+            )
+
+        view.setCurrentIndex = safe_setCurrentIndex
+        view.aniFinished.connect(lambda: view.currentWidget().move(0, 0) if view.currentWidget() else None)
 
     def _init_system_tray(self, icon_path):
         """Initializes Windows 11 System Tray icon with quick actions and toast notifications."""
@@ -305,8 +338,11 @@ class MainWindow(FluentWindow):
             indexed = self.archive_manager.scan_and_index_directory(output_dir)
             if indexed > 0:
                 logger.info(f"Startup scan indexed {indexed} tracks into download archive.")
-            # Safe thread-safe reload of the completed library on the Qt event loop
-            self.sig_reload_library.emit()
+                # Safe thread-safe reload of the completed library on the Qt event loop
+                try:
+                    self.sig_reload_library.emit()
+                except (RuntimeError, AttributeError):
+                    pass
         except Exception as e:
             logger.warning(f"Error during startup archive directory scan: {e}")
 

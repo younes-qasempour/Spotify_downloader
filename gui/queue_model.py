@@ -100,6 +100,11 @@ class TrackQueueModel(QAbstractTableModel):
 
         self._apply_filter()
 
+    def set_items(self, items: List[QueueItem]):
+        """Replaces all items in a single atomic batch with exactly one model reset."""
+        self._all_items = list(items)
+        self._apply_filter()
+
     def remove_items(self, track_ids: List[str]):
         """Removes a list of items by track ID from the model and rebuilds row index."""
         if not track_ids:

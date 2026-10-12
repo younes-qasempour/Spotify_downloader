@@ -815,9 +815,10 @@ class YtdlpEngine:
                 return None
             downloaded_file: Optional[str] = None
             _clean_part_files()
+            last_progress_time = 0.0
 
             def ydl_hook(d: Dict[str, Any]):
-                nonlocal downloaded_file
+                nonlocal downloaded_file, last_progress_time
                 if cancel_check and cancel_check():
                     raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")
                 if pause_wait:
@@ -825,8 +826,15 @@ class YtdlpEngine:
 
                 status = d.get("status")
                 if status == "downloading":
+                    now = time.time()
                     total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                     downloaded = d.get("downloaded_bytes") or 0
+
+                    # Throttle progress callbacks to max 10/sec to protect GUI event loop
+                    if (now - last_progress_time < 0.10) and (total_bytes <= 0 or downloaded < total_bytes):
+                        return
+                    last_progress_time = now
+
                     speed = d.get("speed") or 0
                     eta = d.get("eta") or 0
 

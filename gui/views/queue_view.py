@@ -156,6 +156,11 @@ class QueueView(QWidget):
         self.delegate = TrackCardDelegate(self)
 
         self.setAcceptDrops(True)
+        self._metrics_timer = QTimer(self)
+        self._metrics_timer.setSingleShot(True)
+        self._metrics_timer.setInterval(200)
+        self._metrics_timer.timeout.connect(self._update_metrics)
+
         self._init_ui()
         self._connect_signals()
 
@@ -740,27 +745,23 @@ class QueueView(QWidget):
 
     def _handle_source_resolved(self, track_id: str, source_type: str, quality_badge: str):
         self.model.update_source(track_id, source_type, quality_badge)
-        self.table.viewport().update()
 
     def _handle_progress(self, track_id: str, percent: float, speed_str: str, eta_str: str):
         self.model.update_progress(track_id, percent, speed_str, eta_str)
-        self._update_metrics()
-        self.table.viewport().update()
+        if not self._metrics_timer.isActive():
+            self._metrics_timer.start()
 
     def _handle_status_changed(self, track_id: str, status: str):
         self.model.update_status(track_id, status)
         self._update_metrics()
-        self.table.viewport().update()
 
     def _handle_completed(self, track_id: str, path: str):
         self.model.mark_completed(track_id, path)
         self._update_metrics()
-        self.table.viewport().update()
 
     def _handle_failed(self, track_id: str, err: str):
         self.model.mark_failed(track_id, err)
         self._update_metrics()
-        self.table.viewport().update()
 
     def _update_metrics(self):
         total, active, completed, failed = self.model.get_stats()

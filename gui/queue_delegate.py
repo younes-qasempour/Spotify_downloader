@@ -68,7 +68,8 @@ import collections
 from concurrent.futures import ThreadPoolExecutor
 
 class ThumbnailSignalEmitter(QObject):
-    sig_loaded = pyqtSignal(str)
+    sig_internal_loaded = pyqtSignal(str, object)  # key, QImage
+    sig_loaded = pyqtSignal(str)                   # key
 
 
 class ThumbnailCache:
@@ -83,8 +84,27 @@ class ThumbnailCache:
             cls._instance.cache: collections.OrderedDict[str, QPixmap] = collections.OrderedDict()
             cls._instance.loading: set = set()
             cls._instance.emitter = ThumbnailSignalEmitter()
-            cls._instance.pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ThumbLoader")
+            cls._instance.emitter.sig_internal_loaded.connect(cls._instance._on_internal_loaded)
+            cls._instance.pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ThumbLoader")
         return cls._instance
+
+    def _on_internal_loaded(self, key: str, img: Any):
+        # Runs on GUI thread: safe to create QPixmap
+        if img and hasattr(img, "isNull") and not img.isNull():
+            try:
+                pix = QPixmap.fromImage(img)
+                with self._lock:
+                    self.cache[key] = pix
+                    self.cache.move_to_end(key)
+                    while len(self.cache) > self.MAX_CACHE_SIZE:
+                        self.cache.popitem(last=False)
+                    self.loading.discard(key)
+                self.emitter.sig_loaded.emit(key)
+                return
+            except Exception:
+                pass
+        with self._lock:
+            self.loading.discard(key)
 
     def get(self, key: str) -> Optional[QPixmap]:
         if not key:
@@ -104,8 +124,8 @@ class ThumbnailCache:
             self.loading.add(key)
 
         def worker():
-            pix_bytes = None
             try:
+                pix_bytes = None
                 if os.path.isfile(key):
                     ext = os.path.splitext(key)[1].lower()
                     if ext in (".jpg", ".jpeg", ".png", ".webp"):
@@ -127,14 +147,7 @@ class ThumbnailCache:
                             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                             Qt.TransformationMode.SmoothTransformation
                         )
-                        pix = QPixmap.fromImage(scaled)
-                        with self._lock:
-                            self.cache[key] = pix
-                            self.cache.move_to_end(key)
-                            while len(self.cache) > self.MAX_CACHE_SIZE:
-                                self.cache.popitem(last=False)
-                            self.loading.discard(key)
-                        self.emitter.sig_loaded.emit(key)
+                        self.emitter.sig_internal_loaded.emit(key, scaled)
                         return
             except Exception:
                 pass
@@ -162,7 +175,29 @@ class TrackCardDelegate(QStyledItemDelegate):
         self.pressedRow = -1
         self.selectedRows = set()
 
+        # Pre-cached fonts to avoid thousands of allocations per second and prevent PyQt6 TypeError
+        self.font_icon = QFont("Segoe UI", 13)
+        self.font_status = QFont("Segoe UI", 8, QFont.Weight.DemiBold)
+        self.font_dur = QFont("Segoe UI", 9)
+        self.font_badge = QFont("Segoe UI", 7, QFont.Weight.Bold)
+        self.font_pct = QFont("Segoe UI", 8, QFont.Weight.Bold)
+        self.font_speed = QFont("Segoe UI", 8)
+        self.font_title = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        self.fm_title = QFontMetrics(self.font_title)
+        self.font_sub = QFont("Segoe UI", 9)
+        self.fm_sub = QFontMetrics(self.font_sub)
+
+        # Throttled timer to batch viewport updates during rapid thumbnail decodes
+        self._thumb_timer = QTimer(self)
+        self._thumb_timer.setSingleShot(True)
+        self._thumb_timer.setInterval(40)
+        self._thumb_timer.timeout.connect(self._do_viewport_update)
+
     def _on_thumbnail_loaded(self, key: str):
+        if not self._thumb_timer.isActive():
+            self._thumb_timer.start()
+
+    def _do_viewport_update(self):
         p = self.parent()
         if p:
             if hasattr(p, "viewport"):
@@ -239,11 +274,7 @@ class TrackCardDelegate(QStyledItemDelegate):
         thumb_path = QPainterPath()
         thumb_path.addRoundedRect(thumb_rect, 6, 6)
 
-        thumb_key = ""
-        if item.output_path and os.path.isfile(item.output_path):
-            thumb_key = item.output_path
-        elif item.track.cover_url:
-            thumb_key = item.track.cover_url
+        thumb_key = item.output_path or item.track.cover_url or ""
 
         pixmap = self.thumb_cache.get(thumb_key) if thumb_key else None
         if pixmap:
@@ -256,7 +287,7 @@ class TrackCardDelegate(QStyledItemDelegate):
             painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
             painter.drawPath(thumb_path)
             painter.setPen(TEXT_MUTED)
-            painter.setFont(QFont("Segoe UI", 13))
+            painter.setFont(self.font_icon)
             painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter, "♫")
 
             if thumb_key:
@@ -276,7 +307,7 @@ class TrackCardDelegate(QStyledItemDelegate):
 
         display_status = "✓ Completed" if item.status == "Completed" else item.status
         painter.setPen(fg_status)
-        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        painter.setFont(self.font_status)
         painter.drawText(status_rect, Qt.AlignmentFlag.AlignCenter, display_status)
 
         # 3. Middle Section: Dynamic layout based on status
@@ -289,7 +320,7 @@ class TrackCardDelegate(QStyledItemDelegate):
             dur_w = 46
             dur_rect = QRectF(status_left - dur_w, card_rect.y(), dur_w, card_rect.height())
             painter.setPen(TEXT_SECONDARY)
-            painter.setFont(QFont("Segoe UI", 9))
+            painter.setFont(self.font_dur)
             painter.drawText(dur_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, dur_str)
             middle_left = dur_rect.left()
 
@@ -306,7 +337,7 @@ class TrackCardDelegate(QStyledItemDelegate):
                 painter.drawPath(b_path)
 
                 painter.setPen(badge_fg)
-                painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+                painter.setFont(self.font_badge)
                 painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, item.quality_badge)
                 middle_left = badge_rect.left()
 
@@ -321,7 +352,7 @@ class TrackCardDelegate(QStyledItemDelegate):
             pct_str = f"{int(pct_val)}%"
             pct_rect = QRectF(center_x + center_w - 45, card_rect.y() + 11, 45, 18)
             painter.setPen(SPOTIFY_EMERALD)
-            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            painter.setFont(self.font_pct)
             painter.drawText(pct_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, pct_str)
 
             # Quality badge on top left if available
@@ -336,7 +367,7 @@ class TrackCardDelegate(QStyledItemDelegate):
                 painter.setPen(QPen(badge_fg, 0.8))
                 painter.drawPath(b_path)
                 painter.setPen(badge_fg)
-                painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+                painter.setFont(self.font_badge)
                 painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, item.quality_badge)
 
             # Sleek progress track
@@ -355,7 +386,7 @@ class TrackCardDelegate(QStyledItemDelegate):
             # Speed and ETA below bar
             speed_text = f"{item.speed_str} • {item.eta_str}" if item.speed_str else "Connecting to stream..."
             painter.setPen(TEXT_MUTED)
-            painter.setFont(QFont("Segoe UI", 7.5))
+            painter.setFont(self.font_speed)
             speed_rect = QRectF(center_x, card_rect.y() + 43, center_w, 16)
             painter.drawText(speed_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, speed_text)
 
@@ -364,7 +395,7 @@ class TrackCardDelegate(QStyledItemDelegate):
             dur_w = 46
             dur_rect = QRectF(status_left - dur_w, card_rect.y(), dur_w, card_rect.height())
             painter.setPen(TEXT_MUTED)
-            painter.setFont(QFont("Segoe UI", 9))
+            painter.setFont(self.font_dur)
             painter.drawText(dur_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, dur_str)
             middle_left = dur_rect.left()
 
@@ -381,7 +412,7 @@ class TrackCardDelegate(QStyledItemDelegate):
                 painter.drawPath(b_path)
 
                 painter.setPen(badge_fg)
-                painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+                painter.setFont(self.font_badge)
                 painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, item.quality_badge)
                 middle_left = badge_rect.left()
 
@@ -392,15 +423,13 @@ class TrackCardDelegate(QStyledItemDelegate):
 
         # Track Title
         painter.setPen(TEXT_PRIMARY)
-        font_title = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
-        painter.setFont(font_title)
-        fm_title = QFontMetrics(font_title)
+        painter.setFont(self.font_title)
 
         display_title = item.track.title
         if getattr(item.track, "collection_type", "") == "album" and getattr(item.track, "track_number", 0) > 0:
             if not re.match(r"^\d{1,3}[\s.\-_]+", display_title):
                 display_title = f"{item.track.track_number:02d}. {display_title}"
-        elided_title = fm_title.elidedText(display_title, Qt.TextElideMode.ElideRight, int(text_w))
+        elided_title = self.fm_title.elidedText(display_title, Qt.TextElideMode.ElideRight, int(text_w))
         painter.drawText(int(text_x), int(card_rect.y() + 26), elided_title)
 
         # Artist & Album Subtitle
@@ -412,10 +441,8 @@ class TrackCardDelegate(QStyledItemDelegate):
             sub_text = artist_name
 
         painter.setPen(TEXT_SECONDARY)
-        font_sub = QFont("Segoe UI", 8.5)
-        painter.setFont(font_sub)
-        fm_sub = QFontMetrics(font_sub)
-        elided_sub = fm_sub.elidedText(sub_text, Qt.TextElideMode.ElideRight, int(text_w))
+        painter.setFont(self.font_sub)
+        elided_sub = self.fm_sub.elidedText(sub_text, Qt.TextElideMode.ElideRight, int(text_w))
         painter.drawText(int(text_x), int(card_rect.y() + 48), elided_sub)
 
         painter.restore()

@@ -94,6 +94,7 @@ class SpotifyClient:
         self.last_total_tracks: int = 0
         self.last_api_error: str = ""
         self.last_owner_name: str = ""
+        self._cached_user_name: Optional[str] = None
         self._init_api()
 
         self._session = requests.Session()
@@ -114,7 +115,15 @@ class SpotifyClient:
         """Returns True if Spotify API client ID and secret are configured."""
         return bool(self.client_id and self.client_secret)
 
-    def has_user_auth(self) -> bool:
+    def has_cached_token(self) -> bool:
+        """Fast non-blocking check to see if an OAuth token file exists locally."""
+        try:
+            token_cache = os.path.join(str(get_cache_dir()), ".spotify_token_cache")
+            return os.path.exists(token_cache) and os.path.getsize(token_cache) > 5
+        except Exception:
+            return False
+
+    def has_user_auth(self, allow_network: bool = True) -> bool:
         """Returns True if user has authorized via SpotifyOAuth (cached token valid or refreshable)."""
         if not self._oauth:
             self._init_api()
@@ -124,6 +133,8 @@ class SpotifyClient:
             cached = self._oauth.cache_handler.get_cached_token()
             if not cached:
                 return False
+            if not allow_network:
+                return True
             token = self._oauth.validate_token(cached)
             return bool(token)
         except Exception as e:
@@ -132,7 +143,10 @@ class SpotifyClient:
 
     def get_current_user_name(self) -> str:
         """Returns the Spotify display name of the currently authorized user, or empty string."""
+        if self._cached_user_name is not None:
+            return self._cached_user_name
         if not self.has_user_auth():
+            self._cached_user_name = ""
             return ""
         try:
             if not self._sp:
@@ -140,13 +154,16 @@ class SpotifyClient:
             if self._sp:
                 me = self._sp.current_user()
                 if me:
-                    return me.get("display_name") or me.get("id", "")
+                    self._cached_user_name = me.get("display_name") or me.get("id", "")
+                    return self._cached_user_name
         except Exception:
             pass
+        self._cached_user_name = ""
         return ""
 
     def clear_user_auth(self):
         """Clears the cached OAuth token and resets the API client to unauthenticated."""
+        self._cached_user_name = None
         token_cache = os.path.join(str(get_cache_dir()), ".spotify_token_cache")
         if os.path.exists(token_cache):
             try:

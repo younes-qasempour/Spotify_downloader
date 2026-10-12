@@ -207,92 +207,115 @@ class ArchiveManager:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_playlist_status ON saved_playlist_tracks (playlist_id, status);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_spotify_id ON saved_playlist_tracks (spotify_id);")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_file_path ON saved_playlist_tracks (file_path COLLATE NOCASE);")
+                    # Migrations for existing databases
+                    for col_stmt in [
+                        "ALTER TABLE downloaded_tracks ADD COLUMN track_number INTEGER DEFAULT 1;",
+                        "ALTER TABLE downloaded_tracks ADD COLUMN disc_number INTEGER DEFAULT 1;",
+                        "ALTER TABLE downloaded_tracks ADD COLUMN genre TEXT DEFAULT '';",
+                        "ALTER TABLE saved_playlist_tracks ADD COLUMN quality_badge TEXT DEFAULT '';",
+                        "ALTER TABLE saved_playlist_tracks ADD COLUMN source_type TEXT DEFAULT '';",
+                        "ALTER TABLE saved_playlist_tracks ADD COLUMN genre TEXT DEFAULT '';",
+                    ]:
+                        try:
+                            conn.execute(col_stmt)
+                        except sqlite3.OperationalError:
+                            pass
+
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_genre ON saved_playlist_tracks (genre);")
 
-                    # Migrations for existing databases
-                    try:
-                        conn.execute("ALTER TABLE downloaded_tracks ADD COLUMN track_number INTEGER DEFAULT 1;")
-                    except sqlite3.OperationalError:
-                        pass
-                    try:
-                        conn.execute("ALTER TABLE downloaded_tracks ADD COLUMN disc_number INTEGER DEFAULT 1;")
-                    except sqlite3.OperationalError:
-                        pass
-                    try:
-                        conn.execute("ALTER TABLE downloaded_tracks ADD COLUMN genre TEXT DEFAULT '';")
-                    except sqlite3.OperationalError:
-                        pass
-                    try:
-                        conn.execute("ALTER TABLE saved_playlist_tracks ADD COLUMN quality_badge TEXT DEFAULT '';")
-                    except sqlite3.OperationalError:
-                        pass
-                    try:
-                        conn.execute("ALTER TABLE saved_playlist_tracks ADD COLUMN source_type TEXT DEFAULT '';")
-                    except sqlite3.OperationalError:
-                        pass
-                    try:
-                        conn.execute("ALTER TABLE saved_playlist_tracks ADD COLUMN genre TEXT DEFAULT '';")
-                    except sqlite3.OperationalError:
-                        pass
+                    # Check if any backfill is needed before running expensive UPDATE statements
+                    cur = conn.execute("SELECT 1 FROM saved_playlist_tracks WHERE (quality_badge IS NULL OR quality_badge = '') LIMIT 1")
+                    if cur.fetchone():
+                        conn.execute("""
+                            UPDATE saved_playlist_tracks
+                            SET quality_badge = (
+                                SELECT quality_badge FROM downloaded_tracks 
+                                WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                                LIMIT 1
+                            ),
+                            source_type = (
+                                SELECT source_type FROM downloaded_tracks 
+                                WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                                LIMIT 1
+                            )
+                            WHERE (quality_badge IS NULL OR quality_badge = '')
+                              AND EXISTS (
+                                SELECT 1 FROM downloaded_tracks 
+                                WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                              );
+                        """)
 
-                    # Backfill quality_badge and source_type for downloaded playlist tracks
-                    conn.execute("""
-                        UPDATE saved_playlist_tracks
-                        SET quality_badge = (
-                            SELECT quality_badge FROM downloaded_tracks 
-                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
-                            LIMIT 1
-                        ),
-                        source_type = (
-                            SELECT source_type FROM downloaded_tracks 
-                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
-                            LIMIT 1
-                        )
-                        WHERE (quality_badge IS NULL OR quality_badge = '')
-                          AND EXISTS (
-                            SELECT 1 FROM downloaded_tracks 
-                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
-                          );
-                    """)
+                        conn.execute("""
+                            UPDATE saved_playlist_tracks
+                            SET quality_badge = CASE 
+                                WHEN LOWER(file_path) LIKE '%.opus' THEN 'YTM Opus'
+                                WHEN LOWER(file_path) LIKE '%.mp3' THEN 'Musilon 320k'
+                                WHEN LOWER(file_path) LIKE '%.ogg' THEN 'Musilon 320k'
+                                WHEN LOWER(file_path) LIKE '%.m4a' THEN 'YTM M4A'
+                                WHEN LOWER(file_path) LIKE '%.flac' THEN 'FLAC 16'
+                                ELSE 'FLAC 16'
+                            END,
+                            source_type = CASE
+                                WHEN LOWER(file_path) LIKE '%.opus' THEN 'YouTube Music'
+                                WHEN LOWER(file_path) LIKE '%.m4a' THEN 'YouTube Music'
+                                ELSE 'Musilon'
+                            END
+                            WHERE status = 'downloaded' AND (quality_badge IS NULL OR quality_badge = '') AND file_path != '';
+                        """)
 
-                    # Backfill genre for saved playlist tracks from downloaded_tracks
-                    conn.execute("""
-                        UPDATE saved_playlist_tracks
-                        SET genre = (
-                            SELECT genre FROM downloaded_tracks 
-                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
-                            LIMIT 1
-                        )
-                        WHERE (genre IS NULL OR genre = '')
-                          AND EXISTS (
-                            SELECT 1 FROM downloaded_tracks 
-                            WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
-                              AND downloaded_tracks.genre IS NOT NULL
-                              AND downloaded_tracks.genre != ''
-                          );
-                    """)
-
-                    # For remaining downloaded tracks without badge, infer from file extension:
-                    conn.execute("""
-                        UPDATE saved_playlist_tracks
-                        SET quality_badge = CASE 
-                            WHEN LOWER(file_path) LIKE '%.opus' THEN 'YTM Opus'
-                            WHEN LOWER(file_path) LIKE '%.mp3' THEN 'Musilon 320k'
-                            WHEN LOWER(file_path) LIKE '%.ogg' THEN 'Musilon 320k'
-                            WHEN LOWER(file_path) LIKE '%.m4a' THEN 'YTM M4A'
-                            WHEN LOWER(file_path) LIKE '%.flac' THEN 'FLAC 16'
-                            ELSE 'FLAC 16'
-                        END,
-                        source_type = CASE
-                            WHEN LOWER(file_path) LIKE '%.opus' THEN 'YouTube Music'
-                            WHEN LOWER(file_path) LIKE '%.m4a' THEN 'YouTube Music'
-                            ELSE 'Musilon'
-                        END
-                        WHERE status = 'downloaded' AND (quality_badge IS NULL OR quality_badge = '') AND file_path != '';
-                    """)
+                    cur_g = conn.execute("SELECT 1 FROM saved_playlist_tracks WHERE (genre IS NULL OR genre = '') LIMIT 1")
+                    if cur_g.fetchone():
+                        conn.execute("""
+                            UPDATE saved_playlist_tracks
+                            SET genre = (
+                                SELECT genre FROM downloaded_tracks 
+                                WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                                LIMIT 1
+                            )
+                            WHERE (genre IS NULL OR genre = '')
+                              AND EXISTS (
+                                SELECT 1 FROM downloaded_tracks 
+                                WHERE downloaded_tracks.spotify_id = saved_playlist_tracks.spotify_id
+                                  AND downloaded_tracks.genre IS NOT NULL
+                                  AND downloaded_tracks.genre != ''
+                              );
+                        """)
 
                     # Reset any stale 'queued' or 'stopped' tracks from previous sessions back to 'pending'
                     conn.execute("UPDATE saved_playlist_tracks SET status = 'pending' WHERE status IN ('queued', 'stopped');")
+
+                    # Data integrity cleanup: resolve misclassified collections and duplicate album fragmentation
+                    try:
+                        conn.execute("""
+                            UPDATE downloaded_tracks
+                            SET collection_type = 'playlist', collection_name = 'Repeat Rewind'
+                            WHERE LOWER(collection_name) = 'repeat rewind'
+                               OR LOWER(file_path) LIKE '%repeat rewind%';
+                        """)
+                        conn.execute("""
+                            UPDATE downloaded_tracks
+                            SET album = 'Clair Obscur: Expedition 33 (Original Soundtrack)',
+                                collection_name = 'Clair Obscur: Expedition 33 (Original Soundtrack)',
+                                collection_type = 'album'
+                            WHERE LOWER(file_path) LIKE '%clair obscur%'
+                               OR LOWER(album) LIKE '%clair obscur%'
+                               OR LOWER(collection_name) LIKE '%clair obscur%';
+                        """)
+                        conn.execute("""
+                            UPDATE downloaded_tracks
+                            SET collection_name = 'Sex Playlist 👅💦Hottest Bedroom Music🔞 (Isabel LaRosa, Montell Fish, Two feet, The Neighbourhood'
+                            WHERE collection_name LIKE 'Sex Playlist%Isabel LaRosa, Montel%';
+                        """)
+                        conn.execute("""
+                            UPDATE downloaded_tracks
+                            SET collection_type = 'playlist'
+                            WHERE LOWER(collection_name) IN (
+                                SELECT LOWER(name) FROM saved_playlists 
+                                WHERE spotify_url NOT LIKE '%/album/%'
+                            );
+                        """)
+                    except Exception as e_clean:
+                        logger.debug(f"Data cleanup notice: {e_clean}")
 
                 logger.info(f"Initialized Archive database at: {self.db_path}")
             except Exception as e:
@@ -566,23 +589,7 @@ class ArchiveManager:
                 sql += " ORDER BY downloaded_at DESC"
 
                 cur = conn.execute(sql, tuple(params))
-                results: List[Dict[str, Any]] = []
-                stale_ids: List[str] = []
-
-                for row in cur.fetchall():
-                    item = dict(row)
-                    # Verify file exists on disk
-                    if os.path.isfile(item.get("file_path", "")):
-                        results.append(item)
-                    else:
-                        stale_ids.append(item["spotify_id"])
-
-                # Clean stale records in background
-                if stale_ids:
-                    with conn:
-                        conn.executemany("DELETE FROM downloaded_tracks WHERE spotify_id = ?", [(i,) for i in stale_ids])
-
-                return results
+                return [dict(row) for row in cur.fetchall()]
             except Exception as e:
                 logger.error(f"Failed to fetch archive tracks: {e}")
                 return []
@@ -611,14 +618,17 @@ class ArchiveManager:
                         COUNT(*) as total_tracks,
                         COUNT(DISTINCT CASE WHEN (collection_type = 'playlist' OR (collection_name IS NOT NULL AND collection_name != ''))
                                              AND (collection_type IS NULL OR collection_type != 'album')
-                                             AND LOWER(collection_name) NOT IN (
+                                             AND LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles')) NOT IN (
                                                  SELECT DISTINCT LOWER(COALESCE(NULLIF(album, ''), collection_name))
                                                  FROM downloaded_tracks
                                                  WHERE collection_type = 'album'
                                              )
-                                        THEN collection_name END) as total_playlists,
-                        COUNT(DISTINCT CASE WHEN collection_type = 'album' OR (album IS NOT NULL AND TRIM(album) != '' AND LOWER(album) NOT IN ('spotify playlist', 'singles', 'unknown album', 'downloads') AND (collection_type IS NULL OR collection_type != 'playlist'))
-                                        THEN COALESCE(NULLIF(album, ''), collection_name) END) as total_albums,
+                                        THEN LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles')) END) as total_playlists,
+                        COUNT(DISTINCT CASE WHEN collection_type = 'album'
+                                             AND LOWER(COALESCE(NULLIF(album, ''), collection_name)) NOT IN (
+                                                 'spotify playlist', 'singles', 'unknown album', 'downloads'
+                                             )
+                                        THEN LOWER(COALESCE(NULLIF(album, ''), collection_name)) END) as total_albums,
                         COALESCE(SUM(file_size), 0) as total_bytes
                     FROM downloaded_tracks
                 """)
@@ -667,7 +677,7 @@ class ArchiveManager:
                           FROM downloaded_tracks
                           WHERE collection_type = 'album'
                       )
-                    GROUP BY name
+                    GROUP BY LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles'))
                     ORDER BY latest_download DESC
                 """)
                 rows = cur.fetchall()
@@ -731,8 +741,8 @@ class ArchiveManager:
     def get_albums(self, search_query: str = "", genre_filter: str = "") -> List[Dict[str, Any]]:
         """
         Aggregates downloaded tracks by album.
-        Only returns genuine albums (downloaded via album URL or with genuine album metadata,
-        excluding playlist placeholders like 'Spotify Playlist').
+        Only returns genuine albums (grouped by album name with predominant artist),
+        excluding playlists, singles, and compilation placeholders.
         """
         with self._db_lock:
             conn = self._get_connection()
@@ -740,19 +750,25 @@ class ArchiveManager:
                 cur = conn.execute("""
                     SELECT 
                         COALESCE(NULLIF(album, ''), collection_name) as name,
-                        artist,
                         COUNT(*) as track_count,
                         COALESCE(SUM(file_size), 0) as total_size,
                         MIN(file_path) as sample_file,
                         MAX(downloaded_at) as latest_download,
-                        GROUP_CONCAT(DISTINCT genre) as all_genres
-                    FROM downloaded_tracks
+                        GROUP_CONCAT(DISTINCT genre) as all_genres,
+                        (
+                            SELECT t2.artist 
+                            FROM downloaded_tracks t2 
+                            WHERE LOWER(COALESCE(NULLIF(t2.album, ''), t2.collection_name)) = LOWER(COALESCE(NULLIF(t1.album, ''), t1.collection_name))
+                            GROUP BY t2.artist 
+                            ORDER BY COUNT(*) DESC, MIN(t2.track_number) ASC 
+                            LIMIT 1
+                        ) as primary_artist
+                    FROM downloaded_tracks t1
                     WHERE collection_type = 'album'
-                       OR (album IS NOT NULL 
-                           AND TRIM(album) != '' 
-                           AND LOWER(album) NOT IN ('spotify playlist', 'singles', 'unknown album', 'downloads')
-                           AND collection_type != 'playlist')
-                    GROUP BY name, artist
+                      AND LOWER(COALESCE(NULLIF(album, ''), collection_name)) NOT IN (
+                          'spotify playlist', 'singles', 'unknown album', 'downloads'
+                      )
+                    GROUP BY LOWER(COALESCE(NULLIF(album, ''), collection_name))
                     ORDER BY track_count DESC, latest_download DESC
                 """)
                 rows = cur.fetchall()
@@ -761,7 +777,7 @@ class ArchiveManager:
 
                 for r in rows:
                     alb_name = r["name"]
-                    artist_name = r["artist"] or ""
+                    artist_name = r["primary_artist"] or ""
                     if q and (q not in alb_name.lower() and q not in artist_name.lower()):
                         continue
 
@@ -837,8 +853,7 @@ class ArchiveManager:
                     item = dict(row)
                     if gf and gf not in (item.get("genre") or "").lower():
                         continue
-                    if os.path.isfile(item.get("file_path", "")):
-                        results.append(item)
+                    results.append(item)
                 return results
             except Exception as e:
                 logger.error(f"Failed to fetch collection tracks for '{collection_name}': {e}")
@@ -882,6 +897,44 @@ class ArchiveManager:
             mutagen = None
 
         import hashlib
+
+        # Pre-load existing indexed paths and metadata into memory to avoid thousands
+        # of per-file SQLite connections and lock acquisitions during directory walk.
+        existing_paths = set()
+        existing_meta = set()
+        album_collections = set()
+        playlist_collections = set()
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.execute("SELECT LOWER(file_path), LOWER(title), LOWER(artist), LOWER(COALESCE(collection_name, '')), LOWER(COALESCE(album, '')) FROM downloaded_tracks")
+                for r_path, r_title, r_artist, r_col, r_alb in cur.fetchall():
+                    if r_path:
+                        existing_paths.add(r_path)
+                    if r_title and r_artist:
+                        if r_col:
+                            existing_meta.add((r_title, r_artist, r_col))
+                        if r_alb:
+                            existing_meta.add((r_title, r_artist, r_alb))
+                cur2 = conn.execute("SELECT LOWER(collection_name), LOWER(album) FROM downloaded_tracks WHERE collection_type = 'album'")
+                for r_col, r_alb in cur2.fetchall():
+                    if r_col:
+                        album_collections.add(r_col)
+                    if r_alb:
+                        album_collections.add(r_alb)
+                cur3 = conn.execute("SELECT LOWER(name) FROM saved_playlists")
+                for r in cur3.fetchall():
+                    if r[0]:
+                        playlist_collections.add(r[0])
+                cur4 = conn.execute("SELECT DISTINCT LOWER(collection_name) FROM downloaded_tracks WHERE collection_type = 'playlist'")
+                for r in cur4.fetchall():
+                    if r[0]:
+                        playlist_collections.add(r[0])
+            except Exception as e:
+                logger.warning(f"Failed to prefetch existing tracks for scan: {e}")
+            finally:
+                conn.close()
+
         for dirpath, _, filenames in os.walk(root_dir):
             folder_name = os.path.basename(dirpath)
             for fname in filenames:
@@ -894,18 +947,9 @@ class ArchiveManager:
                 if not is_valid:
                     continue
 
-                # Check if already indexed by path (case-insensitive on Windows)
-                with self._db_lock:
-                    conn = self._get_connection()
-                    try:
-                        cur = conn.execute("SELECT spotify_id FROM downloaded_tracks WHERE LOWER(file_path) = LOWER(?) LIMIT 1", (full_path,))
-                        if cur.fetchone():
-                            conn.close()
-                            continue
-                    except Exception:
-                        pass
-                    finally:
-                        conn.close()
+                # Check if already indexed by path (in-memory set check)
+                if full_path.lower() in existing_paths:
+                    continue
 
                 # Extract basic tags
                 title = os.path.splitext(fname)[0]
@@ -922,22 +966,9 @@ class ArchiveManager:
                     title = parts[1].strip()
 
                 # Check if already in database by (title, artist, collection)
-                with self._db_lock:
-                    conn = self._get_connection()
-                    try:
-                        cur = conn.execute("""
-                            SELECT spotify_id FROM downloaded_tracks 
-                            WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) 
-                              AND (LOWER(collection_name) = LOWER(?) OR LOWER(album) = LOWER(?))
-                            LIMIT 1
-                        """, (title, artist, folder_name, folder_name))
-                        if cur.fetchone():
-                            conn.close()
-                            continue
-                    except Exception:
-                        pass
-                    finally:
-                        conn.close()
+                f_name_lower = folder_name.lower()
+                if (title.lower(), artist.lower(), f_name_lower) in existing_meta:
+                    continue
 
                 if mutagen:
                     try:
@@ -985,25 +1016,15 @@ class ArchiveManager:
                     except Exception:
                         pass
 
-                # Check if this folder belongs to an album
+                # Check if this folder belongs to an album (in-memory lookup)
                 is_album = False
-                with self._db_lock:
-                    conn = self._get_connection()
-                    try:
-                        c_chk = conn.execute(
-                            "SELECT 1 FROM downloaded_tracks WHERE collection_type = 'album' AND (LOWER(collection_name) = LOWER(?) OR LOWER(album) = LOWER(?)) LIMIT 1",
-                            (folder_name, folder_name)
-                        )
-                        if c_chk.fetchone():
+                if f_name_lower not in playlist_collections and f_name_lower not in ("singles", "downloads"):
+                    if f_name_lower in album_collections:
+                        is_album = True
+                    elif album:
+                        alb_lower = album.lower()
+                        if alb_lower in album_collections or (f_name_lower == alb_lower and alb_lower not in playlist_collections):
                             is_album = True
-                    except Exception:
-                        pass
-                    finally:
-                        conn.close()
-
-                # If folder matches audio file's album metadata tag, identify as album
-                if not is_album and album and folder_name.lower() == album.lower() and folder_name.lower() not in ("singles", "downloads"):
-                    is_album = True
 
                 if is_album:
                     c_type = "album"
@@ -1041,6 +1062,10 @@ class ArchiveManager:
 
                 if self.add_track(fake_track, full_path, quality, "Local File"):
                     indexed_count += 1
+                    existing_paths.add(full_path.lower())
+                    existing_meta.add((title.lower(), artist.lower(), f_name_lower))
+                    if is_album:
+                        album_collections.add(f_name_lower)
 
         if indexed_count > 0:
             logger.info(f"Scanned {root_dir} and indexed {indexed_count} existing tracks into Archive.")

@@ -328,6 +328,9 @@ class PlaylistsView(QWidget):
         # Data model & delegate for playlist detail table
         self.model = TrackQueueModel(self)
         self.delegate = TrackCardDelegate(self)
+        self._playlists_dirty = False
+        self._detail_dirty = False
+        self._banner_dirty = False
 
         self._init_ui()
         self._connect_signals()
@@ -721,10 +724,10 @@ class PlaylistsView(QWidget):
 
     def _update_api_banner(self):
         has_keys = bool(config.get("spotify.client_id", "").strip() and config.get("spotify.client_secret", "").strip())
-        has_auth = self.spotify_client.has_user_auth()
+        has_auth = self.spotify_client.has_user_auth(allow_network=False)
 
         if has_auth:
-            user_name = self.spotify_client.get_current_user_name()
+            user_name = self.spotify_client._cached_user_name or ""
             user_str = f" as @{user_name}" if user_name else ""
             self.banner_icon.setIcon(FluentIcon.COMPLETED)
             self.banner_label.setText(f"Spotify API Connected{user_str}: Full pagination enabled for playlists you own/collaborate on.")
@@ -737,6 +740,17 @@ class PlaylistsView(QWidget):
                     border-radius: 8px;
                 }
             """)
+            if not user_name and not getattr(self, "_fetching_user_name", False):
+                self._fetching_user_name = True
+                import threading
+                def _fetch():
+                    try:
+                        name = self.spotify_client.get_current_user_name()
+                        if name:
+                            QTimer.singleShot(0, self._update_api_banner)
+                    finally:
+                        self._fetching_user_name = False
+                threading.Thread(target=_fetch, daemon=True, name="SpotifyBannerNameFetcher").start()
         elif has_keys:
             self.banner_icon.setIcon(FluentIcon.PEOPLE)
             self.banner_label.setText("Spotify API Keys Set — Account Authorization needed to access playlists > 100 songs.")
@@ -1387,8 +1401,8 @@ class PlaylistsView(QWidget):
             genre_filter=genre_filter
         )
         rows = self._sort_detail_rows(rows)
+        items = []
 
-        self.model.clear()
         for r in rows:
             genre_raw = r.get("genre", "") or ""
             track_genres = [g.strip() for g in genre_raw.split(";") if g.strip()]
@@ -1424,11 +1438,9 @@ class PlaylistsView(QWidget):
                 progress_percent=100.0 if status == "downloaded" else 0.0,
                 output_path=file_path
             )
-            self.model.add_item(item)
-            row_idx = self.model.rowCount() - 1
-            if row_idx >= 0:
-                self.table.setRowHeight(row_idx, 76)
+            items.append(item)
 
+        self.model.set_items(items)
         self.table.viewport().update()
 
     def _on_download_batch_clicked(self):
@@ -1812,6 +1824,7 @@ class PlaylistsView(QWidget):
     # Live Bridging
     # -------------------------------------------------------------
     def _handle_bridge_completed(self, track_id: str, path: str):
+        self._playlists_dirty = True
         if self.current_playlist_id and self.stacked.currentIndex() == 1:
             self.model.mark_completed(track_id, path)
             self._refresh_detail_header()
@@ -1835,9 +1848,15 @@ class PlaylistsView(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._update_api_banner()
+        if getattr(self, "_banner_dirty", False):
+            self._update_api_banner()
+            self._banner_dirty = False
         if self.stacked.currentIndex() == 1 and self.current_playlist_id:
-            self._load_detail_tracks()
-            self._refresh_detail_header()
+            if getattr(self, "_detail_dirty", False):
+                self._load_detail_tracks()
+                self._refresh_detail_header()
+                self._detail_dirty = False
         elif self.stacked.currentIndex() == 0:
-            self.reload_playlists()
+            if getattr(self, "_playlists_dirty", False):
+                self.reload_playlists()
+                self._playlists_dirty = False
