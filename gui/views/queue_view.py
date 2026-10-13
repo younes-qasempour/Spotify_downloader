@@ -507,81 +507,83 @@ class QueueView(QWidget):
             return
 
         urls = [u.strip() for u in raw_input.splitlines() if u.strip()]
-        url = urls[0] if urls else ""
+        if not urls:
+            return
 
-        parsed = SpotifyClient.parse_url(url)
-        if parsed:
-            entity_type, entity_id = parsed
-            self.enqueue_btn.setEnabled(False)
-            self.enqueue_btn.setText("Analyzing...")
-            InfoBar.info(
-                title="Analyzing Spotify Link",
-                content="Resolving metadata and track details...",
-                orient=Qt.Orientation.Horizontal,
-                position=InfoBarPosition.TOP,
-                duration=2500,
-                parent=self
-            )
+        self.enqueue_btn.setEnabled(False)
+        self.enqueue_btn.setText("Analyzing...")
 
-            def resolve_worker():
-                try:
-                    tracks = self.spotify_client.resolve(url)
-                    if tracks and entity_type in ("playlist", "album"):
-                        try:
-                            pl_name = tracks[0].collection_name or ("Spotify Playlist" if entity_type == "playlist" else "Spotify Album")
-                            pl_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
-                            self.qm.archive.save_playlist(
-                                name=pl_name,
-                                spotify_url=url,
-                                cover_url=pl_cover,
-                                tracks=tracks,
-                                playlist_id=entity_id
-                            )
-                        except Exception:
-                            pass
-                    self.sig_resolved_tracks.emit(tracks)
-                except Exception as e:
-                    self.sig_resolve_error.emit(str(e))
+        disp_query = urls[0] if len(urls) == 1 else f"{len(urls)} items"
+        if len(disp_query) > 40:
+            disp_query = f"{disp_query[:37]}..."
+        InfoBar.info(
+            title="Analyzing Input",
+            content=f"Resolving metadata for {disp_query}...",
+            orient=Qt.Orientation.Horizontal,
+            position=InfoBarPosition.TOP,
+            duration=2500,
+            parent=self
+        )
 
-            threading.Thread(target=resolve_worker, daemon=True).start()
-        else:
-            self.enqueue_btn.setEnabled(False)
-            self.enqueue_btn.setText("Analyzing...")
-            disp_query = url if len(url) <= 40 else f"{url[:37]}..."
-            InfoBar.info(
-                title="Searching / Extracting",
-                content=f"Searching or extracting audio tracks for '{disp_query}'...",
-                orient=Qt.Orientation.Horizontal,
-                position=InfoBarPosition.TOP,
-                duration=2500,
-                parent=self
-            )
+        def batch_resolve_worker():
+            all_resolved_tracks = []
+            errors = []
+            for target_url in urls:
+                parsed = SpotifyClient.parse_url(target_url)
+                if parsed:
+                    entity_type, entity_id = parsed
+                    try:
+                        tracks = self.spotify_client.resolve(target_url)
+                        if tracks and entity_type in ("playlist", "album"):
+                            try:
+                                pl_name = tracks[0].collection_name or ("Spotify Playlist" if entity_type == "playlist" else "Spotify Album")
+                                pl_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
+                                self.qm.archive.save_playlist(
+                                    name=pl_name,
+                                    spotify_url=target_url,
+                                    cover_url=pl_cover,
+                                    tracks=tracks,
+                                    playlist_id=entity_id
+                                )
+                            except Exception:
+                                pass
+                        if tracks:
+                            all_resolved_tracks.extend(tracks)
+                    except Exception as e:
+                        errors.append(f"{target_url}: {e}")
+                else:
+                    try:
+                        ytdlp_engine = getattr(self.qm.engine, "ytdlp", None)
+                        if not ytdlp_engine:
+                            from core.ytdlp_engine import YtdlpEngine
+                            ytdlp_engine = YtdlpEngine()
+                        tracks = ytdlp_engine.extract_from_url_or_search(target_url)
+                        if tracks and any(t.collection_type == "playlist" for t in tracks):
+                            try:
+                                pl_name = tracks[0].collection_name or "YouTube Playlist"
+                                pl_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
+                                self.qm.archive.save_playlist(
+                                    name=pl_name,
+                                    spotify_url=target_url if target_url.startswith("http") else "",
+                                    cover_url=pl_cover,
+                                    tracks=tracks,
+                                    playlist_id=target_url if target_url.startswith("http") else ""
+                                )
+                            except Exception:
+                                pass
+                        if tracks:
+                            all_resolved_tracks.extend(tracks)
+                    except Exception as e:
+                        errors.append(f"{target_url}: {e}")
 
-            def yt_resolve_worker():
-                try:
-                    ytdlp_engine = getattr(self.qm.engine, "ytdlp", None)
-                    if not ytdlp_engine:
-                        from core.ytdlp_engine import YtdlpEngine
-                        ytdlp_engine = YtdlpEngine()
-                    tracks = ytdlp_engine.extract_from_url_or_search(url)
-                    if tracks and any(t.collection_type == "playlist" for t in tracks):
-                        try:
-                            pl_name = tracks[0].collection_name or "YouTube Playlist"
-                            pl_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
-                            self.qm.archive.save_playlist(
-                                name=pl_name,
-                                spotify_url=url if url.startswith("http") else "",
-                                cover_url=pl_cover,
-                                tracks=tracks,
-                                playlist_id=url if url.startswith("http") else ""
-                            )
-                        except Exception:
-                            pass
-                    self.sig_resolved_tracks.emit(tracks)
-                except Exception as e:
-                    self.sig_resolve_error.emit(str(e))
+            if all_resolved_tracks:
+                self.sig_resolved_tracks.emit(all_resolved_tracks)
+            elif errors:
+                self.sig_resolve_error.emit("; ".join(errors))
+            else:
+                self.sig_resolved_tracks.emit([])
 
-            threading.Thread(target=yt_resolve_worker, daemon=True).start()
+        threading.Thread(target=batch_resolve_worker, daemon=True).start()
 
     def _on_tracks_resolved(self, tracks):
         self.enqueue_btn.setEnabled(True)

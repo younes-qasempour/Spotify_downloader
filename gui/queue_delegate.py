@@ -13,7 +13,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
 
 from core.queue_manager import QueueItem
-from core.utils import format_duration
+from core.utils import format_duration, extract_embedded_cover
 from gui.styles import (
     BG_CARD, BG_CARD_HOVER, BG_CARD_SELECTED, BORDER_SUBTLE,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, SPOTIFY_EMERALD,
@@ -24,44 +24,6 @@ from gui.styles import (
     BADGE_YTM_BG, BADGE_YTM_TEXT,
     BADGE_OPUS_BG, BADGE_OPUS_TEXT
 )
-
-
-def extract_embedded_cover(file_path: str) -> Optional[bytes]:
-    """Extracts embedded front cover artwork bytes directly from a local audio file."""
-    if not file_path or not os.path.isfile(file_path):
-        return None
-    try:
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext == ".flac":
-            from mutagen.flac import FLAC
-            audio = FLAC(file_path)
-            if audio.pictures:
-                return audio.pictures[0].data
-        elif ext == ".mp3":
-            from mutagen.mp3 import MP3
-            audio = MP3(file_path)
-            if audio.tags:
-                apics = audio.tags.getall("APIC")
-                if apics:
-                    return apics[0].data
-        elif ext in (".opus", ".ogg"):
-            import mutagen
-            from mutagen.flac import Picture
-            audio = mutagen.File(file_path)
-            if audio:
-                pics = audio.get("metadata_block_picture", [])
-                if pics:
-                    raw = base64.b64decode(pics[0])
-                    return Picture(raw).data
-        elif ext == ".m4a":
-            from mutagen.mp4 import MP4
-            audio = MP4(file_path)
-            covr = audio.get("covr", [])
-            if covr:
-                return bytes(covr[0])
-    except Exception:
-        pass
-    return None
 
 
 import collections

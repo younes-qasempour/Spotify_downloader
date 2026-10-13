@@ -14,6 +14,7 @@ class TrackQueueModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._all_items: List[QueueItem] = []
+        self._items_by_id: Dict[str, QueueItem] = {}
         self.items: List[QueueItem] = []
         self._id_to_row: Dict[str, int] = {}
         self.filter_query: str = ""
@@ -83,6 +84,7 @@ class TrackQueueModel(QAbstractTableModel):
             self._all_items[existing_idx] = item
         else:
             self._all_items.append(item)
+        self._items_by_id[item.track.id] = item
         self._apply_filter()
 
     def add_items(self, new_items: List[QueueItem]):
@@ -97,12 +99,14 @@ class TrackQueueModel(QAbstractTableModel):
             else:
                 self._all_items.append(item)
                 existing_ids[item.track.id] = len(self._all_items) - 1
+            self._items_by_id[item.track.id] = item
 
         self._apply_filter()
 
     def set_items(self, items: List[QueueItem]):
         """Replaces all items in a single atomic batch with exactly one model reset."""
         self._all_items = list(items)
+        self._items_by_id = {it.track.id: it for it in self._all_items}
         self._apply_filter()
 
     def remove_items(self, track_ids: List[str]):
@@ -111,37 +115,36 @@ class TrackQueueModel(QAbstractTableModel):
             return
         id_set = set(track_ids)
         self._all_items = [it for it in self._all_items if it.track.id not in id_set]
+        for tid in track_ids:
+            self._items_by_id.pop(tid, None)
         self._apply_filter()
 
     def remove_item(self, track_id: str):
         self.remove_items([track_id])
 
     def update_source(self, track_id: str, source_type: str, quality_badge: str):
-        for it in self._all_items:
-            if it.track.id == track_id:
-                it.source_type = source_type
-                it.quality_badge = quality_badge
-                break
+        it = self._items_by_id.get(track_id)
+        if it:
+            it.source_type = source_type
+            it.quality_badge = quality_badge
         if track_id in self._id_to_row:
             row = self._id_to_row[track_id]
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
     def update_progress(self, track_id: str, percent: float, speed_str: str, eta_str: str):
-        for it in self._all_items:
-            if it.track.id == track_id:
-                it.progress_percent = percent
-                it.speed_str = speed_str
-                it.eta_str = eta_str
-                break
+        it = self._items_by_id.get(track_id)
+        if it:
+            it.progress_percent = percent
+            it.speed_str = speed_str
+            it.eta_str = eta_str
         if track_id in self._id_to_row:
             row = self._id_to_row[track_id]
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
     def update_status(self, track_id: str, status: str):
-        for it in self._all_items:
-            if it.track.id == track_id:
-                it.status = status
-                break
+        it = self._items_by_id.get(track_id)
+        if it:
+            it.status = status
         if self.status_filter != "All":
             self._apply_filter()
         elif track_id in self._id_to_row:
@@ -149,12 +152,11 @@ class TrackQueueModel(QAbstractTableModel):
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
     def mark_completed(self, track_id: str, path: str):
-        for it in self._all_items:
-            if it.track.id == track_id:
-                it.status = "Completed"
-                it.output_path = path
-                it.progress_percent = 100.0
-                break
+        it = self._items_by_id.get(track_id)
+        if it:
+            it.status = "Completed"
+            it.output_path = path
+            it.progress_percent = 100.0
         if self.status_filter != "All":
             self._apply_filter()
         elif track_id in self._id_to_row:
@@ -162,11 +164,10 @@ class TrackQueueModel(QAbstractTableModel):
             self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
     def mark_failed(self, track_id: str, err: str):
-        for it in self._all_items:
-            if it.track.id == track_id:
-                it.status = "Failed"
-                it.error_message = err
-                break
+        it = self._items_by_id.get(track_id)
+        if it:
+            it.status = "Failed"
+            it.error_message = err
         if self.status_filter != "All":
             self._apply_filter()
         elif track_id in self._id_to_row:
@@ -180,10 +181,12 @@ class TrackQueueModel(QAbstractTableModel):
 
     def clear(self):
         self._all_items.clear()
+        self._items_by_id.clear()
         self._apply_filter()
 
     def clear_completed(self):
         self._all_items = [it for it in self._all_items if it.status != "Completed"]
+        self._items_by_id = {it.track.id: it for it in self._all_items}
         self._apply_filter()
 
     def get_stats(self) -> Tuple[int, int, int, int]:

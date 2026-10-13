@@ -8,6 +8,9 @@ from PyQt6.QtWidgets import QApplication
 # Single QApplication instance for the test process
 app = QApplication.instance() or QApplication(sys.argv)
 
+import requests
+from unittest.mock import patch, MagicMock
+
 from core.archive import ArchiveManager
 from core.queue_manager import DownloadQueueManager
 from core.resolver import CascadingAudioEngine
@@ -21,10 +24,24 @@ from gui.views.settings_view import SettingsView
 
 class TestGUI(unittest.TestCase):
     def setUp(self):
+        # Mock SpotifyClient across core and GUI views to prevent network calls and rate limits
+        self.patchers = [
+            patch("core.spotify_client.SpotifyClient"),
+            patch("gui.views.queue_view.SpotifyClient"),
+            patch("gui.views.playlists_view.SpotifyClient"),
+            patch("gui.views.settings_view.SpotifyClient"),
+            patch.object(requests.Session, "request", return_value=MagicMock(status_code=200, text="{}")),
+            patch.object(requests.Session, "send", return_value=MagicMock(status_code=200, text="{}")),
+        ]
+        for p in self.patchers:
+            p.start()
+
         self.window = MainWindow()
 
     def tearDown(self):
         self.window.close()
+        for p in reversed(self.patchers):
+            p.stop()
 
     def test_main_window_components(self):
         self.assertIsNotNone(self.window.queue_view)

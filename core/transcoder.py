@@ -131,4 +131,4 @@ def transcode_audio(
             except Exception:
                 pass
         logger.error(f"Failed to transcode '{input_file}': {e}")
-        return input_file
+        raise TranscodeError(f"Failed to transcode '{input_file}': {e}") from e

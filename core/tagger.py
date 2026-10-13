@@ -96,7 +96,36 @@ class AudioTagger:
                 success = self._tag_mp3(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             elif ext == ".m4a":
                 success = self._tag_m4a(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
-            elif ext in (".opus", ".ogg", ".webm"):
+            elif ext == ".webm":
+                # Matroska/WebM containers cannot be tagged by OggOpus/OggVorbis.
+                # Remux container from WebM to .opus (lossless copy) using FFmpeg.
+                from core.utils import ensure_ffmpeg
+                import subprocess
+                ffmpeg = ensure_ffmpeg()
+                remuxed = False
+                if ffmpeg:
+                    opus_path = os.path.splitext(file_path)[0] + ".opus"
+                    try:
+                        cmd = [
+                            ffmpeg, "-y", "-i", file_path,
+                            "-vn", "-c:a", "copy",
+                            opus_path
+                        ]
+                        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+                        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+                        if proc.returncode == 0 and os.path.exists(opus_path) and os.path.getsize(opus_path) > 1000:
+                            os.remove(file_path)
+                            file_path = opus_path
+                            ext = ".opus"
+                            remuxed = True
+                    except Exception as e_remux:
+                        logger.warning(f"Failed to remux WebM to Opus: {e_remux}")
+                if remuxed:
+                    success = self._tag_opus(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
+                else:
+                    logger.warning(f"Cannot tag .webm file directly without FFmpeg remuxing: {file_path}")
+                    return False
+            elif ext in (".opus", ".ogg"):
                 success = self._tag_opus(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             else:
                 logger.warning(f"Unsupported extension for tagging: {ext}")
@@ -437,9 +466,13 @@ class AudioTagger:
             audio = OggOpus(file_path)
             is_opus = True
         except Exception:
-            from mutagen.oggvorbis import OggVorbis
-            audio = OggVorbis(file_path)
-            is_opus = False
+            try:
+                from mutagen.oggvorbis import OggVorbis
+                audio = OggVorbis(file_path)
+                is_opus = False
+            except Exception as e_container:
+                logger.warning(f"Could not open audio container {file_path} for tagging: {e_container}")
+                return False
 
         # In OggOpus / OggVorbis, METADATA_BLOCK_PICTURE is stored as a Vorbis comment.
         # Preserve existing picture and lyrics before audio.clear()

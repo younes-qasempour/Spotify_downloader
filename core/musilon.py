@@ -4,12 +4,12 @@ import time
 import json
 import random
 import logging
-import subprocess
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Callable, Tuple
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import quote_plus
 import requests
 
+from core.exceptions import FlacifyError, AudioIntegrityError
 from core.spotify_client import TrackMetadata
 from core.utils import clean_watermarks, format_bytes, is_valid_audio_file, detect_audio_header
 
@@ -47,7 +47,7 @@ def format_network_error(e: Exception) -> str:
     return f"Musilon connection failed: {clean_msg}"
 
 
-class MusilonVipError(Exception):
+class MusilonVipError(FlacifyError):
     """Raised when Musilon requires authentication or returns an unauthorized response."""
     pass
 
@@ -57,7 +57,7 @@ class MusilonRateLimitExceededError(MusilonVipError):
     pass
 
 
-class MusilonQualityUnavailableError(Exception):
+class MusilonQualityUnavailableError(FlacifyError):
     """Raised when the requested quality tier is not available for a specific track (HTTP 409)."""
     pass
 
@@ -469,11 +469,12 @@ class MusilonEngine:
                 time.sleep(backoff)
                 backoff *= 1.5
 
-        raise RuntimeError(f"Max retries reached for {url}")
+        raise FlacifyError(f"Max retries reached for {url}")
 
     def _solve_arvancloud_challenge(self, html_content: str) -> bool:
         """Solves ArvanCloud JavaScript challenge using headless Node.js."""
         try:
+            import subprocess
             scripts = re.findall(r'<script[^>]*>(.*?)</script>', html_content, re.DOTALL)
             challenge_script = next((s for s in scripts if '__arcsjs' in s), None)
             if not challenge_script:
@@ -890,69 +891,70 @@ class MusilonEngine:
             "Sec-Fetch-Site": "same-origin",
         }
 
-        resp = self.session.get(url, stream=True, timeout=(20, 90), headers=download_headers, allow_redirects=True)
-
-        # Handle 429 Too Many Requests immediately
-        if resp.status_code == 429:
-            raise MusilonRateLimitExceededError("Musilon download rate limit exceeded (HTTP 429 Too Many Requests).")
-
-        content_type = resp.headers.get("content-type", "").lower()
-        is_json_or_text = any(t in content_type for t in ("application/json", "text/html", "text/plain"))
-
-        # Inspect non-200 responses or unexpected payload bodies for quota/budget exhaustion BEFORE raise_for_status()
-        text_preview = ""
-        if resp.status_code != 200 or is_json_or_text:
-            try:
-                text_preview = resp.text[:4000].lower() if hasattr(resp, "text") else ""
-            except Exception:
-                pass
-
-            budget_indicators = [
-                "download_budget_exhausted",
-                "download_budget_unavailable",
-                "budget_exhausted",
-                "daily download budget",
-                "budget",
-                "quota",
-                "rate limit",
-                "daily limit",
-                "too many requests",
-                "limit reached",
-                "سقف دانلود",
-            ]
-            if any(k in text_preview for k in budget_indicators):
-                raise MusilonRateLimitExceededError(
-                    f"Musilon download limit or daily quota reached (HTTP {resp.status_code})."
-                )
-
-        if resp.status_code == 402 or (text_preview and ("download_premium_required" in text_preview or "premium subscription required" in text_preview)):
-            raise MusilonVipError("Musilon VIP subscription required or expired (HTTP 402). Fallback to YouTube Music will be used.")
-
-        if resp.status_code == 409:
-            raise MusilonQualityUnavailableError("Requested quality tier unavailable for this track.")
-
-        if resp.status_code in (401, 403):
-            # Check if 403 was caused by budget exhaustion before raising generic VIP error
-            if self.is_budget_exhausted():
-                raise MusilonRateLimitExceededError(f"Musilon daily download budget exhausted (HTTP {resp.status_code}).")
-            raise MusilonVipError(f"Musilon authentication required or session expired (HTTP {resp.status_code}).")
-
-        resp.raise_for_status()
-
-        if is_json_or_text:
-            logger.warning(f"Musilon returned non-audio content-type '{content_type}' for {url}")
-            initial_text = resp.text[:4000].lower() if hasattr(resp, "text") else ""
-            if "authentication" in initial_text or "unauthorized" in initial_text:
-                raise MusilonVipError("Musilon session expired or authentication required.")
-            raise MusilonVipError(f"Musilon returned non-audio response ({content_type}).")
-
-        total_size = int(resp.headers.get("content-length", 0))
-        downloaded = 0
-        start_time = time.time()
-        last_update_time = 0.0
-        header_verified = False
-
+        resp = None
         try:
+            resp = self.session.get(url, stream=True, timeout=(20, 90), headers=download_headers, allow_redirects=True)
+
+            # Handle 429 Too Many Requests immediately
+            if resp.status_code == 429:
+                raise MusilonRateLimitExceededError("Musilon download rate limit exceeded (HTTP 429 Too Many Requests).")
+
+            content_type = resp.headers.get("content-type", "").lower()
+            is_json_or_text = any(t in content_type for t in ("application/json", "text/html", "text/plain"))
+
+            # Inspect non-200 responses or unexpected payload bodies for quota/budget exhaustion BEFORE raise_for_status()
+            text_preview = ""
+            if resp.status_code != 200 or is_json_or_text:
+                try:
+                    text_preview = resp.text[:4000].lower() if hasattr(resp, "text") else ""
+                except Exception:
+                    pass
+
+                budget_indicators = [
+                    "download_budget_exhausted",
+                    "download_budget_unavailable",
+                    "budget_exhausted",
+                    "daily download budget",
+                    "budget",
+                    "quota",
+                    "rate limit",
+                    "daily limit",
+                    "too many requests",
+                    "limit reached",
+                    "سقف دانلود",
+                ]
+                if any(k in text_preview for k in budget_indicators):
+                    raise MusilonRateLimitExceededError(
+                        f"Musilon download limit or daily quota reached (HTTP {resp.status_code})."
+                    )
+
+            if resp.status_code == 402 or (text_preview and ("download_premium_required" in text_preview or "premium subscription required" in text_preview)):
+                raise MusilonVipError("Musilon VIP subscription required or expired (HTTP 402). Fallback to YouTube Music will be used.")
+
+            if resp.status_code == 409:
+                raise MusilonQualityUnavailableError("Requested quality tier unavailable for this track.")
+
+            if resp.status_code in (401, 403):
+                # Check if 403 was caused by budget exhaustion before raising generic VIP error
+                if self.is_budget_exhausted():
+                    raise MusilonRateLimitExceededError(f"Musilon daily download budget exhausted (HTTP {resp.status_code}).")
+                raise MusilonVipError(f"Musilon authentication required or session expired (HTTP {resp.status_code}).")
+
+            resp.raise_for_status()
+
+            if is_json_or_text:
+                logger.warning(f"Musilon returned non-audio content-type '{content_type}' for {url}")
+                initial_text = resp.text[:4000].lower() if hasattr(resp, "text") else ""
+                if "authentication" in initial_text or "unauthorized" in initial_text:
+                    raise MusilonVipError("Musilon session expired or authentication required.")
+                raise MusilonVipError(f"Musilon returned non-audio response ({content_type}).")
+
+            total_size = int(resp.headers.get("content-length", 0))
+            downloaded = 0
+            start_time = time.time()
+            last_update_time = 0.0
+            header_verified = False
+
             with open(temp_path, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=64 * 1024):
                     if cancel_check and cancel_check():
@@ -982,7 +984,7 @@ class MusilonEngine:
                                     raise MusilonRateLimitExceededError("Musilon download limit or daily quota reached.")
                                 if "authentication" in text_chunk or "unauthorized" in text_chunk:
                                     raise MusilonVipError("Musilon authentication required.")
-                                raise ValueError(f"Unrecognized audio stream header: {chunk[:32]}")
+                                raise AudioIntegrityError(f"Unrecognized audio stream header: {chunk[:32]}")
                             header_verified = True
 
                         f.write(chunk)
@@ -1022,6 +1024,9 @@ class MusilonEngine:
                 except Exception:
                     pass
             raise
+        finally:
+            if resp is not None:
+                resp.close()
 
     # -------------------------------------------------------------------------
     # Download with Retry & Quality Fallback

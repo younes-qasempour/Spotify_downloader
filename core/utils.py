@@ -82,7 +82,6 @@ def sanitize_path_template(path_str: str, max_segment_length: int = 80) -> str:
     return os.path.normpath(os.path.join(*cleaned_segments))
 
 
-from typing import Callable, Optional
 import gzip
 import urllib.request
 

@@ -1,12 +1,15 @@
 import os
 import sys
 import tempfile
+import shutil
 
 # Add project root to sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.archive import ArchiveManager
+from core.archive import ArchiveManager, normalize_path
 from core.spotify_client import TrackMetadata
+from core.config import config
+from core.utils import sanitize_filename
 
 def run_tests():
     print("Step 1: Starting test...", flush=True)
@@ -118,12 +121,58 @@ def run_tests():
     assert tr_after["album"] == "Custom Album Z"
     print("Step 8c: Track metadata edited successfully.", flush=True)
 
-    # 5d. Test rename collection
-    ok_col = archive.rename_collection("Renamed Chill Playlist", "Brand New Collection Name")
-    assert ok_col is True
-    pl_renamed = archive.get_saved_playlist("test12345")
-    assert pl_renamed["name"] == "Brand New Collection Name"
-    print("Step 8d: Collection renamed successfully.", flush=True)
+    # 5d. Test rename collection with physical directory on disk and DB sync
+    temp_dir = tempfile.mkdtemp()
+    orig_out_dir = config.get("download.output_dir", "")
+    config.set("download.output_dir", temp_dir)
+    try:
+        old_folder_name = sanitize_filename("Renamed Chill Playlist", max_length=50)
+        old_dir_path = os.path.join(temp_dir, old_folder_name)
+        os.makedirs(old_dir_path, exist_ok=True)
+
+        mock_audio_file = os.path.join(old_dir_path, "song1.flac")
+        with open(mock_audio_file, "wb") as f:
+            f.write(b"fLaCmockdata")
+
+        norm_audio_path = normalize_path(mock_audio_file)
+
+        # Associate track tr_1 in downloaded_tracks and saved_playlist_tracks with this real file on disk
+        tracks[0].collection_name = "Renamed Chill Playlist"
+        tracks[0].collection_type = "playlist"
+        archive.add_track(tracks[0], norm_audio_path, "FLAC 16", "Musilon")
+        archive.mark_saved_track_downloaded("tr_1", norm_audio_path, "FLAC 16", "Musilon")
+
+        # Execute rename collection
+        ok_col = archive.rename_collection("Renamed Chill Playlist", "Brand New Collection Name")
+        assert ok_col is True
+
+        new_folder_name = sanitize_filename("Brand New Collection Name", max_length=50)
+        new_dir_path = os.path.join(temp_dir, new_folder_name)
+
+        # Verify disk directory movement
+        assert not os.path.exists(old_dir_path), "Old collection directory should no longer exist"
+        assert os.path.isdir(new_dir_path), "New collection directory should exist on disk"
+        assert os.path.isfile(os.path.join(new_dir_path, "song1.flac")), "Track file should have moved into new directory"
+
+        # Verify database playlist name updated
+        pl_renamed = archive.get_saved_playlist("test12345")
+        assert pl_renamed["name"] == "Brand New Collection Name"
+
+        # Verify file_path in saved_playlist_tracks updated to new directory
+        tr_after_rename = [t for t in archive.get_saved_playlist_tracks("test12345") if t["spotify_id"] == "tr_1"][0]
+        expected_new_file = normalize_path(os.path.join(new_dir_path, "song1.flac"))
+        assert tr_after_rename["file_path"] == expected_new_file, f"Expected {expected_new_file}, got {tr_after_rename['file_path']}"
+
+        # Verify file_path in downloaded_tracks updated to new directory
+        dt_track = archive.get_track_by_path(expected_new_file)
+        assert dt_track is not None
+        assert dt_track["spotify_id"] == "tr_1"
+        assert dt_track["collection_name"] == "Brand New Collection Name"
+
+        print("Step 8d: Collection renamed successfully with physical disk directory move and database path sync verified.", flush=True)
+    finally:
+        config.set("download.output_dir", orig_out_dir)
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     # 6. Test delete playlist
     archive.delete_saved_playlist("test12345")

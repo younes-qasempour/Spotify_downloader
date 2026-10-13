@@ -19,6 +19,7 @@ except ImportError:
 
 from core.utils import clean_watermarks, sanitize_filename
 from core.paths import get_cache_dir
+from core.exceptions import MetadataResolutionError
 
 logger = logging.getLogger("core.spotify")
 
@@ -277,11 +278,10 @@ class SpotifyClient:
             try:
                 cached = self._oauth.cache_handler.get_cached_token() if hasattr(self._oauth, "cache_handler") and self._oauth.cache_handler else self._oauth.get_cached_token()
                 if cached:
-                    valid_token = self._oauth.validate_token(cached)
-                    if valid_token:
-                        self._sp = spotipy.Spotify(auth_manager=self._oauth)
-                        logger.info("Initialized official Spotify Web API client with User Authorization.")
-                        return
+                    # Defer network token validation until first API call to avoid blocking the UI on startup
+                    self._sp = spotipy.Spotify(auth_manager=self._oauth)
+                    logger.info("Initialized official Spotify Web API client with User Authorization (validation deferred).")
+                    return
             except Exception as e:
                 logger.debug(f"Cached token check failed: {e}")
 
@@ -519,7 +519,7 @@ class SpotifyClient:
 
         match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp.text)
         if not match:
-            raise RuntimeError(f"Could not extract __NEXT_DATA__ from Spotify embed: {embed_url}")
+            raise MetadataResolutionError(f"Could not extract __NEXT_DATA__ from Spotify embed: {embed_url}")
 
         data = json.loads(match.group(1))
         entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})

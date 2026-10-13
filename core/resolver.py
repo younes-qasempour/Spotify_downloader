@@ -11,6 +11,7 @@ from core.tagger import AudioTagger
 from core.utils import sanitize_filename, is_valid_audio_file
 from core.config import config
 from core.transcoder import transcode_audio
+from core.exceptions import AudioSourceNotFoundError, AudioIntegrityError
 
 logger = logging.getLogger("core.resolver")
 
@@ -344,7 +345,7 @@ class CascadingAudioEngine:
         if not final_file_path or not os.path.isfile(final_file_path):
             if cancel_check and cancel_check():
                 return None
-            raise RuntimeError(f"Audio download failed to produce a valid file for '{track.title}'.")
+            raise AudioSourceNotFoundError(f"Audio download failed to produce a valid file for '{track.title}'.")
 
         # Strict integrity check on downloaded audio
         is_valid, reason = is_valid_audio_file(final_file_path)
@@ -354,7 +355,7 @@ class CascadingAudioEngine:
                     os.remove(final_file_path)
                 except Exception:
                     pass
-            raise RuntimeError(f"Downloaded audio file failed integrity verification ({reason}) for '{track.title}'.")
+            raise AudioIntegrityError(f"Downloaded audio file failed integrity verification ({reason}) for '{track.title}'.")
 
         if cancel_check and cancel_check():
             if final_file_path and os.path.exists(final_file_path):
@@ -371,7 +372,11 @@ class CascadingAudioEngine:
                 status_callback(f"Transcoding ({target_fmt.upper()})")
             try:
                 transcoded_path = transcode_audio(final_file_path, target_format=target_fmt, delete_source=True)
-                if transcoded_path and os.path.isfile(transcoded_path):
+                if (
+                    transcoded_path
+                    and os.path.isfile(transcoded_path)
+                    and os.path.normpath(transcoded_path) != os.path.normpath(final_file_path)
+                ):
                     final_file_path = transcoded_path
                     new_ext = os.path.splitext(transcoded_path)[1].lstrip(".").lower()
                     resolved.file_extension = new_ext

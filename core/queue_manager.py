@@ -17,6 +17,7 @@ from core.archive import ArchiveManager
 from core.utils import sanitize_filename, is_valid_audio_file
 from core.config import config
 from core.paths import get_covers_dir
+from core.exceptions import AudioSourceNotFoundError
 
 logger = logging.getLogger("core.queue")
 
@@ -539,7 +540,7 @@ class DownloadQueueManager:
                 return
 
             if not resolved:
-                raise RuntimeError("No matching audio source found across Musilon or YouTube Music.")
+                raise AudioSourceNotFoundError("No matching audio source found across Musilon or YouTube Music.")
 
             item.source_type = resolved.source_type
             item.quality_badge = resolved.quality_badge
@@ -753,7 +754,7 @@ class DownloadQueueManager:
             return
 
         if not yt_src:
-            raise RuntimeError(f"YouTube Music fallback could not find audio for '{track.title}'.")
+            raise AudioSourceNotFoundError(f"YouTube Music fallback could not find audio for '{track.title}'.")
 
         act_ext = yt_src.audio_format or "opus"
         badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"

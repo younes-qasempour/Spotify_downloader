@@ -364,11 +364,19 @@ class GenreResolver:
             return
         self._initialized = True
         self._session = requests.Session()
+        try:
+            from core.config import config
+            proxy = config.get("download.proxy", "").strip()
+            if proxy:
+                self._session.proxies = {"http": proxy, "https": proxy}
+        except Exception:
+            pass
         self._session.headers.update({
             "User-Agent": "SpotifyDownloader/1.4.2 (Windows NT 10.0; Win64; x64)"
         })
         self._artist_cache: Dict[str, List[str]] = {}
         self._track_cache: Dict[str, List[str]] = {}
+        self._failed_queries: Set[str] = set()
         self._dirty = False
         self._cache_file = os.path.join(str(get_cache_dir()), "genre_cache.json")
         self._load_cache()
@@ -488,11 +496,11 @@ class GenreResolver:
             self._track_cache[track_key] = final_list
             new_cached = True
 
-        if artist_key and final_list:
+        if artist_key:
             if artist_key not in self._artist_cache:
                 self._artist_cache[artist_key] = final_list
                 new_cached = True
-            else:
+            elif final_list:
                 merged = sorted(list(set(self._artist_cache[artist_key] + final_list)))
                 if merged != self._artist_cache[artist_key]:
                     self._artist_cache[artist_key] = merged
@@ -513,6 +521,8 @@ class GenreResolver:
         if not artist and not title:
             return []
         query = f"{artist} {title}".strip()
+        if query in self._failed_queries:
+            return []
         try:
             r = self._session.get("https://api.deezer.com/search", params={"q": query, "limit": 1}, timeout=4).json()
             if r.get("data"):
@@ -522,7 +532,9 @@ class GenreResolver:
                     al_r = self._session.get(f"https://api.deezer.com/album/{album_id}", timeout=4).json()
                     album_genres = al_r.get("genres", {}).get("data", [])
                     return [g.get("name") for g in album_genres if g.get("name")]
+            self._failed_queries.add(query)
         except Exception as e:
+            self._failed_queries.add(query)
             logger.debug(f"Deezer genre lookup error for '{query}': {e}")
         return []
 
@@ -530,6 +542,8 @@ class GenreResolver:
         if not artist and not title:
             return []
         query = f"{artist} {title}".strip()
+        if query in self._failed_queries:
+            return []
         try:
             r = self._session.get(
                 "https://itunes.apple.com/search",
@@ -540,12 +554,16 @@ class GenreResolver:
                 item = r["results"][0]
                 pg = item.get("primaryGenreName")
                 return [pg] if pg else []
+            self._failed_queries.add(query)
         except Exception as e:
+            self._failed_queries.add(query)
             logger.debug(f"iTunes song genre lookup error for '{query}': {e}")
         return []
 
     def _query_itunes_artist(self, artist: str) -> List[str]:
         if not artist:
+            return []
+        if artist in self._failed_queries:
             return []
         try:
             r = self._session.get(
@@ -557,7 +575,9 @@ class GenreResolver:
                 item = r["results"][0]
                 pg = item.get("primaryGenreName")
                 return [pg] if pg else []
+            self._failed_queries.add(artist)
         except Exception as e:
+            self._failed_queries.add(artist)
             logger.debug(f"iTunes artist genre lookup error for '{artist}': {e}")
         return []
 

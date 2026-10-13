@@ -139,9 +139,8 @@ class ArchiveManager:
 
     def _init_db(self):
         """Initializes database tables, performance indexes, and schema migrations."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     conn.execute("""
                         CREATE TABLE IF NOT EXISTS downloaded_tracks (
@@ -284,28 +283,8 @@ class ArchiveManager:
                     # Reset any stale 'queued' or 'stopped' tracks from previous sessions back to 'pending'
                     conn.execute("UPDATE saved_playlist_tracks SET status = 'pending' WHERE status IN ('queued', 'stopped');")
 
-                    # Data integrity cleanup: resolve misclassified collections and duplicate album fragmentation
+                    # Data integrity cleanup: resolve misclassified collections
                     try:
-                        conn.execute("""
-                            UPDATE downloaded_tracks
-                            SET collection_type = 'playlist', collection_name = 'Repeat Rewind'
-                            WHERE LOWER(collection_name) = 'repeat rewind'
-                               OR LOWER(file_path) LIKE '%repeat rewind%';
-                        """)
-                        conn.execute("""
-                            UPDATE downloaded_tracks
-                            SET album = 'Clair Obscur: Expedition 33 (Original Soundtrack)',
-                                collection_name = 'Clair Obscur: Expedition 33 (Original Soundtrack)',
-                                collection_type = 'album'
-                            WHERE LOWER(file_path) LIKE '%clair obscur%'
-                               OR LOWER(album) LIKE '%clair obscur%'
-                               OR LOWER(collection_name) LIKE '%clair obscur%';
-                        """)
-                        conn.execute("""
-                            UPDATE downloaded_tracks
-                            SET collection_name = 'Sex Playlist 👅💦Hottest Bedroom Music🔞 (Isabel LaRosa, Montell Fish, Two feet, The Neighbourhood'
-                            WHERE collection_name LIKE 'Sex Playlist%Isabel LaRosa, Montel%';
-                        """)
                         conn.execute("""
                             UPDATE downloaded_tracks
                             SET collection_type = 'playlist'
@@ -318,26 +297,20 @@ class ArchiveManager:
                         logger.debug(f"Data cleanup notice: {e_clean}")
 
                 logger.info(f"Initialized Archive database at: {self.db_path}")
-            except Exception as e:
-                logger.error(f"Failed to initialize Archive database: {e}")
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to initialize Archive database: {e}")
 
     def checkpoint_wal(self) -> bool:
         """Executes PRAGMA wal_checkpoint(TRUNCATE) to keep SQLite database files lean and fast."""
-        with self._db_lock:
-            try:
-                conn = self._get_connection()
-                try:
-                    with conn:
-                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-                    logger.debug("Successfully checkpointed SQLite WAL log.")
-                    return True
-                finally:
-                    conn.close()
-            except Exception as e:
-                logger.debug(f"SQLite WAL checkpoint note: {e}")
-                return False
+        try:
+            with self.connection() as conn:
+                with conn:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            logger.debug("Successfully checkpointed SQLite WAL log.")
+            return True
+        except Exception as e:
+            logger.debug(f"SQLite WAL checkpoint note: {e}")
+            return False
 
     @staticmethod
     def infer_badge_from_file(file_path: str) -> Tuple[str, str]:
@@ -388,9 +361,8 @@ class ArchiveManager:
                 file_size = 0
 
         genre_val = genre or getattr(track, "genre_str", "") or ""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     conn.execute("""
                         INSERT OR REPLACE INTO downloaded_tracks (
@@ -418,20 +390,17 @@ class ArchiveManager:
                     ))
                 logger.debug(f"Archived track '{track.title}' (track #{getattr(track, 'track_number', 1)}) -> {norm_path} [genre: {genre_val}]")
                 return True
-            except Exception as e:
-                logger.error(f"Failed to record track in archive: {e}")
-                return False
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to record track in archive: {e}")
+            return False
 
     def update_track_genre(self, file_path: str = "", genre: str = "", spotify_id: str = "") -> bool:
         """Updates the genre field for a track in SQLite archive."""
         if not genre:
             return False
         norm_path = normalize_path(file_path) if file_path else ""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     if norm_path:
                         conn.execute("UPDATE downloaded_tracks SET genre = ? WHERE file_path = ?", (genre, norm_path))
@@ -440,11 +409,9 @@ class ArchiveManager:
                         conn.execute("UPDATE downloaded_tracks SET genre = ? WHERE spotify_id = ?", (genre, spotify_id))
                         conn.execute("UPDATE saved_playlist_tracks SET genre = ? WHERE spotify_id = ?", (genre, spotify_id))
                 return True
-            except Exception as e:
-                logger.error(f"Failed to update track genre in archive: {e}")
-                return False
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to update track genre in archive: {e}")
+            return False
 
     def find_track(
         self,
@@ -469,9 +436,8 @@ class ArchiveManager:
             title = title or getattr(track_obj, "title", "") or ""
             artist = artist or getattr(track_obj, "primary_artist", "") or ""
 
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 row = None
                 # 1. Check by Spotify ID
                 if spotify_id:
@@ -519,20 +485,17 @@ class ArchiveManager:
                         conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (data["spotify_id"],))
                     return None
 
-            except Exception as e:
-                logger.error(f"Error querying archive: {e}")
-                return None
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Error querying archive: {e}")
+            return None
 
     def get_track_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
         """Queries archive for a track by its absolute or normalized file_path."""
         if not file_path:
             return None
         norm_p = normalize_path(file_path)
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 cur = conn.execute("SELECT * FROM downloaded_tracks WHERE file_path = ? COLLATE NOCASE LIMIT 1", (norm_p,))
                 row = cur.fetchone()
                 if not row:
@@ -541,17 +504,14 @@ class ArchiveManager:
                     cur = conn.execute("SELECT * FROM downloaded_tracks WHERE file_path LIKE ? LIMIT 1", (f"%{bname}%",))
                     row = cur.fetchone()
                 return dict(row) if row else None
-            except Exception as e:
-                logger.debug(f"Error finding track by path: {e}")
-                return None
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.debug(f"Error finding track by path: {e}")
+            return None
 
     def get_all_genres(self) -> List[str]:
         """Returns all distinct, sorted genre tokens present across downloaded tracks."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 cur = conn.execute("SELECT DISTINCT genre FROM downloaded_tracks WHERE genre IS NOT NULL AND TRIM(genre) != ''")
                 genres = set()
                 for r in cur.fetchall():
@@ -561,17 +521,14 @@ class ArchiveManager:
                         if g_clean:
                             genres.add(g_clean)
                 return sorted(list(genres))
-            except Exception as e:
-                logger.debug(f"Failed to fetch genres: {e}")
-                return []
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.debug(f"Failed to fetch genres: {e}")
+            return []
 
     def get_all_tracks(self, search_query: str = "", genre_filter: str = "") -> List[Dict[str, Any]]:
         """Retrieves all archived tracks, optionally filtered by title/artist/album or genre."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 conditions = []
                 params = []
                 if search_query:
@@ -590,29 +547,23 @@ class ArchiveManager:
 
                 cur = conn.execute(sql, tuple(params))
                 return [dict(row) for row in cur.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to fetch archive tracks: {e}")
-                return []
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to fetch archive tracks: {e}")
+            return []
 
     def get_track_count(self) -> int:
         """Returns total valid tracks stored in archive."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 cur = conn.execute("SELECT COUNT(*) FROM downloaded_tracks")
                 return cur.fetchone()[0]
-            except Exception:
-                return 0
-            finally:
-                conn.close()
+        except Exception:
+            return 0
 
     def get_library_stats(self) -> Dict[str, Any]:
         """Returns high-level statistics for the offline music library."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 cur = conn.execute("""
                     SELECT 
                         COUNT(*) as total_tracks,
@@ -646,11 +597,9 @@ class ArchiveManager:
                     "total_bytes": total_bytes,
                     "size_str": size_str
                 }
-            except Exception as e:
-                logger.error(f"Failed to fetch library stats: {e}")
-                return {"total_tracks": 0, "total_playlists": 0, "total_albums": 0, "total_bytes": 0, "size_str": "0 MB"}
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to fetch library stats: {e}")
+            return {"total_tracks": 0, "total_playlists": 0, "total_albums": 0, "total_bytes": 0, "size_str": "0 MB"}
 
     def get_playlists(self, search_query: str = "", genre_filter: str = "") -> List[Dict[str, Any]]:
         """
@@ -658,9 +607,8 @@ class ArchiveManager:
         Returns a list of playlists with track counts, total size, folder paths, sample tracks, and genres.
         Excludes albums (which strictly belong in get_albums).
         """
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 cur = conn.execute("""
                     SELECT 
                         COALESCE(NULLIF(collection_name, ''), 'Singles') as name,
@@ -732,11 +680,9 @@ class ArchiveManager:
                         "genres": sorted(list(genre_tokens))
                     })
                 return results
-            except Exception as e:
-                logger.error(f"Failed to aggregate playlists: {e}")
-                return []
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to aggregate playlists: {e}")
+            return []
 
     def get_albums(self, search_query: str = "", genre_filter: str = "") -> List[Dict[str, Any]]:
         """
@@ -744,9 +690,8 @@ class ArchiveManager:
         Only returns genuine albums (grouped by album name with predominant artist),
         excluding playlists, singles, and compilation placeholders.
         """
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 cur = conn.execute("""
                     SELECT 
                         COALESCE(NULLIF(album, ''), collection_name) as name,
@@ -821,17 +766,14 @@ class ArchiveManager:
                         "genres": sorted(list(genre_tokens))
                     })
                 return results
-            except Exception as e:
-                logger.error(f"Failed to aggregate albums: {e}")
-                return []
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to aggregate albums: {e}")
+            return []
 
     def get_collection_tracks(self, collection_name: str, collection_type: str = "playlist", genre_filter: str = "") -> List[Dict[str, Any]]:
         """Retrieves all tracks belonging to a specific collection (playlist or album) ordered by track number."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 if collection_type == "album":
                     cur = conn.execute("""
                         SELECT * FROM downloaded_tracks
@@ -855,25 +797,20 @@ class ArchiveManager:
                         continue
                     results.append(item)
                 return results
-            except Exception as e:
-                logger.error(f"Failed to fetch collection tracks for '{collection_name}': {e}")
-                return []
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to fetch collection tracks for '{collection_name}': {e}")
+            return []
 
     def delete_track(self, spotify_id: str) -> bool:
         """Deletes a track from the archive record."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (spotify_id,))
                 return True
-            except Exception as e:
-                logger.error(f"Failed to delete track {spotify_id} from archive: {e}")
-                return False
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to delete track {spotify_id} from archive: {e}")
+            return False
 
     def scan_and_index_directory(self, root_dir: str) -> int:
         """
@@ -904,9 +841,8 @@ class ArchiveManager:
         existing_meta = set()
         album_collections = set()
         playlist_collections = set()
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 cur = conn.execute("SELECT LOWER(file_path), LOWER(title), LOWER(artist), LOWER(COALESCE(collection_name, '')), LOWER(COALESCE(album, '')) FROM downloaded_tracks")
                 for r_path, r_title, r_artist, r_col, r_alb in cur.fetchall():
                     if r_path:
@@ -930,10 +866,8 @@ class ArchiveManager:
                 for r in cur4.fetchall():
                     if r[0]:
                         playlist_collections.add(r[0])
-            except Exception as e:
-                logger.warning(f"Failed to prefetch existing tracks for scan: {e}")
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to prefetch existing tracks for scan: {e}")
 
         for dirpath, _, filenames in os.walk(root_dir):
             folder_name = os.path.basename(dirpath)
@@ -1157,18 +1091,16 @@ class ArchiveManager:
                             logger.warning(f"Could not move .lrc file {fpath}: {e}")
 
         # 2. Clean database records for purged or non-existent files
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 cur = conn.execute("SELECT spotify_id, file_path FROM downloaded_tracks")
                 rows = cur.fetchall()
+                ids_to_delete = []
                 for r in rows:
                     p = r["file_path"]
                     norm_p = os.path.normpath(p).lower()
                     if norm_p in purged_paths or not os.path.isfile(p):
-                        with conn:
-                            conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (r["spotify_id"],))
-                        stats["purged_db_records"] += 1
+                        ids_to_delete.append((r["spotify_id"],))
                     else:
                         valid, _ = is_valid_audio_file(p)
                         if not valid:
@@ -1176,13 +1108,14 @@ class ArchiveManager:
                                 os.remove(p)
                             except Exception:
                                 pass
-                            with conn:
-                                conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (r["spotify_id"],))
-                            stats["purged_db_records"] += 1
-            except Exception as e:
-                logger.error(f"Error cleaning database records: {e}")
-            finally:
-                conn.close()
+                            ids_to_delete.append((r["spotify_id"],))
+
+                if ids_to_delete:
+                    with conn:
+                        conn.executemany("DELETE FROM downloaded_tracks WHERE spotify_id = ?", ids_to_delete)
+                    stats["purged_db_records"] = len(ids_to_delete)
+        except Exception as e:
+            logger.error(f"Error cleaning database records: {e}")
 
         logger.info(f"Cleanup finished: {stats}")
         return stats
@@ -1563,9 +1496,8 @@ class ArchiveManager:
                     logger.debug(f"Could not cache playlist cover: {e}")
             threading.Thread(target=_fetch_cover, daemon=True, name="CoverFetcher").start()
 
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     # 1. Upsert playlist record
                     conn.execute("""
@@ -1655,11 +1587,9 @@ class ArchiveManager:
 
                 logger.info(f"Saved playlist '{name}' ({len(tracks)} tracks) into database.")
                 return self.get_saved_playlist(playlist_id) or {}
-            except Exception as e:
-                logger.error(f"Failed to save playlist '{name}': {e}")
-                return {}
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to save playlist '{name}': {e}")
+            return {}
 
 
     def sync_saved_playlist(self, playlist_id: str, new_tracks: List[TrackMetadata]) -> Dict[str, Any]:
@@ -1681,16 +1611,16 @@ class ArchiveManager:
             removed_count = len(removed_ids)
 
             if removed_ids:
-                conn = self._get_connection()
                 try:
-                    placeholders = ",".join("?" for _ in removed_ids)
-                    conn.execute(
-                        f"DELETE FROM saved_playlist_tracks WHERE playlist_id = ? AND spotify_id IN ({placeholders})",
-                        [playlist_id] + list(removed_ids)
-                    )
-                    conn.commit()
-                finally:
-                    conn.close()
+                    with self.connection() as conn:
+                        with conn:
+                            placeholders = ",".join("?" for _ in removed_ids)
+                            conn.execute(
+                                f"DELETE FROM saved_playlist_tracks WHERE playlist_id = ? AND spotify_id IN ({placeholders})",
+                                [playlist_id] + list(removed_ids)
+                            )
+                except Exception as e:
+                    logger.debug(f"Failed to delete removed tracks during sync: {e}")
 
             pl = self.get_saved_playlist(playlist_id)
             name = pl.get("name", "Synced Playlist") if pl else "Synced Playlist"
@@ -1718,9 +1648,8 @@ class ArchiveManager:
 
     def get_saved_playlists(self) -> List[Dict[str, Any]]:
         """Returns all saved playlists with aggregate statistics."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 query = """
                     SELECT 
                         p.id, p.name, p.spotify_url, p.cover_url, p.total_tracks, p.created_at, p.updated_at,
@@ -1756,14 +1685,14 @@ class ArchiveManager:
                         "updated_at": r["updated_at"]
                     })
                 return results
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to fetch saved playlists: {e}")
+            return []
 
     def get_saved_playlist(self, playlist_id: str) -> Optional[Dict[str, Any]]:
         """Returns metadata and statistics for a specific playlist."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 query = """
                     SELECT 
                         p.id, p.name, p.spotify_url, p.cover_url, p.total_tracks, p.created_at, p.updated_at,
@@ -1798,8 +1727,9 @@ class ArchiveManager:
                     "created_at": r["created_at"],
                     "updated_at": r["updated_at"]
                 }
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to fetch saved playlist {playlist_id}: {e}")
+            return None
 
     def get_saved_playlist_tracks(
         self,
@@ -1810,9 +1740,8 @@ class ArchiveManager:
         genre_filter: str = ""
     ) -> List[Dict[str, Any]]:
         """Returns all tracks for a saved playlist, optionally filtered by status, search, genre, and limit."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 base_sql = """
                     SELECT 
                         s.id, s.playlist_id, s.spotify_id, s.title, s.artist, s.album,
@@ -1855,40 +1784,35 @@ class ArchiveManager:
                             d_row["source_type"] = st
                     res.append(d_row)
                 return res
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to fetch saved playlist tracks: {e}")
+            return []
 
     def update_saved_track_status(self, playlist_id: str, spotify_id: str, new_status: str):
         """Updates the status of a specific track in a saved playlist."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     conn.execute("""
                         UPDATE saved_playlist_tracks
                         SET status = ?
                         WHERE playlist_id = ? AND spotify_id = ?
                     """, (new_status, playlist_id, spotify_id))
-            except Exception as e:
-                logger.debug(f"Failed to update status for {spotify_id}: {e}")
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.debug(f"Failed to update status for {spotify_id}: {e}")
 
     def delete_saved_playlist(self, playlist_id: str) -> bool:
         """Deletes a saved playlist and all its associated track records."""
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     conn.execute("DELETE FROM saved_playlist_tracks WHERE playlist_id = ?", (playlist_id,))
                     conn.execute("DELETE FROM saved_playlists WHERE id = ?", (playlist_id,))
                 logger.info(f"Deleted saved playlist: {playlist_id}")
                 return True
-            except Exception as e:
-                logger.error(f"Failed to delete playlist {playlist_id}: {e}")
-                return False
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to delete playlist {playlist_id}: {e}")
+            return False
 
     def update_saved_playlist(
         self,
@@ -1944,9 +1868,8 @@ class ArchiveManager:
                     logger.debug(f"Could not fetch updated playlist cover: {e}")
             threading.Thread(target=_fetch_cover, daemon=True, name="CoverFetcher").start()
 
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     conn.execute("""
                         UPDATE saved_playlists
@@ -1972,14 +1895,14 @@ class ArchiveManager:
                             norm_new = normalize_path(new_dir)
                             with conn:
                                 cur = conn.execute(
-                                    "SELECT id, file_path FROM downloaded_tracks WHERE file_path LIKE ?",
+                                    "SELECT spotify_id, file_path FROM downloaded_tracks WHERE file_path LIKE ?",
                                     (norm_old + "%",)
                                 )
                                 for row in cur.fetchall():
                                     orig_fp = row["file_path"]
                                     rel = os.path.relpath(orig_fp, norm_old)
                                     updated_fp = normalize_path(os.path.join(norm_new, rel))
-                                    conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE id = ?", (updated_fp, row["id"]))
+                                    conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE spotify_id = ?", (updated_fp, row["spotify_id"]))
 
                                 cur2 = conn.execute(
                                     "SELECT id, file_path FROM saved_playlist_tracks WHERE playlist_id = ? AND file_path LIKE ?",
@@ -1995,11 +1918,9 @@ class ArchiveManager:
 
                 logger.info(f"Updated saved playlist '{playlist_id}' -> Name: '{new_name}'")
                 return True
-            except Exception as e:
-                logger.error(f"Failed to update playlist {playlist_id}: {e}")
-                return False
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to update playlist {playlist_id}: {e}")
+            return False
 
     def rename_collection(self, old_name: str, new_name: str, collection_type: str = "playlist") -> bool:
         """
@@ -2011,9 +1932,8 @@ class ArchiveManager:
         clean_old = old_name.strip()
         clean_new = new_name.strip()
 
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     # 1. Update downloaded_tracks collection_name
                     conn.execute("""
@@ -2042,14 +1962,24 @@ class ArchiveManager:
                         norm_new = normalize_path(new_dir)
                         with conn:
                             cur = conn.execute(
-                                "SELECT id, file_path FROM downloaded_tracks WHERE file_path LIKE ?",
+                                "SELECT spotify_id, file_path FROM downloaded_tracks WHERE file_path LIKE ?",
                                 (norm_old + "%",)
                             )
                             for row in cur.fetchall():
                                 orig_fp = row["file_path"]
                                 rel = os.path.relpath(orig_fp, norm_old)
                                 updated_fp = normalize_path(os.path.join(norm_new, rel))
-                                conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE id = ?", (updated_fp, row["id"]))
+                                conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE spotify_id = ?", (updated_fp, row["spotify_id"]))
+
+                            cur_saved = conn.execute(
+                                "SELECT id, file_path FROM saved_playlist_tracks WHERE file_path LIKE ?",
+                                (norm_old + "%",)
+                            )
+                            for row in cur_saved.fetchall():
+                                orig_fp = row["file_path"]
+                                rel = os.path.relpath(orig_fp, norm_old)
+                                updated_fp = normalize_path(os.path.join(norm_new, rel))
+                                conn.execute("UPDATE saved_playlist_tracks SET file_path = ? WHERE id = ?", (updated_fp, row["id"]))
                     except Exception as e:
                         logger.debug(f"Could not rename collection directory on disk: {e}")
 
@@ -2066,11 +1996,9 @@ class ArchiveManager:
 
                 logger.info(f"Renamed collection '{clean_old}' to '{clean_new}'.")
                 return True
-            except Exception as e:
-                logger.error(f"Failed to rename collection '{clean_old}' to '{clean_new}': {e}")
-                return False
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.error(f"Failed to rename collection '{clean_old}' to '{clean_new}': {e}")
+            return False
 
     def update_saved_playlist_track(
         self,
@@ -2083,9 +2011,8 @@ class ArchiveManager:
         """Updates title, artist, and album for a specific track in a saved playlist."""
         if not playlist_id or not spotify_id:
             return False
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     r = conn.execute(
                         "SELECT title, artist, album FROM saved_playlist_tracks WHERE playlist_id = ? AND spotify_id = ?",
@@ -2109,11 +2036,9 @@ class ArchiveManager:
                         WHERE spotify_id = ?
                     """, (new_title, new_artist, new_album, spotify_id))
                 return True
-            except Exception as e:
-                logger.debug(f"Failed to update track {spotify_id}: {e}")
-                return False
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.debug(f"Failed to update track {spotify_id}: {e}")
+            return False
 
     def mark_saved_track_downloaded(
         self,
@@ -2132,9 +2057,8 @@ class ArchiveManager:
             source_type = source_type or st_inf
 
         norm_fp = normalize_path(file_path)
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 # If genre wasn't provided, try querying it from downloaded_tracks
                 if not genre:
                     r = conn.execute("SELECT genre FROM downloaded_tracks WHERE spotify_id = ? LIMIT 1", (spotify_id,)).fetchone()
@@ -2151,18 +2075,15 @@ class ArchiveManager:
                             genre = CASE WHEN ? != '' THEN ? ELSE genre END
                         WHERE spotify_id = ?
                     """, (norm_fp, quality_badge, quality_badge, source_type, source_type, genre, genre, spotify_id))
-            except Exception as e:
-                logger.debug(f"Failed to mark track {spotify_id} downloaded in saved playlists: {e}")
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.debug(f"Failed to mark track {spotify_id} downloaded in saved playlists: {e}")
 
     def mark_saved_tracks_queued(self, playlist_id: str, spotify_ids: List[str]):
         """Marks specific tracks as 'queued' when sent to the download manager."""
         if not spotify_ids:
             return
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     placeholders = ",".join("?" for _ in spotify_ids)
                     conn.execute(f"""
@@ -2170,37 +2091,31 @@ class ArchiveManager:
                         SET status = 'queued'
                         WHERE playlist_id = ? AND spotify_id IN ({placeholders}) AND status = 'pending'
                     """, (playlist_id, *spotify_ids))
-            except Exception as e:
-                logger.debug(f"Failed to mark tracks queued: {e}")
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.debug(f"Failed to mark tracks queued: {e}")
 
     def update_saved_track_status_by_spotify_id(self, spotify_id: str, new_status: str):
         """Updates the status of a specific track across all saved playlists (if not already downloaded)."""
         if not spotify_id:
             return
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     conn.execute("""
                         UPDATE saved_playlist_tracks
                         SET status = ?
                         WHERE spotify_id = ? AND status != 'downloaded'
                     """, (new_status, spotify_id))
-            except Exception as e:
-                logger.debug(f"Failed to update status for {spotify_id}: {e}")
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.debug(f"Failed to update status for {spotify_id}: {e}")
 
     def revert_queued_tracks_to_pending(self, playlist_id: Optional[str] = None) -> int:
         """
         Reverts any tracks marked 'queued' or 'stopped' back to 'pending'.
         Prevents batch downloads from being permanently locked out when stopped or restarted.
         """
-        with self._db_lock:
-            conn = self._get_connection()
-            try:
+        try:
+            with self.connection() as conn:
                 with conn:
                     if playlist_id:
                         cur = conn.execute("""
@@ -2218,11 +2133,9 @@ class ArchiveManager:
                     if reverted > 0:
                         logger.info(f"Reverted {reverted} queued/stopped track(s) back to pending.")
                     return reverted
-            except Exception as e:
-                logger.debug(f"Failed to revert queued tracks to pending: {e}")
-                return 0
-            finally:
-                conn.close()
+        except Exception as e:
+            logger.debug(f"Failed to revert queued tracks to pending: {e}")
+            return 0
 
     def retag_all_library_genres(
         self,
