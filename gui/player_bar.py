@@ -4,13 +4,13 @@ import random
 import logging
 from typing import Optional, List, Tuple, Any
 
-from PyQt6.QtCore import Qt, QUrl, QTime, QByteArray
+from PyQt6.QtCore import Qt, QUrl, QTime, QByteArray, QPoint, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QIcon, QKeySequence, QShortcut
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame, QApplication
 )
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QAudioDevice
 from qfluentwidgets import (
     ToolButton, Slider, FluentIcon, CaptionLabel, StrongBodyLabel,
     BodyLabel, IconWidget, RoundMenu, Action
@@ -130,9 +130,28 @@ class MiniPlayerBar(QFrame):
         self._shuffle_history: List[int] = []
         self._unplayed_indices: List[int] = []
 
+        # Audio Device Tracking & Dynamic Migration
+        self.media_devices = QMediaDevices(self)
+        self._current_device_id: Optional[bytes] = None
+        self._selected_device_id: Optional[bytes] = None  # None indicates "auto" (follow Windows default)
+        self._current_device_name: str = "System Default"
+
         # Initialize QtMultimedia Player and AudioOutput
         self.audio_output = QAudioOutput(self)
         self.audio_output.setVolume(self._saved_vol)
+        default_dev = self.media_devices.defaultAudioOutput()
+        if not default_dev.isNull():
+            self._current_device_id = bytes(default_dev.id())
+            self._current_device_name = default_dev.description()
+            self.audio_output.setDevice(default_dev)
+
+        self.media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
+
+        # 1000ms Watchdog to detect Windows default audio device changes
+        self._device_watchdog = QTimer(self)
+        self._device_watchdog.setInterval(1000)
+        self._device_watchdog.timeout.connect(self._check_audio_device_watchdog)
+        self._device_watchdog.start()
 
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.audio_output)
@@ -363,6 +382,11 @@ class MiniPlayerBar(QFrame):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
+        self.device_btn = ToolButton(FluentIcon.HEADPHONE, self)
+        self.device_btn.setFixedSize(28, 28)
+        self.device_btn.clicked.connect(self._show_device_menu)
+        self._update_device_btn_tooltip()
+
         self.volume_btn = ToolButton(FluentIcon.VOLUME, self)
         self.volume_btn.setToolTip("Mute / Unmute")
         self.volume_btn.setFixedSize(28, 28)
@@ -385,6 +409,7 @@ class MiniPlayerBar(QFrame):
         self.close_btn.setFixedSize(28, 28)
         self.close_btn.clicked.connect(self.stop_and_hide)
 
+        right_layout.addWidget(self.device_btn)
         right_layout.addWidget(self.volume_btn)
         right_layout.addWidget(self.volume_slider)
         right_layout.addWidget(self.folder_btn)
@@ -967,6 +992,132 @@ class MiniPlayerBar(QFrame):
     def stop_and_hide(self):
         self.player.stop()
         self.setVisible(False)
+
+    # -------------------------------------------------------------
+    # Audio Output Device Engine & Dynamic Migration
+    # -------------------------------------------------------------
+    def _check_audio_device_watchdog(self):
+        """Periodically checks if Windows default audio endpoint changed while in auto mode."""
+        if self._selected_device_id is not None:
+            return
+        default_dev = self.media_devices.defaultAudioOutput()
+        if default_dev.isNull():
+            return
+        cur_id = bytes(default_dev.id())
+        if cur_id != self._current_device_id:
+            logger.info(f"Windows default audio device changed: {default_dev.description()}")
+            self._switch_audio_device(default_dev, is_auto=True)
+
+    def _on_audio_outputs_changed(self):
+        """Fired by Qt when audio endpoints are connected or disconnected."""
+        logger.info("Windows audio outputs topology change detected")
+        if self._selected_device_id is None:
+            default_dev = self.media_devices.defaultAudioOutput()
+            if not default_dev.isNull() and bytes(default_dev.id()) != self._current_device_id:
+                self._switch_audio_device(default_dev, is_auto=True)
+        else:
+            # Check if user-selected device is still present
+            all_devs = self.media_devices.audioOutputs()
+            matching = [d for d in all_devs if bytes(d.id()) == self._selected_device_id]
+            if not matching:
+                logger.info("Selected audio device disconnected; reverting to system default")
+                self._selected_device_id = None
+                self._switch_audio_device(self.media_devices.defaultAudioOutput(), is_auto=True)
+        self._update_device_btn_tooltip()
+
+    def _switch_audio_device(self, new_device: QAudioDevice, is_auto: bool = True):
+        """
+        Dynamically migrates playback to new audio device endpoint without interrupting playback.
+        Preserves track position and active playing state.
+        """
+        if new_device.isNull():
+            return
+
+        new_id = bytes(new_device.id())
+        self._current_device_id = new_id
+        self._current_device_name = new_device.description()
+        if is_auto:
+            self._selected_device_id = None
+        else:
+            self._selected_device_id = new_id
+
+        was_playing = (self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState)
+        pos = self.player.position()
+
+        try:
+            self.audio_output.setDevice(new_device)
+            logger.info(f"Audio output migrated to: {new_device.description()} (auto={is_auto})")
+        except Exception as e:
+            logger.warning(f"Failed to switch audio output device: {e}")
+
+        if was_playing:
+            if self.player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
+                self.player.setPosition(pos)
+                self.player.play()
+
+        self._update_device_btn_tooltip()
+
+    def _update_device_btn_tooltip(self):
+        if not hasattr(self, "device_btn"):
+            return
+        mode_str = "Auto: System Default" if self._selected_device_id is None else "Manual"
+        self.device_btn.setToolTip(
+            f"Audio Output: {self._current_device_name} ({mode_str})\n"
+            "Click to switch output device"
+        )
+
+    def _show_device_menu(self):
+        """Displays popup menu with system default and available audio devices."""
+        menu = RoundMenu(parent=self)
+
+        is_auto = (self._selected_device_id is None)
+        auto_prefix = "✓ " if is_auto else "   "
+        act_auto = Action(f"{auto_prefix}System Default (Auto-Switch)", self)
+        act_auto.triggered.connect(lambda: self._switch_audio_device(self.media_devices.defaultAudioOutput(), is_auto=True))
+        menu.addAction(act_auto)
+        menu.addSeparator()
+
+        all_devs = self.media_devices.audioOutputs()
+        for dev in all_devs:
+            dev_id = bytes(dev.id())
+            desc = dev.description()
+            is_active = (self._selected_device_id == dev_id) or (is_auto and dev_id == self._current_device_id)
+            prefix = "✓ " if is_active else "   "
+            act = Action(f"{prefix}{desc}", self)
+            act.triggered.connect(lambda checked=False, d=dev: self._switch_audio_device(d, is_auto=False))
+            menu.addAction(act)
+
+        pos = self.device_btn.mapToGlobal(QPoint(0, -menu.sizeHint().height() - 5))
+        menu.exec(pos)
+
+    # -------------------------------------------------------------
+    # Public Playback Transport Interface
+    # -------------------------------------------------------------
+    def toggle_play_pause(self):
+        """Toggles playback between play and pause."""
+        self._toggle_play_pause()
+
+    def seek_relative(self, delta_ms: int):
+        """Seeks forward or backward by delta_ms milliseconds."""
+        self._seek_relative(delta_ms)
+
+    def toggle_mute(self):
+        """Toggles audio mute state."""
+        self._toggle_mute()
+
+    def adjust_volume(self, delta_percent: int):
+        """Adjusts playback volume by delta_percent (+/- 1-100)."""
+        curr = self.volume_slider.value()
+        new_val = max(0, min(100, curr + delta_percent))
+        self.volume_slider.setValue(new_val)
+
+    def toggle_shuffle(self):
+        """Toggles shuffle mode."""
+        self._toggle_shuffle()
+
+    def toggle_repeat(self):
+        """Cycles repeat mode."""
+        self._toggle_repeat()
 
     @staticmethod
     def _format_ms(ms: int) -> str:

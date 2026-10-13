@@ -3,7 +3,7 @@
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
   <strong>Next-Generation High-Fidelity Spotify Audio Downloader & Library Manager for Windows 11</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.4.1-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.4.1"></a>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.4.2-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.4.2"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Fluent">
   <img src="https://img.shields.io/badge/Audio-24bit%20Hi--Res%20%7C%2016bit%20FLAC-00C853?style=for-the-badge&logo=flac&logoColor=white" alt="Lossless FLAC">
@@ -65,6 +65,13 @@ Every queued track automatically traverses an intelligent cascading resolution l
 - **Persistent Progress Tracking:** Visual progress bars, track counters (Total, Downloaded, Pending), and track-level status badges (`Pending`, `Queued`, `Completed`).
 - **Differential Playlist Synchronization:** Single-click incremental synchronization compares online Spotify playlists against local database storage, purges deleted tracks, and automatically enqueues newly added delta tracks directly into the download queue with live notifications.
 - **Freeze-Free Queue Ingestion:** Vectorized batch model insertions eliminate UI freezes when enqueuing thousands of tracks simultaneously.
+
+### 🎧 Dynamic Audio Device Switching & Universal Keyboard Controls (v1.4.2)
+- **Automatic Audio Output Migration:** Dynamically tracks Windows default playback endpoint changes. Switching default devices in Windows (plugging in earphones, connecting Bluetooth headphones, or changing the taskbar sound output) immediately migrates the audio stream without restarting the application or stopping playback.
+- **Audio Output Device Picker:** Dedicated audio device button (`FluentIcon.HEADPHONE`) on the mini-player bar displays a quick menu to choose between "System Default (Auto-Switch)" or any specific connected sound device.
+- **Universal Keyboard Controls:** Space (Play/Pause), Left/Right arrows (Seek -5s / +5s, Shift for 10s), Ctrl+Left/Right (Previous/Next track), Up/Down arrows (Volume), and hotkeys (J/K/L/M/N/P) work everywhere across the app.
+- **Smart Text-Input Isolation:** Normal typing in search inputs, URLs, playlist rename dialogs, or tag editor dialogs is completely protected and never hijacked.
+- **Windows Media Hardware & Headset Integration:** Full support for dedicated multimedia keyboard keys and Bluetooth headset buttons via `WM_APPCOMMAND` and Windows global media hotkeys (`VK_MEDIA_PLAY_PAUSE`, `VK_MEDIA_NEXT_TRACK`, etc.).
 
 ### ✏️ Manual Playlist Renaming & Metadata Customization (v1.4.1)
 - **Manual Playlist Renaming:** Rename any saved playlist or downloaded library collection with a single click via an interactive Fluent dialog.

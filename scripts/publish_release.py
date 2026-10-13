@@ -22,21 +22,23 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.4.1'
-    release_name = 'Flacify v1.4.1 — Manual Playlist Renaming & Metadata Editing'
+    tag = 'v1.4.2'
+    release_name = 'Flacify v1.4.2 — Keyboard Media Controls & Dynamic Audio Output Switching'
 
     release_body = (
-        "# 🚀 Flacify v1.4.1 Release Notes\n\n"
-        "### ✏️ Manual Playlist Renaming & Metadata Editing\n"
-        "- **Playlist Title & Metadata Editor**: Added an intuitive, modern Fluent dialog allowing users to manually rename any saved playlist, update its Spotify source URL, and customize its artwork.\n"
-        "- **Cover Artwork Customizer**: Users can now select custom local images (.jpg, .png, .webp) via file picker or specify remote URLs with instant real-time artwork previewing.\n"
-        "- **Track Metadata Editing**: Right-click any track within a playlist detail view to edit its title, artist, or album directly, synchronizing changes with both the playlist and the offline archive.\n"
-        "- **Completed Library Synchronization**: Renaming playlists automatically updates associated collection records, disk storage folder names, and cached artwork across both the Playlists tab and Completed Library.\n"
-        "- **Action Buttons & Context Menus**: Added dedicated Edit buttons (`FluentIcon.EDIT`) and rich right-click context menus across playlist cards and banners for rapid management.\n\n"
+        "# 🚀 Flacify v1.4.2 Release Notes\n\n"
+        "### 🎧 Dynamic Audio Output Device Routing & Auto-Switching\n"
+        "- **Automatic Endpoint Switching**: Flacify now dynamically monitors Windows audio topology and default endpoint changes. Switching default devices in Windows (such as plugging in wired earphones, connecting Bluetooth headphones, or selecting an output in the taskbar) immediately routes audio to the new device without restarting the app.\n"
+        "- **Seamless Stream Migration**: When output switches, playback position and playing state are seamlessly preserved with zero interruptions.\n"
+        "- **Audio Output Selector**: Added a dedicated Audio Device button (`FluentIcon.HEADPHONE`) with a quick popup menu allowing users to choose between 'System Default (Auto-Switch)' or any specific connected audio output device.\n\n"
+        "### ⌨️ Universal Keyboard & Media Hardware Controls\n"
+        "- **Full-Window Transport Controls**: Space (Play/Pause), Left/Right arrows (Seek -5s / +5s, Shift for 10s), Ctrl+Left/Right (Previous/Next track), Up/Down arrows (Volume), and hotkeys (J/K/L/M/N/P) work anywhere in the application.\n"
+        "- **Smart Text-Input Isolation**: When typing in search inputs, URLs, playlist rename fields, or metadata dialogs, standard keys pass through naturally without hijacking user typing.\n"
+        "- **Windows Native Media & Headset Keys**: Integrated hardware media keys (Play, Pause, Next, Prev, Stop) and `WM_APPCOMMAND` / `WM_HOTKEY` support so Bluetooth headset buttons and multimedia keyboard keys control playback even in the background.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.4.1.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.4.1.exe`\n"
+        "Download and run **`Flacify_Setup_v1.4.2.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.4.2.exe`\n"
     )
 
     token = get_github_token()
@@ -84,7 +86,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.4.1.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.4.2.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")

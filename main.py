@@ -145,7 +145,7 @@ def run_gui():
     if sys.platform == "win32":
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Flacify.App.1.4.1")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Flacify.App.1.4.2")
             # Create named mutex for Inno Setup installer active process detection (AppMutex)
             global _app_mutex_handle
             _app_mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, "FlacifyMutex")

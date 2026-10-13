@@ -9,6 +9,7 @@ from qfluentwidgets import (
     setTheme, Theme, isDarkTheme
 )
 from gui.player_bar import MiniPlayerBar
+from gui.media_keys import MediaControllerManager
 
 from core.queue_manager import DownloadQueueManager
 from core.musilon import MusilonEngine
@@ -150,6 +151,10 @@ class MainWindow(FluentWindow):
             self.widgetLayout.addLayout(v_player_lay)
         except Exception as e_dock:
             logger.debug(f"Could not dock player bar into layout: {e_dock}")
+
+        # Media Key & Hardware Controller System
+        self.media_controller = MediaControllerManager(self)
+        self.media_controller.setup()
 
         # Optimize tab switching animation: prevent position drift and ensure snappy, smooth transition
         self._setup_smooth_tab_transitions()
@@ -364,6 +369,8 @@ class MainWindow(FluentWindow):
             get_genre_resolver().save_cache()
         except Exception as e_cache:
             logger.debug(f"Error saving genre cache on exit: {e_cache}")
+        if hasattr(self, "media_controller"):
+            self.media_controller.cleanup()
         if hasattr(self, "player_bar"):
             self.player_bar.player.stop()
         self.queue_manager.stop()

@@ -501,6 +501,20 @@ d:\Spotify-Downloader\
 - **Release Version Bump (v1.4.1):**
   - Updated versions across `core/__init__.py`, `main.py`, `installer.iss`, `version_info.txt`, `core/lyrics.py`, `core/genre.py`, `build_windows.py`, `scripts/publish_release.py`, and `README.md`.
 
+### 42. Release v1.4.2: Universal Keyboard Media Controls & Dynamic Audio Output Device Routing
+- **Dynamic Audio Output Migration (`gui/player_bar.py`):**
+  1. Integrated `QMediaDevices` and `QAudioDevice` with `audioOutputsChanged` signal listener to detect device insertion and removal.
+  2. Implemented a 1000ms watchdog timer (`_check_audio_device_watchdog`) to guarantee instant detection when Windows switches the default audio endpoint among existing devices.
+  3. Built `_switch_audio_device()`: Smoothly migrates the playback stream to the new device endpoint while preserving playback position (`setPosition`) and playback state (`play()`) seamlessly.
+  4. Added dedicated audio device selector button (`device_btn`, `FluentIcon.HEADPHONE`) with a Fluent `RoundMenu` allowing users to select "System Default (Auto-Switch)" or any specific output device.
+- **Universal Keyboard Controls & Media Hardware Integration (`gui/media_keys.py`, `gui/main_window.py`):**
+  1. Built `GlobalMediaKeyFilter(QObject)`: Application-wide filter installed on `QApplication.instance()` to provide responsive playback controls across the app.
+  2. Supported controls: Space (Play/Pause), Left/Right arrows (-5s / +5s seek, Shift for 10s), Ctrl+Left/Right (Previous/Next track), Up/Down arrows (+/- 5% volume), and hotkeys (J/K/L/M/N/P).
+  3. Smart text-input protection: Checked `is_text_input_widget()` to ensure standard typing into search fields, URLs, playlist renaming modals, and metadata dialogs is never intercepted.
+  4. Built `WindowsMediaNativeFilter(QAbstractNativeEventFilter)`: Intercepts Windows `WM_APPCOMMAND` and `WM_HOTKEY` (`VK_MEDIA_PLAY_PAUSE`, `VK_MEDIA_NEXT_TRACK`, etc.) so Bluetooth headset buttons and multimedia keyboard hardware keys control playback even in the background.
+- **Release Version Bump (v1.4.2):**
+  - Bumped version across `core/__init__.py`, `main.py`, `installer.iss`, `version_info.txt`, `core/lyrics.py`, `core/genre.py`, `build_windows.py`, `scripts/publish_release.py`, and `README.md`.
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:
