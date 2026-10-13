@@ -10,8 +10,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath
 from qfluentwidgets import (
     TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
-    FluentIcon, InfoBar, LineEdit, CaptionLabel, StrongBodyLabel, BodyLabel,
-    SegmentedWidget, CardWidget, SmoothScrollArea, IconWidget, ComboBox
+    FluentIcon, InfoBar, InfoBarPosition, LineEdit, CaptionLabel, StrongBodyLabel, BodyLabel,
+    SegmentedWidget, CardWidget, SmoothScrollArea, IconWidget, ComboBox, MessageBoxBase
 )
 
 from gui.queue_model import TrackQueueModel
@@ -22,6 +22,33 @@ from core.archive import ArchiveManager
 from core.spotify_client import TrackMetadata
 from core.queue_manager import QueueItem
 from core.config import config
+
+
+class RenameCollectionDialog(MessageBoxBase):
+    """Fluent Dialog allowing users to rename a downloaded playlist/collection."""
+    def __init__(self, current_name: str, parent=None):
+        super().__init__(parent)
+        self.titleLabel = SubtitleLabel("Rename Playlist", self)
+        self.viewLayout.addWidget(self.titleLabel)
+
+        desc = CaptionLabel("Enter a new name for this playlist. Archive records and storage folders will be updated.", self)
+        desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.viewLayout.addWidget(desc)
+
+        self.name_input = LineEdit(self)
+        self.name_input.setText(current_name)
+        self.name_input.setClearButtonEnabled(True)
+        self.name_input.setPlaceholderText("Enter new playlist name...")
+        self.viewLayout.addWidget(self.name_input)
+
+        self.yesButton.setText("Rename")
+        self.cancelButton.setText("Cancel")
+
+        self.name_input.textChanged.connect(self._validate)
+        self._validate()
+
+    def _validate(self):
+        self.yesButton.setEnabled(bool(self.name_input.text().strip()))
 
 
 class CollectionCard(CardWidget):
@@ -38,13 +65,18 @@ class CollectionCard(CardWidget):
         icon: FluentIcon = FluentIcon.FOLDER,
         cover_path: Optional[str] = None,
         on_browse=None,
+        on_rename=None,
         parent=None
     ):
         super().__init__(parent)
+        self.title = title
         self.folder_path = folder_path
         self.cover_path = cover_path
         self.on_browse = on_browse
+        self.on_rename = on_rename
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_card_menu)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 12, 18, 12)
@@ -127,6 +159,12 @@ class CollectionCard(CardWidget):
             self.browse_btn.clicked.connect(lambda checked=False: self.on_browse() if self.on_browse else None)
             btn_layout.addWidget(self.browse_btn)
 
+        if on_rename:
+            self.rename_btn = ToolButton(FluentIcon.EDIT, self)
+            self.rename_btn.setToolTip("Rename Playlist")
+            self.rename_btn.clicked.connect(lambda checked=False: self.on_rename() if self.on_rename else None)
+            btn_layout.addWidget(self.rename_btn)
+
         self.open_btn = PrimaryPushButton(FluentIcon.FOLDER, "Open Folder", self)
         self.open_btn.clicked.connect(self._open_folder)
         btn_layout.addWidget(self.open_btn)
@@ -140,6 +178,40 @@ class CollectionCard(CardWidget):
                 self.on_browse()
                 return
         super().mousePressEvent(event)
+
+    def _show_card_menu(self, pos):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #222222;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 8px;
+                padding: 4px;
+                color: #FFFFFF;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 12px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(29, 185, 84, 0.25);
+                color: #1ED760;
+            }
+        """)
+        act_browse = menu.addAction("Browse Tracks")
+        act_rename = None
+        if self.on_rename:
+            act_rename = menu.addAction("Rename Playlist...")
+        menu.addSeparator()
+        act_folder = menu.addAction("Open Folder in Explorer")
+
+        action = menu.exec(self.mapToGlobal(pos))
+        if action == act_browse and self.on_browse:
+            self.on_browse()
+        elif act_rename and action == act_rename and self.on_rename:
+            self.on_rename()
+        elif action == act_folder:
+            self._open_folder()
 
     def _open_folder(self, *args):
         if self.folder_path and os.path.isdir(self.folder_path):
@@ -302,7 +374,13 @@ class CompletedView(QWidget):
         self.banner_open_folder_btn = ToolButton(FluentIcon.FOLDER, self.coll_banner)
         self.banner_open_folder_btn.setToolTip("Open Folder in Explorer")
         self.banner_open_folder_btn.clicked.connect(self._open_current_collection_folder)
+
+        self.banner_rename_btn = ToolButton(FluentIcon.EDIT, self.coll_banner)
+        self.banner_rename_btn.setToolTip("Rename Playlist")
+        self.banner_rename_btn.clicked.connect(self._rename_current_collection)
+
         banner_layout.addWidget(self.banner_open_folder_btn)
+        banner_layout.addWidget(self.banner_rename_btn)
 
         table_layout.addWidget(self.coll_banner)
 
@@ -642,6 +720,7 @@ class CompletedView(QWidget):
                 icon=FluentIcon.FOLDER,
                 cover_path=cover_path,
                 on_browse=lambda *args, n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "playlist", cp, fp, sub),
+                on_rename=lambda n=name: self._rename_playlist_collection(n),
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
@@ -863,6 +942,33 @@ class CompletedView(QWidget):
             os.startfile(folder)
         else:
             self._open_download_folder()
+
+    def _rename_current_collection(self):
+        curr_name = getattr(self, "_current_collection_name", None)
+        curr_type = getattr(self, "_current_collection_type", "playlist")
+        if curr_name and curr_type == "playlist":
+            self._rename_playlist_collection(curr_name)
+
+    def _rename_playlist_collection(self, current_name: str):
+        diag = RenameCollectionDialog(current_name, self.window() or self)
+        if diag.exec():
+            new_name = diag.name_input.text().strip()
+            if new_name and new_name != current_name:
+                ok = self.archive.rename_collection(current_name, new_name, collection_type="playlist")
+                if ok:
+                    InfoBar.success(
+                        title="Playlist Renamed",
+                        content=f"Successfully renamed to '{new_name}'.",
+                        orient=Qt.Orientation.Horizontal,
+                        position=InfoBarPosition.TOP,
+                        duration=3500,
+                        parent=self
+                    )
+                    self.reload_playlists()
+                    if getattr(self, "_current_collection_name", None) == current_name:
+                        self._current_collection_name = new_name
+                        self.banner_title.setText(new_name)
+                        self._load_collection_tracks(new_name, "playlist")
 
     def _on_search_changed(self, text: str):
         curr = self.stacked.currentIndex()

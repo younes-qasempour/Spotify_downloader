@@ -1890,6 +1890,231 @@ class ArchiveManager:
             finally:
                 conn.close()
 
+    def update_saved_playlist(
+        self,
+        playlist_id: str,
+        name: Optional[str] = None,
+        cover_url: Optional[str] = None,
+        spotify_url: Optional[str] = None,
+        local_cover_path: Optional[str] = None
+    ) -> bool:
+        """
+        Updates metadata (name, cover image/URL, Spotify link) for a saved playlist.
+        Synchronizes associated downloaded tracks, cover art caches, and directories.
+        """
+        if not playlist_id:
+            return False
+
+        old_pl = self.get_saved_playlist(playlist_id)
+        if not old_pl:
+            logger.warning(f"Cannot update non-existent playlist {playlist_id}")
+            return False
+
+        old_name = old_pl["name"]
+        new_name = name.strip() if (name and name.strip()) else old_name
+        new_cover_url = cover_url.strip() if cover_url is not None else (old_pl.get("cover_url") or "")
+        new_spotify_url = spotify_url.strip() if spotify_url is not None else (old_pl.get("spotify_url") or "")
+
+        covers_dir = str(get_covers_dir())
+        os.makedirs(covers_dir, exist_ok=True)
+        old_safe = sanitize_filename(old_name, max_length=50)
+        new_safe = sanitize_filename(new_name, max_length=50)
+        new_cached_cover = os.path.join(covers_dir, f"playlist_{new_safe}.jpg")
+        old_cached_cover = os.path.join(covers_dir, f"playlist_{old_safe}.jpg")
+
+        if local_cover_path and os.path.isfile(local_cover_path):
+            try:
+                shutil.copy2(local_cover_path, new_cached_cover)
+            except Exception as e:
+                logger.debug(f"Could not copy custom cover artwork: {e}")
+        elif new_safe != old_safe and os.path.isfile(old_cached_cover) and not os.path.isfile(new_cached_cover):
+            try:
+                shutil.copy2(old_cached_cover, new_cached_cover)
+            except Exception as e:
+                logger.debug(f"Could not migrate cover artwork: {e}")
+        elif new_cover_url and new_cover_url != (old_pl.get("cover_url") or ""):
+            def _fetch_cover():
+                try:
+                    import requests
+                    r = requests.get(new_cover_url, timeout=5)
+                    if r.status_code == 200 and len(r.content) > 500:
+                        with open(new_cached_cover, "wb") as f:
+                            f.write(r.content)
+                except Exception as e:
+                    logger.debug(f"Could not fetch updated playlist cover: {e}")
+            threading.Thread(target=_fetch_cover, daemon=True, name="CoverFetcher").start()
+
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute("""
+                        UPDATE saved_playlists
+                        SET name = ?, cover_url = ?, spotify_url = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    """, (new_name, new_cover_url, new_spotify_url, playlist_id))
+
+                    if new_name != old_name:
+                        conn.execute("""
+                            UPDATE downloaded_tracks
+                            SET collection_name = ?
+                            WHERE collection_name = ?
+                        """, (new_name, old_name))
+
+                if new_name != old_name:
+                    output_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
+                    old_dir = os.path.join(output_dir, old_safe)
+                    new_dir = os.path.join(output_dir, new_safe)
+                    if os.path.isdir(old_dir) and not os.path.exists(new_dir):
+                        try:
+                            os.rename(old_dir, new_dir)
+                            norm_old = normalize_path(old_dir)
+                            norm_new = normalize_path(new_dir)
+                            with conn:
+                                cur = conn.execute(
+                                    "SELECT id, file_path FROM downloaded_tracks WHERE file_path LIKE ?",
+                                    (norm_old + "%",)
+                                )
+                                for row in cur.fetchall():
+                                    orig_fp = row["file_path"]
+                                    rel = os.path.relpath(orig_fp, norm_old)
+                                    updated_fp = normalize_path(os.path.join(norm_new, rel))
+                                    conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE id = ?", (updated_fp, row["id"]))
+
+                                cur2 = conn.execute(
+                                    "SELECT id, file_path FROM saved_playlist_tracks WHERE playlist_id = ? AND file_path LIKE ?",
+                                    (playlist_id, norm_old + "%")
+                                )
+                                for row in cur2.fetchall():
+                                    orig_fp = row["file_path"]
+                                    rel = os.path.relpath(orig_fp, norm_old)
+                                    updated_fp = normalize_path(os.path.join(norm_new, rel))
+                                    conn.execute("UPDATE saved_playlist_tracks SET file_path = ? WHERE id = ?", (updated_fp, row["id"]))
+                        except Exception as e:
+                            logger.debug(f"Could not rename folder on disk: {e}")
+
+                logger.info(f"Updated saved playlist '{playlist_id}' -> Name: '{new_name}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update playlist {playlist_id}: {e}")
+                return False
+            finally:
+                conn.close()
+
+    def rename_collection(self, old_name: str, new_name: str, collection_type: str = "playlist") -> bool:
+        """
+        Renames a playlist or collection in the downloaded tracks archive and saved playlists.
+        Also renames the underlying storage folder if it exists on disk.
+        """
+        if not old_name or not new_name or old_name.strip() == new_name.strip():
+            return False
+        clean_old = old_name.strip()
+        clean_new = new_name.strip()
+
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    # 1. Update downloaded_tracks collection_name
+                    conn.execute("""
+                        UPDATE downloaded_tracks
+                        SET collection_name = ?
+                        WHERE LOWER(collection_name) = LOWER(?)
+                    """, (clean_new, clean_old))
+
+                    # 2. Update saved_playlists if a matching playlist exists
+                    conn.execute("""
+                        UPDATE saved_playlists
+                        SET name = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE LOWER(name) = LOWER(?)
+                    """, (clean_new, clean_old))
+
+                # 3. Rename disk directory if present
+                old_safe = sanitize_filename(clean_old, max_length=50)
+                new_safe = sanitize_filename(clean_new, max_length=50)
+                output_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
+                old_dir = os.path.join(output_dir, old_safe)
+                new_dir = os.path.join(output_dir, new_safe)
+                if os.path.isdir(old_dir) and not os.path.exists(new_dir):
+                    try:
+                        os.rename(old_dir, new_dir)
+                        norm_old = normalize_path(old_dir)
+                        norm_new = normalize_path(new_dir)
+                        with conn:
+                            cur = conn.execute(
+                                "SELECT id, file_path FROM downloaded_tracks WHERE file_path LIKE ?",
+                                (norm_old + "%",)
+                            )
+                            for row in cur.fetchall():
+                                orig_fp = row["file_path"]
+                                rel = os.path.relpath(orig_fp, norm_old)
+                                updated_fp = normalize_path(os.path.join(norm_new, rel))
+                                conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE id = ?", (updated_fp, row["id"]))
+                    except Exception as e:
+                        logger.debug(f"Could not rename collection directory on disk: {e}")
+
+                # 4. Cover cache migration
+                covers_dir = str(get_covers_dir())
+                for prefix in ("", "playlist_", "album_"):
+                    old_c = os.path.join(covers_dir, f"{prefix}{old_safe}.jpg")
+                    new_c = os.path.join(covers_dir, f"{prefix}{new_safe}.jpg")
+                    if os.path.isfile(old_c) and not os.path.isfile(new_c):
+                        try:
+                            shutil.copy2(old_c, new_c)
+                        except Exception:
+                            pass
+
+                logger.info(f"Renamed collection '{clean_old}' to '{clean_new}'.")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to rename collection '{clean_old}' to '{clean_new}': {e}")
+                return False
+            finally:
+                conn.close()
+
+    def update_saved_playlist_track(
+        self,
+        playlist_id: str,
+        spotify_id: str,
+        title: Optional[str] = None,
+        artist: Optional[str] = None,
+        album: Optional[str] = None
+    ) -> bool:
+        """Updates title, artist, and album for a specific track in a saved playlist."""
+        if not playlist_id or not spotify_id:
+            return False
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    r = conn.execute(
+                        "SELECT title, artist, album FROM saved_playlist_tracks WHERE playlist_id = ? AND spotify_id = ?",
+                        (playlist_id, spotify_id)
+                    ).fetchone()
+                    if not r:
+                        return False
+                    new_title = title.strip() if title is not None else r["title"]
+                    new_artist = artist.strip() if artist is not None else r["artist"]
+                    new_album = album.strip() if album is not None else (r["album"] or "")
+
+                    conn.execute("""
+                        UPDATE saved_playlist_tracks
+                        SET title = ?, artist = ?, album = ?
+                        WHERE playlist_id = ? AND spotify_id = ?
+                    """, (new_title, new_artist, new_album, playlist_id, spotify_id))
+
+                    conn.execute("""
+                        UPDATE downloaded_tracks
+                        SET title = ?, artist = ?, album = ?
+                        WHERE spotify_id = ?
+                    """, (new_title, new_artist, new_album, spotify_id))
+                return True
+            except Exception as e:
+                logger.debug(f"Failed to update track {spotify_id}: {e}")
+                return False
+            finally:
+                conn.close()
+
     def mark_saved_track_downloaded(
         self,
         spotify_id: str,

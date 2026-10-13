@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QModelIndex, QRectF, QUrl
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QColor, QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QHeaderView, QMenu, QApplication,
-    QStackedWidget, QLabel, QFrame
+    QStackedWidget, QLabel, QFrame, QFileDialog
 )
 from qfluentwidgets import (
     TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
@@ -100,6 +100,188 @@ class SpotifyCredentialsDialog(MessageBoxBase):
         self.cancelButton.setText("Cancel")
 
 
+class EditPlaylistDialog(MessageBoxBase):
+    """Fluent Dialog allowing users to manually rename a playlist and edit its metadata/cover."""
+    def __init__(self, playlist_data: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.playlist_data = playlist_data
+        self.selected_local_cover: Optional[str] = None
+
+        self.titleLabel = SubtitleLabel("Edit Playlist Details", self)
+        self.viewLayout.addWidget(self.titleLabel)
+
+        desc_label = CaptionLabel("Rename your playlist or customize its cover artwork and Spotify source link.", self)
+        desc_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.viewLayout.addWidget(desc_label)
+
+        # 1. Playlist Name input
+        name_title = CaptionLabel("Playlist Name", self)
+        name_title.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        self.viewLayout.addWidget(name_title)
+
+        self.name_input = LineEdit(self)
+        self.name_input.setPlaceholderText("Enter playlist name...")
+        self.name_input.setClearButtonEnabled(True)
+        self.name_input.setText(playlist_data.get("name", ""))
+        self.viewLayout.addWidget(self.name_input)
+
+        # 2. Spotify URL input
+        url_title = CaptionLabel("Spotify Link / URL", self)
+        url_title.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        self.viewLayout.addWidget(url_title)
+
+        self.url_input = LineEdit(self)
+        self.url_input.setPlaceholderText("https://open.spotify.com/playlist/...")
+        self.url_input.setClearButtonEnabled(True)
+        self.url_input.setText(playlist_data.get("spotify_url", ""))
+        self.viewLayout.addWidget(self.url_input)
+
+        # 3. Artwork / Cover section
+        cover_title = CaptionLabel("Cover Artwork (URL or local image file)", self)
+        cover_title.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        self.viewLayout.addWidget(cover_title)
+
+        cover_row = QHBoxLayout()
+        cover_row.setSpacing(10)
+
+        # Cover Preview Box
+        self.cover_preview = QLabel(self)
+        self.cover_preview.setFixedSize(56, 56)
+        self.cover_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.cover_preview.setStyleSheet("""
+            QLabel {
+                background-color: #2b2b2b;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+            }
+        """)
+        cover_row.addWidget(self.cover_preview)
+
+        cover_inputs_layout = QVBoxLayout()
+        cover_inputs_layout.setSpacing(6)
+
+        self.cover_input = LineEdit(self)
+        self.cover_input.setPlaceholderText("Cover image URL or local file path...")
+        self.cover_input.setClearButtonEnabled(True)
+        self.cover_input.setText(playlist_data.get("cover_url", ""))
+        self.cover_input.textChanged.connect(self._on_cover_text_changed)
+
+        self.browse_cover_btn = PushButton(FluentIcon.PHOTO, "Browse Image...", self)
+        self.browse_cover_btn.clicked.connect(self._browse_local_cover)
+
+        cover_inputs_layout.addWidget(self.cover_input)
+        cover_inputs_layout.addWidget(self.browse_cover_btn)
+        cover_row.addLayout(cover_inputs_layout, 1)
+
+        self.viewLayout.addLayout(cover_row)
+
+        initial_cover = playlist_data.get("local_cover") or playlist_data.get("cover_url", "")
+        self._update_preview(initial_cover)
+
+        self.yesButton.setText("Save Changes")
+        self.cancelButton.setText("Cancel")
+
+        self.name_input.textChanged.connect(self._validate_inputs)
+        self._validate_inputs()
+
+    def _validate_inputs(self):
+        self.yesButton.setEnabled(bool(self.name_input.text().strip()))
+
+    def _browse_local_cover(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Playlist Cover Artwork",
+            "",
+            "Image Files (*.jpg *.jpeg *.png *.webp);;All Files (*)"
+        )
+        if file_path:
+            self.selected_local_cover = file_path
+            self.cover_input.setText(file_path)
+            self._update_preview(file_path)
+
+    def _on_cover_text_changed(self, text: str):
+        text = text.strip()
+        if os.path.isfile(text):
+            self.selected_local_cover = text
+            self._update_preview(text)
+        elif text.startswith("http://") or text.startswith("https://"):
+            self.selected_local_cover = None
+
+    def _update_preview(self, path_or_url: str):
+        if path_or_url and os.path.isfile(path_or_url):
+            try:
+                img = QImage(path_or_url)
+                if not img.isNull():
+                    scaled = img.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    rounded = QPixmap(56, 56)
+                    rounded.fill(Qt.GlobalColor.transparent)
+                    p = QPainter(rounded)
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    path = QPainterPath()
+                    path.addRoundedRect(0, 0, 56, 56, 8, 8)
+                    p.setClipPath(path)
+                    p.drawPixmap(0, 0, QPixmap.fromImage(scaled))
+                    p.end()
+                    self.cover_preview.setPixmap(rounded)
+                    return
+            except Exception:
+                pass
+        self.cover_preview.setText("")
+        icon_w = IconWidget(FluentIcon.MUSIC_FOLDER, self.cover_preview)
+        icon_w.setFixedSize(28, 28)
+        lay = QHBoxLayout(self.cover_preview)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(icon_w, 0, Qt.AlignmentFlag.AlignCenter)
+
+
+class EditTrackDialog(MessageBoxBase):
+    """Fluent Dialog allowing users to edit track title, artist, and album in a playlist."""
+    def __init__(self, track_data: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.titleLabel = SubtitleLabel("Edit Track Metadata", self)
+        self.viewLayout.addWidget(self.titleLabel)
+
+        desc_label = CaptionLabel("Modify track details for this song in your playlist and offline archive.", self)
+        desc_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.viewLayout.addWidget(desc_label)
+
+        title_lbl = CaptionLabel("Track Title", self)
+        title_lbl.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        self.viewLayout.addWidget(title_lbl)
+
+        self.title_input = LineEdit(self)
+        self.title_input.setText(track_data.get("title", ""))
+        self.title_input.setClearButtonEnabled(True)
+        self.viewLayout.addWidget(self.title_input)
+
+        artist_lbl = CaptionLabel("Artist(s)", self)
+        artist_lbl.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        self.viewLayout.addWidget(artist_lbl)
+
+        self.artist_input = LineEdit(self)
+        self.artist_input.setText(track_data.get("artist", ""))
+        self.artist_input.setClearButtonEnabled(True)
+        self.viewLayout.addWidget(self.artist_input)
+
+        album_lbl = CaptionLabel("Album", self)
+        album_lbl.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        self.viewLayout.addWidget(album_lbl)
+
+        self.album_input = LineEdit(self)
+        self.album_input.setText(track_data.get("album", ""))
+        self.album_input.setClearButtonEnabled(True)
+        self.viewLayout.addWidget(self.album_input)
+
+        self.yesButton.setText("Save Track")
+        self.cancelButton.setText("Cancel")
+
+        self.title_input.textChanged.connect(self._validate)
+        self._validate()
+
+    def _validate(self):
+        self.yesButton.setEnabled(bool(self.title_input.text().strip()))
+
+
 class MetricCard(CardWidget):
     """Sleek metric summary card."""
     def __init__(self, title: str, initial_value: str = "0", parent=None):
@@ -133,6 +315,7 @@ class SavedPlaylistCard(CardWidget):
         on_open=None,
         on_delete=None,
         on_sync=None,
+        on_edit=None,
         parent=None
     ):
         super().__init__(parent)
@@ -140,7 +323,10 @@ class SavedPlaylistCard(CardWidget):
         self.on_open = on_open
         self.on_delete = on_delete
         self.on_sync = on_sync
+        self.on_edit = on_edit
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_card_context_menu)
 
         self.setStyleSheet("""
             CardWidget, SavedPlaylistCard {
@@ -218,6 +404,10 @@ class SavedPlaylistCard(CardWidget):
         self.sync_btn.setToolTip("Sync Playlist (Check for new/removed tracks)")
         self.sync_btn.clicked.connect(self._handle_sync)
 
+        self.edit_btn = ToolButton(FluentIcon.EDIT, self)
+        self.edit_btn.setToolTip("Rename or Edit Playlist Data")
+        self.edit_btn.clicked.connect(self._handle_edit)
+
         self.copy_btn = ToolButton(FluentIcon.COPY, self)
         self.copy_btn.setToolTip("Copy Spotify Link")
         self.copy_btn.clicked.connect(self._copy_link)
@@ -228,6 +418,7 @@ class SavedPlaylistCard(CardWidget):
 
         action_layout.addWidget(self.browse_btn)
         action_layout.addWidget(self.sync_btn)
+        action_layout.addWidget(self.edit_btn)
         action_layout.addWidget(self.copy_btn)
         action_layout.addWidget(self.delete_btn)
 
@@ -273,6 +464,10 @@ class SavedPlaylistCard(CardWidget):
         if self.on_open:
             self.on_open(self.data)
 
+    def _handle_edit(self):
+        if self.on_edit:
+            self.on_edit(self.data)
+
     def _handle_delete(self):
         if self.on_delete:
             self.on_delete(self.data.get("id"))
@@ -285,6 +480,45 @@ class SavedPlaylistCard(CardWidget):
         url = self.data.get("spotify_url", "")
         if url:
             QApplication.clipboard().setText(url)
+
+    def _show_card_context_menu(self, pos):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #222222;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 8px;
+                padding: 4px;
+                color: #FFFFFF;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 12px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(29, 185, 84, 0.25);
+                color: #1ED760;
+            }
+        """)
+        act_open = menu.addAction("Browse & Download Tracks")
+        act_edit = menu.addAction("Rename / Edit Playlist...")
+        act_sync = menu.addAction("Sync Playlist")
+        menu.addSeparator()
+        act_copy = menu.addAction("Copy Spotify Link")
+        menu.addSeparator()
+        act_delete = menu.addAction("Remove from Saved Playlists")
+
+        action = menu.exec(self.mapToGlobal(pos))
+        if action == act_open:
+            self._handle_open()
+        elif action == act_edit:
+            self._handle_edit()
+        elif action == act_sync:
+            self._handle_sync()
+        elif action == act_copy:
+            self._copy_link()
+        elif action == act_delete:
+            self._handle_delete()
 
 
 class PlaylistsView(QWidget):
@@ -507,6 +741,11 @@ class PlaylistsView(QWidget):
         detail_info_layout.addWidget(self.detail_stats_label)
         detail_info_layout.addWidget(self.detail_progress_bar)
         banner_layout.addLayout(detail_info_layout, 1)
+
+        self.detail_edit_btn = PushButton(FluentIcon.EDIT, "Edit Playlist", self.banner_card)
+        self.detail_edit_btn.setToolTip("Rename or edit playlist details & artwork")
+        self.detail_edit_btn.clicked.connect(self._handle_detail_edit)
+        banner_layout.addWidget(self.detail_edit_btn)
 
         self.detail_sync_btn = PushButton(FluentIcon.SYNC, "Sync Playlist", self.banner_card)
         self.detail_sync_btn.setToolTip("Check for newly added or removed songs from online source")
@@ -1058,6 +1297,7 @@ class PlaylistsView(QWidget):
                 on_open=self._open_playlist_detail,
                 on_delete=self._delete_playlist,
                 on_sync=self._sync_playlist,
+                on_edit=self._edit_playlist,
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
@@ -1075,6 +1315,47 @@ class PlaylistsView(QWidget):
             parent=self
         )
         self.reload_playlists()
+
+    def _edit_playlist(self, playlist_data: Dict[str, Any]):
+        if not playlist_data:
+            return
+        diag = EditPlaylistDialog(playlist_data, self.window() or self)
+        if diag.exec():
+            new_name = diag.name_input.text().strip()
+            new_url = diag.url_input.text().strip()
+            new_cover = diag.cover_input.text().strip()
+            local_cover = diag.selected_local_cover
+
+            if new_cover and os.path.isfile(new_cover) and not local_cover:
+                local_cover = new_cover
+
+            success = self.archive.update_saved_playlist(
+                playlist_id=playlist_data["id"],
+                name=new_name,
+                cover_url=new_cover if not (local_cover and os.path.isfile(local_cover)) else "",
+                spotify_url=new_url,
+                local_cover_path=local_cover
+            )
+
+            if success:
+                InfoBar.success(
+                    title="Playlist Updated",
+                    content=f"Successfully updated '{new_name}'.",
+                    orient=Qt.Orientation.Horizontal,
+                    position=InfoBarPosition.TOP,
+                    duration=3500,
+                    parent=self
+                )
+                self.reload_playlists()
+                if self.current_playlist_id == playlist_data["id"]:
+                    updated = self.archive.get_saved_playlist(self.current_playlist_id)
+                    if updated:
+                        self.current_playlist_data = updated
+                        self._refresh_detail_header()
+
+    def _handle_detail_edit(self):
+        if self.current_playlist_data:
+            self._edit_playlist(self.current_playlist_data)
 
     def _handle_detail_sync(self):
         if self.current_playlist_id:
@@ -1743,6 +2024,10 @@ class PlaylistsView(QWidget):
             menu.addSeparator()
             act_reset = menu.addAction("Reset Status to Pending")
 
+        menu.addSeparator()
+        act_edit_track = menu.addAction("Edit Track Metadata...")
+        act_edit_playlist = menu.addAction("Edit Playlist Details...")
+
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
         if act_play and action == act_play:
             if item.output_path and os.path.isfile(item.output_path):
@@ -1809,6 +2094,44 @@ class PlaylistsView(QWidget):
             self._refresh_detail_header()
         elif action == act_m3u8:
             self._on_export_m3u8_clicked()
+        elif action == act_edit_track:
+            self._edit_track_metadata(item)
+        elif action == act_edit_playlist:
+            self._handle_detail_edit()
+
+    def _edit_track_metadata(self, item: QueueItem):
+        if not item or not item.track or not self.current_playlist_id:
+            return
+        track_dict = {
+            "title": item.track.title,
+            "artist": item.track.artist_str,
+            "album": item.track.album or ""
+        }
+        diag = EditTrackDialog(track_dict, self.window() or self)
+        if diag.exec():
+            new_title = diag.title_input.text().strip()
+            new_artist = diag.artist_input.text().strip()
+            new_album = diag.album_input.text().strip()
+            ok = self.archive.update_saved_playlist_track(
+                self.current_playlist_id,
+                item.track.id,
+                title=new_title,
+                artist=new_artist,
+                album=new_album
+            )
+            if ok:
+                item.track.title = new_title
+                item.track.artists = [a.strip() for a in new_artist.split(",")]
+                item.track.album = new_album
+                self.model.layoutChanged.emit()
+                InfoBar.success(
+                    title="Track Updated",
+                    content=f"Updated '{new_title}'.",
+                    orient=Qt.Orientation.Horizontal,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                    parent=self
+                )
 
     def _on_export_m3u8_clicked(self):
         if not self.current_playlist_id:

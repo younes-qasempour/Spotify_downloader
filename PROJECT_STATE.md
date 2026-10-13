@@ -488,6 +488,19 @@ d:\Spotify-Downloader\
 - **Release Version Bump (v1.4.0):**
   - Updated versions across `core/__init__.py`, `main.py`, `installer.iss`, `version_info.txt`, `core/lyrics.py`, `core/genre.py`, `build_windows.py`, and `README.md`.
 
+### 41. Release v1.4.1: Manual Playlist Renaming, Metadata Customization, and Library Synchronization
+- **Manual Playlist Renaming & Metadata Editor (`gui/views/playlists_view.py`, `core/archive.py`):**
+  1. Built `EditPlaylistDialog(MessageBoxBase)`: Sleek Fluent modal dialog allowing users to manually rename playlists, update their Spotify URL, and customize cover artwork.
+  2. Supported custom artwork via local image file picker (`QFileDialog`) for `.jpg`, `.png`, `.webp` or remote URLs with real-time thumbnail previewing.
+  3. Added `EditTrackDialog(MessageBoxBase)`: Enabled right-click editing of individual track metadata (Title, Artist, Album) directly within playlist detail views.
+  4. Added dedicated Edit buttons (`ToolButton(FluentIcon.EDIT)`) and rich right-click context menus across playlist cards and detail header banners.
+- **Completed Library & Disk Synchronization (`gui/views/completed_view.py`, `core/archive.py`):**
+  1. Added `archive.update_saved_playlist()`, `archive.rename_collection()`, and `archive.update_saved_playlist_track()`: Atomic database updates for playlist names, track metadata, and collection records.
+  2. Automatic disk folder rename and file path updating in database for renamed playlists and collections.
+  3. Added `RenameCollectionDialog` in `CompletedView` to allow renaming downloaded playlists directly from the Library tab.
+- **Release Version Bump (v1.4.1):**
+  - Updated versions across `core/__init__.py`, `main.py`, `installer.iss`, `version_info.txt`, `core/lyrics.py`, `core/genre.py`, `build_windows.py`, `scripts/publish_release.py`, and `README.md`.
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:

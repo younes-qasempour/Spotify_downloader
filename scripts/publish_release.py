@@ -22,28 +22,21 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.4.0'
-    release_name = 'Flacify v1.4.0 — High-Performance UI Overhaul, Navigation Synchronization & Library Deduplication'
+    tag = 'v1.4.1'
+    release_name = 'Flacify v1.4.1 — Manual Playlist Renaming & Metadata Editing'
 
     release_body = (
-        "# 🚀 Flacify v1.4.0 Release Notes\n\n"
-        "### ⚡ High-Performance Architecture & UI Acceleration\n"
-        "- **Zero-Freeze Queue Delegate**: Eliminated font scaling paint exceptions (`TypeError: setPixelSize with float`) by pre-caching typography metrics and integer fonts (`_get_font`), completely eliminating recurring crash logs and UI stuttering during rapid scrolling.\n"
-        "- **Debounced Thumbnail Pipeline**: Added a 100ms repaint debounce timer to prevent thumbnail loading storms when rendering hundreds of playlist/album covers simultaneously.\n"
-        "- **Atomic Batch Model Ingestion**: Upgraded `TrackQueueModel.set_items` to atomic batch resets (`beginResetModel`/`endResetModel`), completely removing per-item UI lag when loading large queues.\n"
-        "- **O(N²) Elimination in Completed View**: Removed repeated model resets and per-row `setRowHeight` iteration loops in favor of fixed vertical header sizing (`CARD_HEIGHT = 76`).\n"
-        "- **Non-blocking Navigation & Fluid Tab Transitions**:\n"
-        "  - Eliminated synchronous Spotify OAuth validation and profile checks on tab activation (`allow_network=False` and worker threads).\n"
-        "  - Eliminated the `+76px` vertical offset drift on tab switching, replacing it with a fluid Fluent 24px slide transition (160ms ease-out).\n\n"
-        "### 🗃️ Music Archive & Library Deduplication\n"
-        "- **Unified Album Clustering**: Albums in the Completed view are now clustered strictly by canonical album title and primary artist, resolving split multi-artist album fragmentation (e.g. 5 duplicate rows consolidated into 1 unified entry).\n"
-        "- **Collection Classification Fix**: Fixed playlist tracks improperly classified under album tabs and stripped synchronous disk I/O from library queries.\n\n"
+        "# 🚀 Flacify v1.4.1 Release Notes\n\n"
+        "### ✏️ Manual Playlist Renaming & Metadata Editing\n"
+        "- **Playlist Title & Metadata Editor**: Added an intuitive, modern Fluent dialog allowing users to manually rename any saved playlist, update its Spotify source URL, and customize its artwork.\n"
+        "- **Cover Artwork Customizer**: Users can now select custom local images (.jpg, .png, .webp) via file picker or specify remote URLs with instant real-time artwork previewing.\n"
+        "- **Track Metadata Editing**: Right-click any track within a playlist detail view to edit its title, artist, or album directly, synchronizing changes with both the playlist and the offline archive.\n"
+        "- **Completed Library Synchronization**: Renaming playlists automatically updates associated collection records, disk storage folder names, and cached artwork across both the Playlists tab and Completed Library.\n"
+        "- **Action Buttons & Context Menus**: Added dedicated Edit buttons (`FluentIcon.EDIT`) and rich right-click context menus across playlist cards and banners for rapid management.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.4.0.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.4.0.exe`\n"
-        "- **File Size**: 78.71 MB (82,538,136 bytes)\n"
-        "- **SHA-256**: `0b7d09b7ae4dfd8260611b78bb3c27559b1fba94b5769117871622683ed6a6f7`\n"
+        "Download and run **`Flacify_Setup_v1.4.1.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.4.1.exe`\n"
     )
 
     token = get_github_token()
@@ -91,7 +84,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.4.0.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.4.1.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")

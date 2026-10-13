@@ -88,6 +88,43 @@ def run_tests():
     assert len(search_res) == 1
     assert search_res[0]["title"] == "Song 42"
 
+    # 5b. Test manual rename and edit playlist data
+    ok_edit = archive.update_saved_playlist(
+        "test12345",
+        name="Renamed Chill Playlist",
+        spotify_url="https://open.spotify.com/playlist/custom_link",
+        cover_url="https://example.com/cover.jpg"
+    )
+    assert ok_edit is True
+    edited_pl = archive.get_saved_playlist("test12345")
+    assert edited_pl is not None
+    assert edited_pl["name"] == "Renamed Chill Playlist"
+    assert edited_pl["spotify_url"] == "https://open.spotify.com/playlist/custom_link"
+    assert edited_pl["cover_url"] == "https://example.com/cover.jpg"
+    print("Step 8b: Playlist renamed and metadata edited successfully.", flush=True)
+
+    # 5c. Test edit track metadata
+    ok_track_edit = archive.update_saved_playlist_track(
+        "test12345",
+        "tr_1",
+        title="Custom Song Title 1",
+        artist="Custom Artist A",
+        album="Custom Album Z"
+    )
+    assert ok_track_edit is True
+    tr_after = [t for t in archive.get_saved_playlist_tracks("test12345") if t["spotify_id"] == "tr_1"][0]
+    assert tr_after["title"] == "Custom Song Title 1"
+    assert tr_after["artist"] == "Custom Artist A"
+    assert tr_after["album"] == "Custom Album Z"
+    print("Step 8c: Track metadata edited successfully.", flush=True)
+
+    # 5d. Test rename collection
+    ok_col = archive.rename_collection("Renamed Chill Playlist", "Brand New Collection Name")
+    assert ok_col is True
+    pl_renamed = archive.get_saved_playlist("test12345")
+    assert pl_renamed["name"] == "Brand New Collection Name"
+    print("Step 8d: Collection renamed successfully.", flush=True)
+
     # 6. Test delete playlist
     archive.delete_saved_playlist("test12345")
     print("Step 9: Deleted playlist.", flush=True)

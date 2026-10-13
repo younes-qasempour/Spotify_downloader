@@ -3,7 +3,7 @@
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
   <strong>Next-Generation High-Fidelity Spotify Audio Downloader & Library Manager for Windows 11</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.4.0-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.4.0"></a>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.4.1-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.4.1"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Fluent">
   <img src="https://img.shields.io/badge/Audio-24bit%20Hi--Res%20%7C%2016bit%20FLAC-00C853?style=for-the-badge&logo=flac&logoColor=white" alt="Lossless FLAC">
@@ -59,14 +59,20 @@ Every queued track automatically traverses an intelligent cascading resolution l
 - **Singles:** Standalone tracks are neatly routed to `{output_dir}/Singles/`.
 - **Isolated App Cache:** Album covers and marker files are stored in `%LOCALAPPDATA%\Flacify\cache`, leaving your music folders 100% clean.
 
-### 💾 Offline Saved Playlists & Differential Sync (v1.3.2)
+### 💾 Offline Saved Playlists & Differential Sync
 - **Metadata Archiving:** Import massive playlists (500 to 5,000+ tracks) and save their full track listings instantly into a local SQLite database without queuing audio downloads.
 - **Flexible Batch Downloading:** Download tracks in custom batches (25, 50, 100, 200, or custom size) with a single click, keeping you comfortably under daily quota limits.
 - **Persistent Progress Tracking:** Visual progress bars, track counters (Total, Downloaded, Pending), and track-level status badges (`Pending`, `Queued`, `Completed`).
-- **Differential Playlist Synchronization (v1.3.2):** Single-click incremental synchronization compares online Spotify playlists against local database storage, purges deleted tracks, and automatically enqueues newly added delta tracks directly into the download queue with live notifications.
+- **Differential Playlist Synchronization:** Single-click incremental synchronization compares online Spotify playlists against local database storage, purges deleted tracks, and automatically enqueues newly added delta tracks directly into the download queue with live notifications.
 - **Freeze-Free Queue Ingestion:** Vectorized batch model insertions eliminate UI freezes when enqueuing thousands of tracks simultaneously.
 
-### 🎚️ Universal Audio Transcoder & Loudness Normalization (v1.3.2)
+### ✏️ Manual Playlist Renaming & Metadata Customization (v1.4.1)
+- **Manual Playlist Renaming:** Rename any saved playlist or downloaded library collection with a single click via an interactive Fluent dialog.
+- **Custom Artwork & Cover Customization:** Select local image files (.jpg, .png, .webp) via file picker or specify custom URLs with real-time preview thumbnails.
+- **In-Place Track Metadata Editing:** Edit title, artist, and album tags for individual tracks directly within saved playlists and synchronize them across the archive.
+- **Complete Library & Disk Synchronization:** Renaming playlists automatically updates database records, disk folder names, and cached album art seamlessly.
+
+### 🎚️ Universal Audio Transcoder & Loudness Normalization
 - **Universal Audio Transcoder (`core/transcoder.py`):** User-selectable target container via FFmpeg:
   - **Original Stream (Default):** Retains pristine native stream without re-encoding.
   - **Apple Lossless (`alac` `.m4a`):** Bit-perfect lossless container for iPhone, iPad, and Apple Music library integration.
