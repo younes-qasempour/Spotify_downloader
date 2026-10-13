@@ -515,6 +515,30 @@ d:\Spotify-Downloader\
 - **Release Version Bump (v1.4.2):**
   - Bumped version across `core/__init__.py`, `main.py`, `installer.iss`, `version_info.txt`, `core/lyrics.py`, `core/genre.py`, `build_windows.py`, `scripts/publish_release.py`, and `README.md`.
 
+### 43. Codebase Audit, Database Integrity & Engine Hardening ([SEC-01] through [CODE-02])
+- **Database Synchronization & Atomic Keys (`core/archive.py`):**
+  1. `[BUG-01, BUG-02]` Fixed primary key lookup in `rename_collection()` and `update_saved_playlist()`. Replaced invalid `SELECT id` with `SELECT spotify_id FROM downloaded_tracks` and matching `WHERE spotify_id = ?` writes.
+  2. `[PERF-01]` Refactored `purge_corrupt_and_cleanup_library()` to batch deletion loops into a single atomic transaction via `executemany("DELETE FROM downloaded_tracks WHERE file_path = ?", batch)`.
+  3. `[PERF-02]` Standardized 25+ database query methods across `ArchiveManager` to consistently use the thread-safe `with self.connection() as conn:` context manager.
+  4. `[ARCH-01]` Removed hardcoded private user playlist names from `_init_db()`.
+- **Core Engine, Sockets & Concurrency (`core/musilon.py`, `core/spotify_client.py`, `gui/views/queue_view.py`):**
+  1. `[BUG-04]` Enclosed streaming HTTP responses in `try ... finally: if resp is not None: resp.close()` to guarantee TCP socket cleanup on HTTP 429 rate limits, non-audio headers, and cancellations.
+  2. `[BUG-05]` Removed synchronous `validate_token()` from `SpotifyClient.__init__()`. Token validation is now deferred to first API use or background threads, ensuring `MainWindow` instantiation never freezes the Qt UI thread.
+  3. `[BUG-06]` Updated `QueueView._on_enqueue_clicked()` to process all lines in multi-line inputs simultaneously inside a background `QThread` worker instead of taking only `urls[0]`.
+- **Audio Pipeline, Remuxing & Transcoding (`core/tagger.py`, `core/transcoder.py`, `core/resolver.py`):**
+  1. `[BUG-07]` Added automatic WebM container remuxing to `.opus` via FFmpeg (`-c:a copy`) in `AudioTagger.tag_file()` before tagging, preventing `OggOpusHeaderError` on YouTube Music audio.
+  2. `[BUG-03]` Configured `transcode_audio()` to raise a descriptive `TranscodeError` on failure rather than returning the source file path. Guarded `quality_badge` mutation in `resolver.py` to only append format badges on actual success.
+- **Performance & Architecture Refactoring (`gui/queue_model.py`, `core/genre.py`, `core/exceptions.py`, `gui/queue_delegate.py`):**
+  1. `[PERF-03]` Introduced an internal `_items_by_id: Dict[str, QueueItem]` index in `TrackQueueModel`, making queue progress and status updates execute in $O(1)$ time.
+  2. `[PERF-04]` Injected `download.proxy` into `GenreResolver._session` and implemented negative caching (`_failed_queries`) to prevent repeated timeouts on non-existent artists.
+  3. `[ARCH-02]` Unified domain exceptions under `FlacifyError` (including `MusilonVipError`) and replaced generic `RuntimeError` instances with `AudioIntegrityError`, `AudioSourceNotFoundError`, and `MetadataResolutionError`.
+  4. `[CODE-01]` Deduplicated `extract_embedded_cover` in `gui/queue_delegate.py` by importing from canonical `core.utils`.
+  5. `[CODE-02]` Cleaned up duplicate and unused imports across `core/utils.py`, `core/musilon.py`, and `gui/player_bar.py`.
+- **Test Suite Hardening (`tests/test_saved_playlists.py`, `tests/test_gui.py`):**
+  1. `[TEST-01]` Added end-to-end directory movement and SQLite path synchronization test for `rename_collection()`.
+  2. `[TEST-02]` Fully mocked `SpotifyClient` and `requests.Session` in `TestGUI` for complete network isolation.
+  3. `[SEC-01]` Sanitized `config.json` with clean placeholders and verified `.gitignore` exclusion.
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:
