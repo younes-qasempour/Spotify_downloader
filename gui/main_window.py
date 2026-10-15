@@ -91,7 +91,7 @@ class MainWindow(FluentWindow):
         self.queue_manager = DownloadQueueManager(
             audio_engine=self.audio_engine,
             archive_manager=self.archive_manager,
-            max_concurrent_downloads=config.get("download.concurrency", 2)
+            max_concurrent_downloads=config.get("download.concurrency", 5)
         )
 
         # Signal Bridge between Core Callbacks and Qt Event Loop
@@ -113,7 +113,11 @@ class MainWindow(FluentWindow):
         self.completed_view = CompletedView(self.bridge, archive_manager=self.archive_manager, parent=self)
         self.completed_view.setObjectName("completed_view")
 
-        self.settings_view = SettingsView(musilon_engine=self.musilon_engine, parent=self)
+        self.settings_view = SettingsView(
+            musilon_engine=self.musilon_engine,
+            queue_manager=self.queue_manager,
+            parent=self
+        )
         self.settings_view.setObjectName("settings_view")
 
         # Setup Navigation

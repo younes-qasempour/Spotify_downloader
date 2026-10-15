@@ -4,6 +4,7 @@ import time
 import json
 import random
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Callable, Tuple
 from urllib.parse import quote_plus
@@ -127,6 +128,7 @@ class MusilonEngine:
             self.session.proxies = {}
 
         self._last_request_time = 0.0
+        self._shield_lock = threading.Lock()
         self._load_cookie_string(self.session_cookie)
 
     def set_credentials(self, session_cookie: str = "", username: str = "", password: str = "", enabled: bool = True):
@@ -425,13 +427,14 @@ class MusilonEngine:
     # Rate-Limit Shield (Sequential Jitter & Backoff)
     # -------------------------------------------------------------------------
     def _rate_limit_shield(self):
-        """Enforces a strict 0.5s to 1.5s jitter between consecutive requests."""
-        now = time.time()
-        elapsed = now - self._last_request_time
-        jitter = random.uniform(0.5, 1.2)
-        if elapsed < jitter:
-            time.sleep(jitter - elapsed)
-        self._last_request_time = time.time()
+        """Enforces a thread-safe 0.3s to 0.6s jitter between consecutive requests."""
+        with self._shield_lock:
+            now = time.time()
+            elapsed = now - self._last_request_time
+            jitter = random.uniform(0.3, 0.6)
+            if elapsed < jitter:
+                time.sleep(jitter - elapsed)
+            self._last_request_time = time.time()
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         """Wrapper around requests with challenge handling and fast backoff."""

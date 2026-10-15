@@ -44,8 +44,9 @@ class SettingsView(QScrollArea):
     sig_ffmpeg_progress = pyqtSignal(float, str)
     sig_ffmpeg_finished = pyqtSignal(bool, str)
 
-    def __init__(self, musilon_engine: Optional[MusilonEngine] = None, parent=None):
+    def __init__(self, musilon_engine: Optional[MusilonEngine] = None, queue_manager: Optional[Any] = None, parent=None):
         super().__init__(parent)
+        self.qm = queue_manager
         self.setObjectName("settings_view")
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -432,6 +433,30 @@ class SettingsView(QScrollArea):
         an_row.addWidget(self.album_naming_input, 1)
         an_row.addWidget(an_desc)
         d_layout.addLayout(an_row)
+
+        # Concurrent Downloads & Searches Row
+        concurrency_row = QHBoxLayout()
+        concurrency_info = QVBoxLayout()
+        concurrency_title = BodyLabel("Concurrent Downloads & Searches", down_card)
+        concurrency_title.setStyleSheet("font-weight: bold;")
+        concurrency_desc = CaptionLabel(
+            "Number of simultaneous songs to search and download in parallel (Default: 5). "
+            "Parallel resolution prevents searches from blocking subsequent songs in the queue.",
+            down_card
+        )
+        concurrency_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        concurrency_desc.setWordWrap(True)
+        concurrency_info.addWidget(concurrency_title)
+        concurrency_info.addWidget(concurrency_desc)
+
+        self.concurrency_spin = CompactSpinBox(down_card)
+        self.concurrency_spin.setRange(1, 10)
+        self.concurrency_spin.setValue(int(config.get("download.concurrency", 5)))
+        self.concurrency_spin.valueChanged.connect(self._on_concurrency_changed)
+
+        concurrency_row.addLayout(concurrency_info, 1)
+        concurrency_row.addWidget(self.concurrency_spin)
+        d_layout.addLayout(concurrency_row)
 
         # Preferred Audio Quality Row
         qual_row = QHBoxLayout()
@@ -883,6 +908,12 @@ class SettingsView(QScrollArea):
             InfoBar.info("Safety-Net Fallback Enabled", "YouTube Music fallback is active if Musilon has no match.", duration=3000, parent=self)
         else:
             InfoBar.warning("Strict Musilon Mode", "YouTube fallback disabled. Downloads restricted strictly to Musilon.", duration=3500, parent=self)
+
+    def _on_concurrency_changed(self, val: int):
+        config.set("download.concurrency", val)
+        if self.qm and hasattr(self.qm, "update_concurrency"):
+            self.qm.update_concurrency(val)
+        InfoBar.info("Concurrency Updated", f"Download concurrency set to {val} simultaneous worker(s).", duration=2500, parent=self)
 
     def _on_quality_changed(self, index: int):
         if index == 0:

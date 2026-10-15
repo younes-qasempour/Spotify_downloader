@@ -65,6 +65,21 @@ class TestQueueManager(unittest.TestCase):
         # Item is Queued so clear_completed should not remove it
         self.assertEqual(len(self.qm.get_items()), 1)
 
+    def test_concurrency_scaling(self):
+        self.assertEqual(self.qm.max_workers, 5)
+        self.qm.update_concurrency(7)
+        self.assertEqual(self.qm.max_workers, 7)
+        self.qm.update_concurrency(3)
+        self.assertEqual(self.qm.max_workers, 3)
+
+    def test_concurrent_worker_spawn(self):
+        self.qm.start()
+        self.assertEqual(len(self.qm._worker_threads), self.qm.max_workers)
+        self.qm.update_concurrency(8)
+        self.assertEqual(len(self.qm._worker_threads), 8)
+        self.qm.stop()
+
 
 if __name__ == "__main__":
     unittest.main()
+

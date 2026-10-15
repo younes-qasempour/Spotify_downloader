@@ -22,13 +22,18 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.4.2'
-    release_name = 'Flacify v1.4.2 — Keyboard Media Controls & Dynamic Audio Output Switching'
+    tag = 'v1.4.1'
+    release_name = 'Flacify v1.4.1 — Parallel Song Search, 5-Worker Concurrency & Media Controls'
 
     release_body = (
-        "# 🚀 Flacify v1.4.2 Release Notes\n\n"
+        "# 🚀 Flacify v1.4.1 Release Notes\n\n"
+        "### ⚡ Parallel Song Search & 5-Worker Concurrent Download Pipeline\n"
+        "- **Unblocked Parallel Searching**: Eliminated the global resolution bottleneck. Song search and source lookup now execute concurrently across all workers instead of serializing the queue one song at a time.\n"
+        "- **5 Concurrent Workers by Default**: Increased default download concurrency from 2 to 5 workers for dramatically faster playlist and library downloads.\n"
+        "- **Dynamic Concurrency Control**: Added a new **'Concurrent Downloads & Searches'** setting (1–10) in the Settings view to dynamically scale worker threads in real-time without restarting.\n"
+        "- **Decoupled Stream Semaphore & VIP Cooldown**: High-speed Musilon CDN streams are protected by a dedicated semaphore while YouTube Music and local archive downloads run at full 5-thread parallelism.\n\n"
         "### 🎧 Dynamic Audio Output Device Routing & Auto-Switching\n"
-        "- **Automatic Endpoint Switching**: Flacify now dynamically monitors Windows audio topology and default endpoint changes. Switching default devices in Windows (such as plugging in wired earphones, connecting Bluetooth headphones, or selecting an output in the taskbar) immediately routes audio to the new device without restarting the app.\n"
+        "- **Automatic Endpoint Switching**: Flacify now dynamically monitors Windows audio topology and default endpoint changes. Switching default devices in Windows immediately routes audio to the new device without restarting the app.\n"
         "- **Seamless Stream Migration**: When output switches, playback position and playing state are seamlessly preserved with zero interruptions.\n"
         "- **Audio Output Selector**: Added a dedicated Audio Device button (`FluentIcon.HEADPHONE`) with a quick popup menu allowing users to choose between 'System Default (Auto-Switch)' or any specific connected audio output device.\n\n"
         "### ⌨️ Universal Keyboard & Media Hardware Controls\n"
@@ -37,8 +42,8 @@ def main():
         "- **Windows Native Media & Headset Keys**: Integrated hardware media keys (Play, Pause, Next, Prev, Stop) and `WM_APPCOMMAND` / `WM_HOTKEY` support so Bluetooth headset buttons and multimedia keyboard keys control playback even in the background.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.4.2.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.4.2.exe`\n"
+        "Download and run **`Flacify_Setup_v1.4.1.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.4.1.exe`\n"
     )
 
     token = get_github_token()
@@ -86,7 +91,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.4.2.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.4.1.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")

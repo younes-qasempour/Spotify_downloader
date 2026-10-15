@@ -539,6 +539,21 @@ d:\Spotify-Downloader\
   2. `[TEST-02]` Fully mocked `SpotifyClient` and `requests.Session` in `TestGUI` for complete network isolation.
   3. `[SEC-01]` Sanitized `config.json` with clean placeholders and verified `.gitignore` exclusion.
 
+### 44. Parallel Song Search & 5-Worker Concurrent Download Pipeline
+- **Search Bottleneck Elimination & Parallel Resolving (`core/queue_manager.py`, `core/musilon.py`):**
+  1. Removed the global blocking mutex (`_musilon_lock`) that previously wrapped `resolve_source()`. Previously, when any worker was searching (especially on slow YouTube Music fallbacks taking 5–15s), all other workers were frozen in line.
+  2. Integrated thread-safe micro-jitter locking (`_shield_lock`) in `MusilonEngine._rate_limit_shield()`. Musilon catalog search requests stay safely spaced (0.3s–0.6s) without blocking parallel searches or freezing YouTube Music lookups.
+  3. Songs now resolve and look ahead concurrently across all workers.
+- **5-Worker Concurrency & Dedicated CDN Streaming Throttle:**
+  1. Increased default `download.concurrency` from 2 to 5 in `core/config.py` and `config.json`.
+  2. Replaced `_musilon_stream_lock` with a configurable `threading.Semaphore(musilon.stream_concurrency)` to safely protect Musilon VIP CDN bandwidth from simultaneous stream bans, while allowing YouTube Music and Local Archive downloads to run at full 5-worker parallelism.
+  3. Decoupled the post-download VIP cooldown from the streaming semaphore, so other downloads begin streaming immediately without waiting 15–35s.
+- **Dynamic Settings UI Control (`gui/views/settings_view.py`, `gui/main_window.py`):**
+  1. Injected `queue_manager` into `SettingsView`.
+  2. Added "Concurrent Downloads & Searches" `CompactSpinBox` (range 1–10, default 5) in the Settings view under Download & Organization.
+  3. Added `DownloadQueueManager.update_concurrency()` to dynamically scale active worker threads on the fly without restarting the application.
+  4. Added unit tests for dynamic concurrency scaling in `tests/test_queue_manager.py`.
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:

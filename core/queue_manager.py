@@ -53,11 +53,11 @@ class DownloadQueueManager:
         self,
         audio_engine: Optional[CascadingAudioEngine] = None,
         archive_manager: Optional[ArchiveManager] = None,
-        max_concurrent_downloads: int = 2
+        max_concurrent_downloads: Optional[int] = None
     ):
         self.engine = audio_engine or CascadingAudioEngine()
         self.archive = archive_manager or ArchiveManager()
-        self.max_workers = max_concurrent_downloads
+        self.max_workers = max_concurrent_downloads if max_concurrent_downloads is not None else int(config.get("download.concurrency", 5))
 
         self._queue: queue.Queue[QueueItem] = queue.Queue()
         self._items: Dict[str, QueueItem] = {}  # track_id -> QueueItem
@@ -67,10 +67,9 @@ class DownloadQueueManager:
         self._running = False
         self._worker_threads: List[threading.Thread] = []
 
-        # Musilon bottleneck lock to ensure strict sequential requests
-        self._musilon_lock = threading.Lock()
-        # Strict single-connection stream mutex for Musilon CDN downloads
-        self._musilon_stream_lock = threading.Lock()
+        # Musilon stream semaphore to protect CDN bandwidth from rate limits while allowing parallel search
+        mus_streams = max(1, int(config.get("musilon.stream_concurrency", 1)))
+        self._musilon_stream_lock = threading.Semaphore(mus_streams)
 
         # Decoupled Event Callbacks
         self.on_track_enqueued: Optional[Callable[[QueueItem], None]] = None
@@ -93,7 +92,7 @@ class DownloadQueueManager:
 
             # Ensure worker threads are alive
             self._worker_threads = [t for t in self._worker_threads if t.is_alive()]
-            num_workers = max(1, config.get("download.concurrency", self.max_workers))
+            num_workers = self.max_workers
             while len(self._worker_threads) < num_workers:
                 idx = len(self._worker_threads)
                 t = threading.Thread(target=self._worker_loop, name=f"DownloadWorker-{idx}", daemon=True)
@@ -130,7 +129,7 @@ class DownloadQueueManager:
 
             # Ensure worker threads are alive
             self._worker_threads = [t for t in self._worker_threads if t.is_alive()]
-            num_workers = max(1, config.get("download.concurrency", self.max_workers))
+            num_workers = self.max_workers
             while len(self._worker_threads) < num_workers:
                 idx = len(self._worker_threads)
                 t = threading.Thread(target=self._worker_loop, name=f"DownloadWorker-{idx}", daemon=True)
@@ -139,6 +138,19 @@ class DownloadQueueManager:
 
             logger.info(f"Started DownloadQueueManager: {pending_count} tracks enqueued for download across {len(self._worker_threads)} workers.")
             return pending_count
+
+    def update_concurrency(self, new_concurrency: int):
+        """Dynamically scales the worker pool up to the requested concurrency."""
+        with self._lock:
+            self.max_workers = max(1, min(10, new_concurrency))
+            if self._running:
+                self._worker_threads = [t for t in self._worker_threads if t.is_alive()]
+                while len(self._worker_threads) < self.max_workers:
+                    idx = len(self._worker_threads)
+                    t = threading.Thread(target=self._worker_loop, name=f"DownloadWorker-{idx}", daemon=True)
+                    t.start()
+                    self._worker_threads.append(t)
+            logger.info(f"DownloadQueueManager concurrency set to {self.max_workers} (active workers: {len(self._worker_threads)})")
 
     def pause(self):
         with self._lock:
@@ -516,23 +528,18 @@ class DownloadQueueManager:
             self._update_status(item, "Resolving")
             
             # If Musilon daily limit was reached and user elected to continue with YouTube,
-            # bypass Musilon search & lock entirely for subsequent tracks in the queue.
+            # bypass Musilon search entirely for subsequent tracks in the queue.
             skip_mus = False
             with self._limit_lock:
                 skip_mus = self._allow_yt_on_limit
 
-            if not skip_mus:
-                # Lazy resolution with rate-limiting bottleneck for Musilon
-                with self._musilon_lock:
-                    if cancel_check():
-                        self._update_status(item, "Stopped")
-                        self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
-                        return
-                    self._paused.wait()
-                    resolved = self.engine.resolve_source(track, skip_musilon=False, cancel_check=cancel_check)
-            else:
-                self._paused.wait()
-                resolved = self.engine.resolve_source(track, skip_musilon=True, cancel_check=cancel_check)
+            self._paused.wait()
+            if cancel_check():
+                self._update_status(item, "Stopped")
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                return
+
+            resolved = self.engine.resolve_source(track, skip_musilon=skip_mus, cancel_check=cancel_check)
 
             if cancel_check():
                 self._update_status(item, "Stopped")
@@ -569,7 +576,7 @@ class DownloadQueueManager:
             def status_cb(status_str: str):
                 self._update_status(item, status_str)
 
-            # Download & Tag with single-connection Mutex and post-download cooldown for Musilon
+            # Download & Tag with controlled stream Semaphore and post-download cooldown for Musilon
             is_musilon = (resolved.source_type == "Musilon")
             if is_musilon:
                 with self._musilon_stream_lock:
@@ -592,13 +599,13 @@ class DownloadQueueManager:
                         pause_wait=pause_wait
                     )
 
-                    # Post-download VIP cooldown to mimic human listening and evade 429 behavioral rate-limits
-                    if file_path and os.path.isfile(file_path) and config.get("musilon.safe_mode", True) and not cancel_check():
-                        min_cd = max(0, int(config.get("musilon.cooldown_min_sec", 15)))
-                        max_cd = max(min_cd, int(config.get("musilon.cooldown_max_sec", 35)))
-                        cooldown_secs = random.randint(min_cd, max_cd) if max_cd > 0 else 0
+                # Post-download VIP cooldown is decoupled from stream lock so next download can begin
+                if file_path and os.path.isfile(file_path) and config.get("musilon.safe_mode", True) and not cancel_check():
+                    min_cd = max(0, int(config.get("musilon.cooldown_min_sec", 15)))
+                    max_cd = max(min_cd, int(config.get("musilon.cooldown_max_sec", 35)))
+                    cooldown_secs = random.randint(min_cd, max_cd) if max_cd > 0 else 0
+                    if cooldown_secs > 0:
                         logger.info(f"Musilon Safe Mode: cooling down for {cooldown_secs}s to evade rate limits...")
-
                         for remaining in range(cooldown_secs, 0, -1):
                             if cancel_check():
                                 break

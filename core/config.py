@@ -34,6 +34,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "safe_mode": True,
         "cooldown_min_sec": 15,
         "cooldown_max_sec": 35,
+        "stream_concurrency": 1,
     },
     "spotify": {
         "client_id": "",
@@ -57,7 +58,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "musilon_flac_24",
             "ytm_opus",
         ],
-        "concurrency": 2,
+        "concurrency": 5,
         "cookies_file": "",
         "proxy": "",
         "generate_m3u8": True,
