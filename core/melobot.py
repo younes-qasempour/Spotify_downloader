@@ -550,7 +550,7 @@ class MeloBotEngine:
                 try:
                     src = self._run_async(
                         self._async_query_melobot(track=track, query=query_str, cancel_check=cancel_check),
-                        timeout=50.0
+                        timeout=130.0
                     )
                     if src:
                         logger.info(f"Resolved '{track.title}' via MeloBot ({src.quality_tier}) using '{vector_name}'")
@@ -575,7 +575,8 @@ class MeloBotEngine:
         or interactive keyboard buttons, handles candidate selection & quality picking,
         and returns a MeloBotSource.
         Uses Telethon event push updates with gentle fallback polling to completely prevent
-        flood waits (FloodWaitError) and guarantees no duplicate button clicks.
+        flood waits (FloodWaitError). Retries button clicks (up to 3 times) and waits up to
+        120s for audio delivery to maximize MeloBot download success.
         """
         client = self._ensure_client()
         bot_entity = await client.get_input_entity(self.bot_username)
@@ -590,9 +591,15 @@ class MeloBotEngine:
         client.add_event_handler(_bot_msg_handler, events.NewMessage(chats=bot_entity))
         client.add_event_handler(_bot_msg_handler, events.MessageEdited(chats=bot_entity))
 
-        # Track message IDs with clicked buttons to guarantee 0 duplicate clicks
+        # Track message IDs with clicked buttons to guarantee controlled button clicks
         clicked_msg_ids = set()
         audio_msg: Optional[Message] = None
+
+        # Interactive state tracking for multi-click retry & extended wait
+        last_clicked_msg: Optional[Message] = None
+        last_clicked_is_quality: bool = False
+        click_attempts: int = 0
+        last_click_time: float = 0.0
 
         try:
             # Send query message to the bot
@@ -601,12 +608,25 @@ class MeloBotEngine:
 
             vector_start = time.time()
             stage_start = time.time()
-            stage_timeout = 15.0  # 15s to get initial candidate / quality menu
-            max_vector_time = 50.0  # Total time allowed for this vector
+            stage_timeout = 20.0  # 20s to get initial candidate / quality menu
+            max_vector_time = 130.0  # Total time allowed for this vector
 
             while time.time() - vector_start < max_vector_time:
                 if cancel_check and cancel_check():
                     return None
+
+                # Check if we need to re-click the button (user requested 2-3 click retries)
+                now = time.time()
+                if last_clicked_msg and click_attempts < 3:
+                    retry_delay = 14.0 if last_clicked_is_quality else 6.0
+                    if (now - last_click_time) >= retry_delay:
+                        logger.info(
+                            f"MeloBot {'audio' if last_clicked_is_quality else 'quality menu'} response pending; "
+                            f"re-clicking {'quality' if last_clicked_is_quality else 'candidate'} button (attempt {click_attempts + 1}/3)..."
+                        )
+                        await self._handle_bot_keyboard(last_clicked_msg, track, bot_entity)
+                        click_attempts += 1
+                        last_click_time = time.time()
 
                 remaining_stage = stage_timeout - (time.time() - stage_start)
                 if remaining_stage <= 0:
@@ -665,11 +685,23 @@ class MeloBotEngine:
 
                 # 2. Interactive keyboard received (Candidate Picker or Quality Selector)
                 if getattr(msg, "buttons", None) and msg.id not in clicked_msg_ids:
+                    is_qual = self._is_quality_menu(msg)
                     clicked = await self._handle_bot_keyboard(msg, track, bot_entity)
                     if clicked:
                         clicked_msg_ids.add(msg.id)
+                        last_clicked_msg = msg
+                        last_clicked_is_quality = is_qual
+                        click_attempts = 1
+                        last_click_time = time.time()
                         stage_start = time.time()
-                        stage_timeout = 35.0  # Allow up to 35 seconds for audio transcoding & upload
+                        if is_qual:
+                            # Quality clicked! MeloBot will transcode and upload the audio file (10MB-40MB).
+                            # Allow up to 120 seconds for full upload.
+                            stage_timeout = 120.0
+                            max_vector_time = max(max_vector_time, time.time() - vector_start + 120.0)
+                        else:
+                            # Candidate clicked! Quality menu will arrive within 18 seconds.
+                            stage_timeout = 18.0
                         continue
                     else:
                         logger.info(f"MeloBot keyboard options for '{track.title}' did not satisfy candidate/quality criteria. Ending vector early.")
@@ -712,6 +744,19 @@ class MeloBotEngine:
                         fname = getattr(attr, "file_name", "").lower()
                         if any(fname.endswith(ext) for ext in (".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aac")):
                             return True
+        return False
+
+    def _is_quality_menu(self, msg: Message) -> bool:
+        """Returns True if the message keyboard contains quality selection buttons (FLAC, 320k, 128k)."""
+        if not getattr(msg, "buttons", None):
+            return False
+        for row in msg.buttons:
+            for btn in row:
+                t = (getattr(btn, "text", "") or "").strip().lower()
+                for fa_d, en_d in (('۰', '0'), ('۱', '1'), ('۲', '2'), ('۳', '3'), ('۴', '4'), ('۵', '5'), ('۶', '6'), ('۷', '7'), ('۸', '8'), ('۹', '9')):
+                    t = t.replace(fa_d, en_d)
+                if any(k in t for k in ("کیفیت عالی", "کیفیت 320", "320 kbps", "320k", "کیفیت flac", "flac", "کیفیت معمولی", "کیفیت 128")):
+                    return True
         return False
 
     async def _handle_bot_keyboard(self, msg: Message, track: TrackMetadata, bot_entity: Any) -> bool:
