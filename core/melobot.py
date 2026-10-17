@@ -567,18 +567,6 @@ class MeloBotEngine:
         if not buttons:
             return False
 
-        # Check if keyboard belongs to an Album Tracklist Menu
-        is_album_menu = False
-        msg_text = (getattr(msg, "text", "") or "").lower()
-        if "آلبوم" in msg_text or any("دانلود همه" in txt for _, _, txt, _ in buttons):
-            is_album_menu = True
-
-        # Check if this keyboard contains song/album search candidate buttons
-        has_candidate_buttons = any(
-            any(txt.startswith(icon) for icon in ('🎵', '📀', '🗣', '👤', '🎬', '🎧'))
-            for _, _, txt, _ in buttons
-        ) or is_album_menu
-
         # Helper to classify genuine quality selection buttons
         def _get_quality_tier(btn_text: str) -> Optional[str]:
             t = btn_text.strip()
@@ -599,7 +587,57 @@ class MeloBotEngine:
                 return "128"
             return None
 
-        # --- A. Candidate Menu Processing (When search results or albums are presented) ---
+        # Check if keyboard contains genuine quality selection buttons
+        has_quality_buttons = any(_get_quality_tier(txt) is not None for _, _, txt, _ in buttons)
+
+        # Check if keyboard belongs to an Album Tracklist Menu
+        is_album_menu = False
+        msg_text = (getattr(msg, "text", "") or "").lower()
+        if "آلبوم" in msg_text or any("دانلود همه" in txt for _, _, txt, _ in buttons):
+            is_album_menu = True
+
+        # Check if this keyboard contains song/album search candidate buttons
+        has_candidate_buttons = not has_quality_buttons and (any(
+            any(txt.startswith(icon) for icon in ('🎵', '📀', '👤', '🎬', '🎧')) or
+            (txt.startswith('🗣') and not any(k in txt for k in ("خوانندهها", "خواننده ها", "خواننده")))
+            for _, _, txt, _ in buttons
+        ) or is_album_menu)
+
+        # --- A. Quality Selection Processing (When quality menu is presented) ---
+        if has_quality_buttons:
+            # 1. FLAC / Lossless
+            for r, c, txt, btn in buttons:
+                if _get_quality_tier(txt) == "flac":
+                    logger.info(f"MeloBot clicking FLAC Lossless quality button: '{txt}'")
+                    try:
+                        await btn.click()
+                    except Exception:
+                        await self._client.send_message(bot_entity, txt)
+                    return True
+
+            # 2. 320 kbps / High Quality / کیفیت عالی (Includes VIP)
+            for r, c, txt, btn in buttons:
+                if _get_quality_tier(txt) == "320":
+                    logger.info(f"MeloBot clicking High Quality (320k / VIP) button: '{txt}'")
+                    try:
+                        await btn.click()
+                    except Exception:
+                        await self._client.send_message(bot_entity, txt)
+                    return True
+
+            # 3. Standard Quality (128 kbps) fallback
+            for r, c, txt, btn in buttons:
+                if _get_quality_tier(txt) == "128":
+                    logger.info(f"MeloBot clicking Standard Quality (128k) button: '{txt}'")
+                    try:
+                        await btn.click()
+                    except Exception:
+                        await self._client.send_message(bot_entity, txt)
+                    return True
+
+            return False
+
+        # --- B. Candidate Menu Processing (When search results or albums are presented) ---
         if has_candidate_buttons:
             best_score = -1.0
             best_btn: Optional[Tuple[int, int, str, Any]] = None
@@ -620,37 +658,6 @@ class MeloBotEngine:
                 return True
 
             return False
-
-        # --- B. Quality Selection Processing (When quality menu is presented) ---
-        # 1. FLAC / Lossless
-        for r, c, txt, btn in buttons:
-            if _get_quality_tier(txt) == "flac":
-                logger.info(f"MeloBot clicking FLAC Lossless quality button: '{txt}'")
-                try:
-                    await btn.click()
-                except Exception:
-                    await self._client.send_message(bot_entity, txt)
-                return True
-
-        # 2. 320 kbps / High Quality / کیفیت عالی (Includes VIP)
-        for r, c, txt, btn in buttons:
-            if _get_quality_tier(txt) == "320":
-                logger.info(f"MeloBot clicking High Quality (320k / VIP) button: '{txt}'")
-                try:
-                    await btn.click()
-                except Exception:
-                    await self._client.send_message(bot_entity, txt)
-                return True
-
-        # 3. Standard Quality (128 kbps) fallback
-        for r, c, txt, btn in buttons:
-            if _get_quality_tier(txt) == "128":
-                logger.info(f"MeloBot clicking standard quality (128k) button: '{txt}'")
-                try:
-                    await btn.click()
-                except Exception:
-                    await self._client.send_message(bot_entity, txt)
-                return True
 
         return False
 

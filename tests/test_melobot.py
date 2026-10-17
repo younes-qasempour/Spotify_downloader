@@ -314,22 +314,29 @@ class TestMeloBotIntegration(unittest.TestCase):
         mock_cand_btn_2.click.assert_called_once()
         mock_cand_btn_1.click.assert_not_called()
 
-        # Mock quality message (no candidate buttons)
+        # Mock quality message (including MeloBot's '🗣 خوانندهها' info button)
         mock_q_btn_320 = MagicMock()
-        mock_q_btn_320.text = "کیفیت عالی (۳۲۰)"
+        mock_q_btn_320.text = "📥 کیفیت عالی"
         mock_q_btn_320.click = unittest.mock.AsyncMock()
         mock_q_btn_128 = MagicMock()
-        mock_q_btn_128.text = "کیفیت معمولی (۱۲۸)"
+        mock_q_btn_128.text = "📥 کیفیت معمولی"
         mock_q_btn_128.click = unittest.mock.AsyncMock()
+        mock_singer_btn = MagicMock()
+        mock_singer_btn.text = "🗣 خوانندهها"
+        mock_singer_btn.click = unittest.mock.AsyncMock()
 
         mock_q_msg = MagicMock()
-        mock_q_msg.text = "کیفیت مورد نظر را انتخاب کنید:"
-        mock_q_msg.buttons = [[mock_q_btn_320], [mock_q_btn_128]]
+        mock_q_msg.text = "خب حالا میخوای با این آهنگ چه کنی ؟"
+        mock_q_msg.buttons = [
+            [mock_q_btn_128, mock_q_btn_320],
+            [mock_singer_btn]
+        ]
 
         clicked_q = asyncio.run(engine._handle_bot_keyboard(mock_q_msg, track, "bot_entity"))
         self.assertTrue(clicked_q)
         mock_q_btn_320.click.assert_called_once()
         mock_q_btn_128.click.assert_not_called()
+        mock_singer_btn.click.assert_not_called()
 
 
 if __name__ == "__main__":
