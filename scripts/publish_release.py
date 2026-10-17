@@ -22,28 +22,21 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.5'
-    release_name = 'Flacify v1.5 — MeloBot Telegram Integration, Classical Search & Concurrency'
+    tag = 'v1.5.1'
+    release_name = 'Flacify v1.5.1 — Candidate vs Quality Button Isolation & Audio Duration Guard'
 
     release_body = (
-        "# 🚀 Flacify v1.5 Release Notes\n\n"
-        "### 🤖 MeloBot Telegram Integration (@melobot)\n"
-        "- **High-Speed Lossless FLAC & 320 kbps MP3 Retrieval**: Direct integration with Telegram via `telethon` enables instantaneous streaming and download of genuine Lossless FLAC and Studio 320 kbps MP3 tracks via `@melobot`.\n"
-        "- **Intelligent Interactive Keyboard Automation**: Automatically navigates multi-step Telegram bot dialogs—detects candidate songs, evaluates nested album tracklists, filters out promotional buttons, and picks the highest quality tier (FLAC > 320k > 128k).\n"
-        "- **Single-Song Concurrency Guard**: Dedicated single-stream serialization (`_telegram_stream_lock`) enforces 1-by-1 downloads for Telegram bot queries, preventing bot flood rate limits (`FloodWaitError`) and chat state collisions.\n"
-        "- **Fluent Settings Telegram Login Flow**: Connect your Telegram account directly from the Settings interface via an interactive, secure two-step login modal (phone number -> SMS/App code -> 2FA password) with live connection status.\n\n"
-        "### 🎼 Classical & Multi-Part Aria Search Engine\n"
-        "- **Automatic Classical Detection**: Accurately recognizes classical and opera compositions across all eras via catalog numbers (`Op`, `WAB`, `BWV`, `Hob`, `K`, `RV`) and terminology (`Symphony`, `Concerto`, `Sonata`, `Scherzo`, `Aria`, `Canzonetta`).\n"
-        "- **Clean Movement & Aria Extraction**: Automatically strips 100+ character Spotify titles down to concise movement and aria phrases across colons, hyphens, and ellipses (`...`), preventing search engine query bloat.\n"
-        "- **Adaptive Classical Duration Tolerance**: Expands duration tolerance for classical works to `max(45s, 15%)` with gentle penalty slopes, accommodating natural tempo variations between different conductors and orchestras.\n"
-        "- **Topic Channel Verification**: Authenticates performer-named Topic channels without false 'Foreign topic channel' cover rejections.\n\n"
-        "### ⚡ Concurrency & Pipeline Enhancements\n"
-        "- **Dynamic Concurrency Control**: Seamlessly switches between full multi-worker parallelism (up to 10 workers for Musilon/YouTube) and serialized single-song downloads when MeloBot is active.\n"
-        "- **Auto-Repair & Accurate Tag Attributions**: Ensures YouTube Music Opus and M4A downloads are accurately recorded in the library archive with proper badges.\n\n"
+        "# 🚀 Flacify v1.5.1 Release Notes\n\n"
+        "### 🛡️ Candidate Menu vs Quality Button Isolation in MeloBot\n"
+        "- **Fixed False Quality Button Triggers**: Keyboards containing candidate icons (`🎵`, `📀`, `🗣`, `👤`, `🎬`, `🎧`) or album tracklists are now strictly evaluated as Candidate Menus via `_score_candidate`, never as Quality Menus.\n"
+        "- **Eliminated Loose Substring Matching**: Removed loose substrings (e.g. `'original'`, `'hq'`) that previously caused buttons like *'🎵 Goosebumps Original Studio Cast Recording Company'* to be erroneously clicked as 320k quality buttons instead of evaluating candidates.\n"
+        "- **Isolated Quality Selector**: Quality buttons now strictly require dedicated quality identifiers (`کیفیت عالی`, `کیفیت ۳۲۰`, `کیفیت FLAC`, `320 kbps`, `128 kbps`, `flac`) and reject long candidate strings.\n\n"
+        "### ⏱️ Delivered Audio Duration Verification\n"
+        "- **Automatic Duration Guard**: Every audio file delivered by MeloBot is now validated against `track.duration_sec`. If delivered audio exceeds duration tolerance (e.g. a 5-minute cast recording track for a 2:42 song), it is safely rejected and resolution continues or falls back to YouTube Music.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.5.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.5.exe`\n"
+        "Download and run **`Flacify_Setup_v1.5.1.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.5.1.exe`\n"
     )
 
     token = get_github_token()
@@ -91,7 +84,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.1.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")

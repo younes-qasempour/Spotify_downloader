@@ -280,6 +280,58 @@ class TestMeloBotIntegration(unittest.TestCase):
         self.assertEqual(score_wrong, -1.0)
         self.assertEqual(score_unrelated, -1.0)
 
+    def test_candidate_vs_quality_button_isolation(self):
+        """
+        Guarantees candidate buttons containing 'Original' (e.g. Original Studio Cast)
+        are never mistaken for quality buttons (320k/VIP).
+        """
+        import asyncio
+        engine = MeloBotEngine(session_name="test_dummy")
+        track = TrackMetadata(
+            id="test_goosebumps",
+            title="Goosebumps - Remix",
+            artists=["Travis Scott", "HVME"],
+            album="Goosebumps (Remix)",
+            duration_ms=162000
+        )
+
+        # Mock candidate message
+        mock_cand_btn_1 = MagicMock()
+        mock_cand_btn_1.text = "🎵 Goosebumps Original Studio Cast Recording Company"
+        mock_cand_btn_1.click = unittest.mock.AsyncMock()
+        mock_cand_btn_2 = MagicMock()
+        mock_cand_btn_2.text = "🎵 Travis Scott - Goosebumps (HVME Remix)"
+        mock_cand_btn_2.click = unittest.mock.AsyncMock()
+
+        mock_msg = MagicMock()
+        mock_msg.text = "نتایج جستجو:"
+        mock_msg.buttons = [[mock_cand_btn_1], [mock_cand_btn_2]]
+
+        # Run _handle_bot_keyboard
+        clicked = asyncio.run(engine._handle_bot_keyboard(mock_msg, track, "bot_entity"))
+        self.assertTrue(clicked)
+        # Should click the authentic candidate mock_cand_btn_2, NEVER mock_cand_btn_1
+        mock_cand_btn_2.click.assert_called_once()
+        mock_cand_btn_1.click.assert_not_called()
+
+        # Mock quality message (no candidate buttons)
+        mock_q_btn_320 = MagicMock()
+        mock_q_btn_320.text = "کیفیت عالی (۳۲۰)"
+        mock_q_btn_320.click = unittest.mock.AsyncMock()
+        mock_q_btn_128 = MagicMock()
+        mock_q_btn_128.text = "کیفیت معمولی (۱۲۸)"
+        mock_q_btn_128.click = unittest.mock.AsyncMock()
+
+        mock_q_msg = MagicMock()
+        mock_q_msg.text = "کیفیت مورد نظر را انتخاب کنید:"
+        mock_q_msg.buttons = [[mock_q_btn_320], [mock_q_btn_128]]
+
+        clicked_q = asyncio.run(engine._handle_bot_keyboard(mock_q_msg, track, "bot_entity"))
+        self.assertTrue(clicked_q)
+        mock_q_btn_320.click.assert_called_once()
+        mock_q_btn_128.click.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
+

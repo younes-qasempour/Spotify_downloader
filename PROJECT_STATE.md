@@ -623,6 +623,20 @@ d:\Spotify-Downloader\
   4. **Classical Search Engine:** Comprehensive movement and aria extraction, adaptive duration tolerances ($\max(45\text{s}, 15\%)$), ellipsis-aware segmentation, and topic channel verification.
   5. **Auto-Repair & Accurate Tag Attributions:** Strict database and runtime checks ensure Opus/M4A files from YouTube Music are accurately attributed to YouTube Music with proper quality badges.
 
+### 48. Release v1.5.1 Hotfix: Candidate Menu Classification vs Quality Button Isolation & Audio Duration Verification
+- **Bug Diagnosed:**
+  1. In `core/melobot.py`, `_handle_bot_keyboard` evaluated Quality Selection (Section A) before Candidate Selection (Section B) with loose substring matching (`"original"` in `high_keywords`).
+  2. When searching for tracks like *Travis Scott, HVME - Goosebumps (Remix)*, MeloBot returned candidates including *Goosebumps Original Studio Cast Recording Company*.
+  3. Because the button contained `"Original"`, it was misclassified as a "High Quality 320k" button and clicked instead of being scored by `_score_candidate`.
+  4. The bot then sent an irrelevant 5-minute cast recording track, and because `MeloBotEngine` lacked duration verification, it was accepted despite a 151-second duration mismatch.
+- **Fix Implemented:**
+  1. **Strict Menu Classification (`has_candidate_buttons`):**
+     - Keyboards containing candidate icons (`🎵`, `📀`, `🗣`, `👤`, `🎬`, `🎧`) or album tracklists are strictly evaluated as Candidate Menus via `_score_candidate`, never as Quality Menus.
+  2. **Isolated Quality Button Detector (`_get_quality_tier`):**
+     - Quality detection is restricted to genuine quality menus and requires specific phrases (`کیفیت عالی`, `کیفیت ۳۲۰`, `کیفیت FLAC`, `320 kbps`) or standalone keywords (`320`, `128`, `flac`), rejecting long titles and removing loose substrings like `"original"` and `"hq"`.
+  3. **Delivered Audio Duration Verification:**
+     - Evaluates `DocumentAttributeAudio.duration` against `track.duration_sec`. If delivered audio exceeds duration tolerance ($\le 25$s for standard songs), it is discarded with a warning and resolution continues down the vector ladder or falls back to YouTube Music.
+
 
 ## 5. Development Cheat Sheet
 

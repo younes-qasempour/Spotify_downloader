@@ -469,6 +469,30 @@ class MeloBotEngine:
 
                 # 1. Direct audio file received
                 if self._is_audio_message(msg):
+                    # Validate audio duration if available to prevent mismatched downloads
+                    target_dur = track.duration_sec
+                    doc = getattr(msg.media, "document", None) if getattr(msg, "media", None) else None
+                    dur = 0
+                    if doc:
+                        for attr in getattr(doc, "attributes", []):
+                            if isinstance(attr, DocumentAttributeAudio):
+                                dur = getattr(attr, "duration", 0) or 0
+
+                    all_artist_text = (track.title + " " + " ".join(track.artists or [track.primary_artist])).lower()
+                    is_classical = any(k in all_artist_text for k in (
+                        "symphony", "concerto", "sonata", "scherzo", "allegro", "adagio", "andante",
+                        "presto", "moderato", "largo", "vivace", "overture", "nozze", "figaro",
+                        "requiem", "canzonetta", "duettino", "aria", "cavatina"
+                    )) or bool(re.search(r'\b(?:op|wab|bwv|hob|k|rv)\.?\s*\d+\b', all_artist_text))
+                    max_dur_tol = max(45.0, target_dur * 0.15) if is_classical else 25.0
+
+                    if dur > 0 and target_dur > 0 and abs(dur - target_dur) > max_dur_tol:
+                        logger.warning(
+                            f"MeloBot delivered audio with duration mismatch ({dur}s vs target {target_dur:.1f}s, "
+                            f"diff={abs(dur - target_dur):.1f}s > {max_dur_tol:.1f}s). Discarding mismatch audio."
+                        )
+                        continue
+
                     audio_msg = msg
                     break
 
@@ -549,17 +573,58 @@ class MeloBotEngine:
         if "آلبوم" in msg_text or any("دانلود همه" in txt for _, _, txt, _ in buttons):
             is_album_menu = True
 
-        # --- A. Quality Selection Check (Highest Precedence) ---
-        flac_keywords = ("flac", "lossless", "hi-res", "کیفیت flac")
-        high_keywords = ("کیفیت عالی", "عالی", "320", "۳۲۰", "کیفیت ۳۲۰", "high quality", "hq", "original")
-        norm_keywords = ("کیفیت معمولی", "معمولی", "128", "۱۲۸", "کیفیت ۱۲۸")
+        # Check if this keyboard contains song/album search candidate buttons
+        has_candidate_buttons = any(
+            any(txt.startswith(icon) for icon in ('🎵', '📀', '🗣', '👤', '🎬', '🎧'))
+            for _, _, txt, _ in buttons
+        ) or is_album_menu
 
+        # Helper to classify genuine quality selection buttons
+        def _get_quality_tier(btn_text: str) -> Optional[str]:
+            t = btn_text.strip()
+            # Candidate buttons or lengthy strings are never quality buttons
+            if any(t.startswith(icon) for icon in ('🎵', '📀', '🗣', '👤', '🎬', '🎧', '⬅️', '➡️')):
+                return None
+            if len(t) > 28:
+                return None
+            t_lower = t.lower()
+            # 1. FLAC / Lossless
+            if any(k in t_lower for k in ("کیفیت flac", "flac", "lossless", "hi-res")):
+                return "flac"
+            # 2. 320 kbps / High Quality
+            if any(k in t_lower for k in ("کیفیت عالی", "کیفیت ۳۲۰", "320 kbps", "۳۲۰ kbps")) or t_lower in ("320", "۳۲۰", "عالی", "high quality"):
+                return "320"
+            # 3. 128 kbps / Standard Quality
+            if any(k in t_lower for k in ("کیفیت معمولی", "کیفیت ۱۲۸", "128 kbps", "۱۲۸ kbps")) or t_lower in ("128", "۱۲۸", "معمولی", "standard quality"):
+                return "128"
+            return None
+
+        # --- A. Candidate Menu Processing (When search results or albums are presented) ---
+        if has_candidate_buttons:
+            best_score = -1.0
+            best_btn: Optional[Tuple[int, int, str, Any]] = None
+
+            for r, c, txt, btn in buttons:
+                score = self._score_candidate(txt, track, is_album_menu=is_album_menu)
+                if score > best_score and score >= 40.0:
+                    best_score = score
+                    best_btn = (r, c, txt, btn)
+
+            if best_btn:
+                r, c, txt, btn = best_btn
+                logger.info(f"MeloBot clicking perfect search candidate (score={best_score:.1f}, is_album={is_album_menu}): '{txt}'")
+                try:
+                    await btn.click()
+                except Exception:
+                    await self._client.send_message(bot_entity, txt)
+                return True
+
+            return False
+
+        # --- B. Quality Selection Processing (When quality menu is presented) ---
         # 1. FLAC / Lossless
         for r, c, txt, btn in buttons:
-            if "دانلود همه" in txt:
-                continue
-            txt_lower = txt.lower()
-            if any(k in txt_lower for k in flac_keywords):
+            if _get_quality_tier(txt) == "flac":
                 logger.info(f"MeloBot clicking FLAC Lossless quality button: '{txt}'")
                 try:
                     await btn.click()
@@ -569,10 +634,7 @@ class MeloBotEngine:
 
         # 2. 320 kbps / High Quality / کیفیت عالی (Includes VIP)
         for r, c, txt, btn in buttons:
-            if "دانلود همه" in txt:
-                continue
-            txt_lower = txt.lower()
-            if any(k in txt_lower for k in high_keywords):
+            if _get_quality_tier(txt) == "320":
                 logger.info(f"MeloBot clicking High Quality (320k / VIP) button: '{txt}'")
                 try:
                     await btn.click()
@@ -582,35 +644,13 @@ class MeloBotEngine:
 
         # 3. Standard Quality (128 kbps) fallback
         for r, c, txt, btn in buttons:
-            if "دانلود همه" in txt:
-                continue
-            txt_lower = txt.lower()
-            if any(k in txt_lower for k in norm_keywords):
+            if _get_quality_tier(txt) == "128":
                 logger.info(f"MeloBot clicking standard quality (128k) button: '{txt}'")
                 try:
                     await btn.click()
                 except Exception:
                     await self._client.send_message(bot_entity, txt)
                 return True
-
-        # --- B. Candidate Search Result Selection (Perfect Match Engine) ---
-        best_score = -1.0
-        best_btn: Optional[Tuple[int, int, str, Any]] = None
-
-        for r, c, txt, btn in buttons:
-            score = self._score_candidate(txt, track, is_album_menu=is_album_menu)
-            if score > best_score and score >= 40.0:
-                best_score = score
-                best_btn = (r, c, txt, btn)
-
-        if best_btn:
-            r, c, txt, btn = best_btn
-            logger.info(f"MeloBot clicking perfect search candidate (score={best_score:.1f}, is_album={is_album_menu}): '{txt}'")
-            try:
-                await btn.click()
-            except Exception:
-                await self._client.send_message(bot_entity, txt)
-            return True
 
         return False
 
