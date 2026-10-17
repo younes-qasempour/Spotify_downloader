@@ -46,7 +46,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "phone": "",
         "session_name": "telegram_session",
         "preferred_quality": "320",
-        "safe_delay_sec": 2,
+        "safe_delay_sec": 0.5,
     },
     "spotify": {
         "client_id": "",

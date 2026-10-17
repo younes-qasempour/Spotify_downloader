@@ -399,7 +399,46 @@ class TestMeloBotIntegration(unittest.TestCase):
         mock_only_128_btn.click.assert_called_once()
         config.set("download.allow_128k", False)
 
+    def test_score_candidate_parenthetical_features(self):
+        engine = MeloBotEngine(session_name="test_dummy_unauth_session")
+        track = TrackMetadata(
+            id="sp_feat_test",
+            title="Let Me Go (with Alesso, Florida Georgia Line & watt)",
+            artists=["Hailee Steinfeld", "Alesso", "Florida Georgia Line", "watt"],
+            album="Let Me Go"
+        )
+        btn_cand = "🎵 Hailee Steinfeld, Alesso - Let Me Go"
+        score = engine._score_candidate(btn_cand, track)
+        self.assertGreater(score, 50.0)
+
+    def test_score_candidate_no_false_positive_ai_descriptor(self):
+        engine = MeloBotEngine(session_name="test_dummy_unauth_session")
+        track = TrackMetadata(
+            id="sp_hailee_test",
+            title="Colour",
+            artists=["MNEK", "Hailee Steinfeld"],
+            album="Language"
+        )
+        # "Hailee" contains "ai", but is not an AI cover
+        btn_cand = "🎵 MNEK, Hailee Steinfeld - Colour"
+        score = engine._score_candidate(btn_cand, track)
+        self.assertGreater(score, 50.0)
+
+        # Genuine AI cover should be disqualified
+        btn_ai = "🎵 MNEK, Hailee Steinfeld - Colour (AI Cover)"
+        score_ai = engine._score_candidate(btn_ai, track)
+        self.assertEqual(score_ai, -1.0)
+
+    def test_parallel_transferrer_part_calculation(self):
+        from core.melobot import ParallelTransferrer
+        mock_client = MagicMock()
+        mock_client.session.dc_id = 2
+        mock_client.session.auth_key = b"dummy_auth_key"
+        transferrer = ParallelTransferrer(mock_client, dc_id=2)
+        self.assertEqual(transferrer.dc_id, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

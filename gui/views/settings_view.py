@@ -1283,14 +1283,17 @@ class SettingsView(QScrollArea):
         self.tg_status_badge.setStyleSheet("background-color: #333333; color: #AAAAAA; padding: 3px 10px; border-radius: 10px;")
 
         def worker():
-            is_auth = self.melobot_engine.is_authorized()
-            user_info = self.melobot_engine.get_me() if is_auth else None
-            disp = ""
-            if user_info:
-                name = user_info.get("first_name") or user_info.get("username") or "Connected"
-                phone = user_info.get("phone") or ""
-                disp = f"Connected: {name} (+{phone})" if phone else f"Connected: {name}"
-            safe_emit(self.sig_tg_status_result, is_auth, disp)
+            try:
+                is_auth = self.melobot_engine.is_authorized()
+                user_info = self.melobot_engine.get_me() if is_auth else None
+                disp = ""
+                if user_info:
+                    name = user_info.get("first_name") or user_info.get("username") or "Connected"
+                    phone = user_info.get("phone") or ""
+                    disp = f"Connected: {name} (+{phone})" if phone else f"Connected: {name}"
+                safe_emit(self.sig_tg_status_result, is_auth, disp)
+            except Exception:
+                pass
 
         threading.Thread(target=worker, daemon=True).start()
 

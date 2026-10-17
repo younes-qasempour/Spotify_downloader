@@ -2,15 +2,21 @@ import os
 import re
 import sys
 import time
+import math
 import asyncio
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any, Callable, Tuple
+from typing import Optional, List, Dict, Any, Callable, Tuple, AsyncGenerator
 from pathlib import Path
 from difflib import SequenceMatcher
 
-from telethon import TelegramClient
+from telethon import TelegramClient, utils
+from telethon.network import MTProtoSender
+from telethon.tl.alltlobjects import LAYER
+from telethon.tl.functions import InvokeWithLayerRequest
+from telethon.tl.functions.auth import ExportAuthorizationRequest, ImportAuthorizationRequest
+from telethon.tl.functions.upload import GetFileRequest
 from telethon.tl.custom.message import Message
 from telethon.tl.types import (
     MessageMediaDocument,
@@ -76,6 +82,126 @@ class MeloBotSource:
     file_size: int = 0
     duration: int = 0
     mime_type: str = "audio/mpeg"
+
+
+class DownloadSender:
+    """Dedicated parallel MTProto chunk download sender."""
+
+    def __init__(
+        self,
+        client: TelegramClient,
+        sender: MTProtoSender,
+        file_location: Any,
+        offset: int,
+        limit: int,
+        stride: int,
+        count: int
+    ):
+        self.client = client
+        self.sender = sender
+        self.request = GetFileRequest(file_location, offset=offset, limit=limit)
+        self.stride = stride
+        self.remaining = count
+
+    async def next(self) -> Optional[bytes]:
+        if self.remaining <= 0:
+            return None
+        res = await self.client._call(self.sender, self.request)
+        self.remaining -= 1
+        self.request.offset += self.stride
+        return getattr(res, "bytes", b"")
+
+    async def disconnect(self):
+        try:
+            await self.sender.disconnect()
+        except Exception:
+            pass
+
+
+class ParallelTransferrer:
+    """
+    High-Performance Multi-Connection Parallel Chunk Transferrer for Telethon.
+    Divides files into 512KB parts and downloads across multiple concurrent MTProto connections,
+    saturating network bandwidth and bypassing single-connection round-trip latency bottlenecks.
+    """
+
+    def __init__(self, client: TelegramClient, dc_id: Optional[int] = None):
+        self.client = client
+        self.loop = client.loop
+        self.dc_id = dc_id or client.session.dc_id
+        self.auth_key = None if (dc_id and client.session.dc_id != dc_id) else getattr(client.session, "auth_key", None)
+        self.senders: List[DownloadSender] = []
+
+    async def _create_sender(self) -> MTProtoSender:
+        dc = await self.client._get_dc(self.dc_id)
+        sender = MTProtoSender(self.auth_key, loggers=self.client._log)
+        await sender.connect(self.client._connection(
+            dc.ip_address,
+            dc.port,
+            dc.id,
+            loggers=self.client._log,
+            proxy=self.client._proxy
+        ))
+        if not self.auth_key:
+            auth = await self.client(ExportAuthorizationRequest(self.dc_id))
+            self.client._init_request.query = ImportAuthorizationRequest(id=auth.id, bytes=auth.bytes)
+            req = InvokeWithLayerRequest(LAYER, self.client._init_request)
+            await sender.send(req)
+            self.auth_key = sender.auth_key
+        return sender
+
+    async def init_download(
+        self,
+        file_location: Any,
+        file_size: int,
+        connection_count: int = 4,
+        part_size: int = 512 * 1024
+    ):
+        part_count = math.ceil(file_size / part_size)
+        connections = min(connection_count, max(1, part_count))
+        stride = connections * part_size
+
+        minimum, remainder = divmod(part_count, connections)
+
+        def get_parts():
+            nonlocal remainder
+            if remainder > 0:
+                remainder -= 1
+                return minimum + 1
+            return minimum
+
+        # Cross-DC export authorization happens on the first sender
+        first_sender = await self._create_sender()
+        self.senders = [
+            DownloadSender(self.client, first_sender, file_location, 0, part_size, stride, get_parts())
+        ]
+        if connections > 1:
+            async def _make_sender(idx):
+                s = await self._create_sender()
+                return DownloadSender(self.client, s, file_location, idx * part_size, part_size, stride, get_parts())
+
+            other_senders = await asyncio.gather(*[_make_sender(i) for i in range(1, connections)])
+            self.senders.extend(other_senders)
+
+    async def download(self, file_size: int, part_size: int = 512 * 1024) -> AsyncGenerator[bytes, None]:
+        part_count = math.ceil(file_size / part_size)
+        part = 0
+        try:
+            while part < part_count:
+                tasks = [self.loop.create_task(s.next()) for s in self.senders]
+                for task in tasks:
+                    chunk = await task
+                    if not chunk:
+                        break
+                    yield chunk
+                    part += 1
+        finally:
+            await self.cleanup()
+
+    async def cleanup(self):
+        if self.senders:
+            await asyncio.gather(*[s.disconnect() for s in self.senders], return_exceptions=True)
+            self.senders = []
 
 
 class MeloBotEngine:
@@ -389,20 +515,28 @@ class MeloBotEngine:
                     if clean_artists and clean_title_no_parentheses:
                         search_vectors.append(("Clean Title & Artist", f"{clean_artists[0]} {clean_title_no_parentheses[:60]}"))
             else:
-                # Vector 1: Primary Artist - Title
-                if clean_artists and clean_title:
-                    search_vectors.append(("Primary Artist - Title", f"{clean_artists[0]} - {clean_title}"))
+                primary_clean = clean_title_no_parentheses or clean_title
 
-                # Vector 2: Additional Co-Artists - Title (Limit to at most 2 prominent co-artists)
+                # Vector 1: Primary Artist - Clean Title (Optimal indexing in MeloBot for instant 1st-try resolution)
+                if clean_artists and primary_clean:
+                    search_vectors.append(("Primary Artist - Clean Title", f"{clean_artists[0]} - {primary_clean}"))
+
+                # Vector 2: Additional Co-Artists - Clean Title
                 for additional_artist in clean_artists[1:3]:
-                    search_vectors.append((f"Co-Artist ({additional_artist}) - Title", f"{additional_artist} - {clean_title}"))
+                    if primary_clean:
+                        search_vectors.append((f"Co-Artist ({additional_artist}) - Clean Title", f"{additional_artist} - {primary_clean}"))
 
-                # Vector 3: Clean Artist and Title (without parenthesis or tags like Remastered/Explicit)
+                # Vector 3: Clean Title Alone (Wide candidate pool from MeloBot)
+                if primary_clean:
+                    search_vectors.append(("Clean Title Query", primary_clean))
+
+                # Vector 4: Full Title with Parentheses & Tags (if distinct from clean title)
                 if clean_title_no_parentheses and clean_title_no_parentheses != clean_title and clean_artists:
-                    search_vectors.append(("Clean Title & Artist", f"{clean_artists[0]} {clean_title_no_parentheses}"))
+                    search_vectors.append(("Full Title & Artist", f"{clean_artists[0]} - {clean_title}"))
 
-                # Vector 4: Clean Title Alone (Wide candidate pool from MeloBot)
-                search_vectors.append(("Title Query", clean_title))
+                # Vector 5: Full Title Alone (Final fallback vector)
+                if clean_title and clean_title != primary_clean:
+                    search_vectors.append(("Full Title Query", clean_title))
 
             for vector_name, query_str in search_vectors:
                 if cancel_check and cancel_check():
@@ -452,7 +586,7 @@ class MeloBotEngine:
         # Wait for bot response across interaction steps (up to 12 seconds per stage)
         audio_msg: Optional[Message] = None
         max_wait = 12.0
-        poll_interval = 0.35
+        poll_interval = 0.2
 
         while time.time() - sent_time < max_wait:
             if cancel_check and cancel_check():
@@ -767,22 +901,37 @@ class MeloBotEngine:
             # Other variants
             'mashup', 'medley', 'parody', 'cover', 'کاور', 'tribute', 'deli', 'دلی'
         )
+
+        def _has_descriptor(desc: str, text: str) -> bool:
+            pattern = rf'(?<![a-zA-Z0-9\u0600-\u06FF]){re.escape(desc)}(?![a-zA-Z0-9\u0600-\u06FF])'
+            return bool(re.search(pattern, text, re.IGNORECASE))
+
         for d in descriptors:
-            in_btn = d in btn_clean
-            in_track = d in t_clean
+            in_btn = _has_descriptor(d, btn_clean)
+            in_track = _has_descriptor(d, t_clean)
             if in_btn and not in_track:
                 return -1.0  # Extraneous version not wanted by user
             if in_track and not in_btn:
                 return -1.0  # Track requested this version, but button does not have it
 
-        # 3. Title Word Match Ratio
-        matched_t = 0
-        for w in t_words:
-            if any(_match_token(w, bw) for bw in btn_words):
-                matched_t += 1
+        # 3. Title Word Match Ratio (Calculated against full title and core title without parentheses)
+        clean_core_title = re.sub(
+            r'[\(\[]\s*(?:\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{4})?|\d{4}\s+version|version\s*,\s*\d{4}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*|die\s+verurteilten|shawshank|soundtrack|ost|[^\)\]]*)\s*[\)\]]',
+            '',
+            track.title,
+            flags=re.IGNORECASE
+        ).strip()
+        core_clean = self._clean_track_str(clean_core_title)
+        core_words = [w for w in core_clean.split() if len(w) > 1]
 
-        title_ratio = matched_t / len(t_words)
-        min_title_threshold = 0.5 if len(t_words) >= 3 else 0.8
+        matched_full = sum(1 for w in t_words if any(_match_token(w, bw) for bw in btn_words))
+        full_ratio = matched_full / len(t_words) if t_words else 0.0
+
+        matched_core = sum(1 for w in core_words if any(_match_token(w, bw) for bw in btn_words))
+        core_ratio = matched_core / len(core_words) if core_words else 0.0
+
+        title_ratio = max(full_ratio, core_ratio)
+        min_title_threshold = 0.5 if len(core_words or t_words) >= 3 else 0.8
 
         # Check segmented matching for classical, soundtrack, or multi-part titles (e.g. Work: Aria)
         best_segment_ratio = 0.0
@@ -803,7 +952,10 @@ class MeloBotEngine:
         effective_title_ratio = max(title_ratio, best_segment_ratio)
 
         # 4. SequenceMatcher Similarity
-        sim_title = SequenceMatcher(None, t_clean, btn_clean).ratio()
+        sim_title = max(
+            SequenceMatcher(None, t_clean, btn_clean).ratio(),
+            SequenceMatcher(None, core_clean, btn_clean).ratio() if core_clean else 0.0
+        )
         base_score = max(sim_title * 100.0, best_segment_ratio * 60.0)
 
         # 5. Icon/Release Priority: Single track (🎵) or Album title track (📀)
@@ -964,28 +1116,93 @@ class MeloBotEngine:
                 if progress_callback:
                     progress_callback(percent, speed_str, eta_str)
 
-        try:
-            downloaded_file = await client.download_media(
-                msg,
-                file=temp_dest,
-                progress_callback=telethon_progress
-            )
-        except asyncio.CancelledError:
-            if os.path.exists(temp_dest):
-                try:
-                    os.remove(temp_dest)
-                except Exception:
-                    pass
-            return False
-        except Exception:
-            if os.path.exists(temp_dest):
-                try:
-                    os.remove(temp_dest)
-                except Exception:
-                    pass
-            raise
+        download_success = False
+        doc = getattr(msg.media, "document", None) if getattr(msg, "media", None) else None
 
-        if not downloaded_file or not os.path.isfile(temp_dest) or os.path.getsize(temp_dest) < 1024:
+        # Multi-connection FastTelethon parallel download (512KB parts across 4 parallel MTProto connections)
+        if doc and total_size > 512 * 1024:
+            transferrer: Optional[ParallelTransferrer] = None
+            try:
+                dc_id, loc = utils.get_input_location(doc)
+                part_size = 512 * 1024
+                connections = min(4, max(1, math.ceil(total_size / part_size)))
+
+                transferrer = ParallelTransferrer(client, dc_id=dc_id)
+                await transferrer.init_download(loc, total_size, connection_count=connections, part_size=part_size)
+
+                downloaded_bytes = 0
+                with open(temp_dest, "wb") as f_out:
+                    async for chunk in transferrer.download(total_size, part_size=part_size):
+                        if cancel_check and cancel_check():
+                            raise asyncio.CancelledError("Download cancelled by user.")
+                        if pause_wait:
+                            pause_wait()
+
+                        f_out.write(chunk)
+                        downloaded_bytes += len(chunk)
+
+                        now = time.time()
+                        elapsed = now - last_time[0]
+                        if elapsed >= 0.25:
+                            speed_bps = (downloaded_bytes - last_bytes[0]) / elapsed if elapsed > 0 else 0
+                            speed_str = f"{format_bytes(speed_bps)}/s" if speed_bps > 0 else "0 KB/s"
+                            remaining = max(0, total_size - downloaded_bytes)
+                            eta_sec = int(remaining / speed_bps) if speed_bps > 0 else 0
+                            eta_str = f"{eta_sec // 60:02d}:{eta_sec % 60:02d}"
+                            percent = min(99.0, (downloaded_bytes / max(1, total_size)) * 100.0)
+
+                            last_time[0] = now
+                            last_bytes[0] = downloaded_bytes
+                            if progress_callback:
+                                progress_callback(percent, speed_str, eta_str)
+
+                download_success = os.path.isfile(temp_dest) and os.path.getsize(temp_dest) >= total_size
+            except asyncio.CancelledError:
+                if os.path.exists(temp_dest):
+                    try:
+                        os.remove(temp_dest)
+                    except Exception:
+                        pass
+                return False
+            except Exception as e_fast:
+                logger.warning(f"FastTelethon parallel download failed ({e_fast}); falling back to standard download.")
+                if os.path.exists(temp_dest):
+                    try:
+                        os.remove(temp_dest)
+                    except Exception:
+                        pass
+                download_success = False
+            finally:
+                if transferrer:
+                    try:
+                        await transferrer.cleanup()
+                    except Exception:
+                        pass
+
+        # Standard Telethon download fallback
+        if not download_success:
+            try:
+                downloaded_file = await client.download_media(
+                    msg,
+                    file=temp_dest,
+                    progress_callback=telethon_progress
+                )
+            except asyncio.CancelledError:
+                if os.path.exists(temp_dest):
+                    try:
+                        os.remove(temp_dest)
+                    except Exception:
+                        pass
+                return False
+            except Exception:
+                if os.path.exists(temp_dest):
+                    try:
+                        os.remove(temp_dest)
+                    except Exception:
+                        pass
+                raise
+
+        if not os.path.isfile(temp_dest) or os.path.getsize(temp_dest) < 1024:
             if os.path.exists(temp_dest):
                 try:
                     os.remove(temp_dest)

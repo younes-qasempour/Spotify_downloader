@@ -673,7 +673,7 @@ class DownloadQueueManager:
                     )
 
                 # Polite pause between bot requests
-                delay_sec = max(0, int(config.get("telegram.safe_delay_sec", 1)))
+                delay_sec = max(0.0, float(config.get("telegram.safe_delay_sec", 0.5)))
                 if delay_sec > 0 and not cancel_check():
                     time.sleep(delay_sec)
             else:
@@ -729,7 +729,12 @@ class DownloadQueueManager:
                 if config.get("download.generate_m3u8", True) and getattr(track, "collection_type", "track") in ("playlist", "album"):
                     try:
                         from core.utils import generate_m3u8_file
-                        generate_m3u8_file(os.path.dirname(file_path), getattr(track, "collection_name", ""))
+                        threading.Thread(
+                            target=generate_m3u8_file,
+                            args=(os.path.dirname(file_path), getattr(track, "collection_name", "")),
+                            daemon=True,
+                            name="M3U8Generator"
+                        ).start()
                     except Exception as e_m3u8:
                         logger.debug(f"m3u8 playlist file generation note: {e_m3u8}")
 
