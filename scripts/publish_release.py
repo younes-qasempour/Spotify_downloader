@@ -98,24 +98,45 @@ def main():
     print(f"Uploading '{installer_name}' ({file_size:,} bytes) to GitHub Release...")
 
     upload_url = f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?name={installer_name}"
-    with open(installer_path, 'rb') as f:
-        file_bytes = f.read()
+    import requests
+    import time
 
-    upload_req = urllib.request.Request(
-        upload_url,
-        data=file_bytes,
-        headers={
-            **headers,
-            'Content-Type': 'application/octet-stream',
-            'Content-Length': str(len(file_bytes))
-        },
-        method='POST'
-    )
+    upload_headers = {
+        'Authorization': f'Bearer {token}',
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'FlacifyReleaseAgent',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': str(file_size)
+    }
 
-    with urllib.request.urlopen(upload_req) as resp:
-        asset_data = json.loads(resp.read().decode())
-        print(f"Asset uploaded successfully! ID={asset_data['id']}")
-        print(f"Download URL: {asset_data.get('browser_download_url')}")
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"Uploading attempt {attempt}/{max_retries}...")
+            with open(installer_path, 'rb') as f:
+                resp = requests.post(
+                    upload_url,
+                    data=f,
+                    headers=upload_headers,
+                    timeout=(30, 300)
+                )
+            if resp.status_code in (200, 201):
+                asset_data = resp.json()
+                print(f"Asset uploaded successfully! ID={asset_data['id']}")
+                print(f"Download URL: {asset_data.get('browser_download_url')}")
+                return
+            elif resp.status_code == 422:
+                print("Asset may already exist or validation failed:", resp.text)
+                return
+            else:
+                print(f"Upload failed with status {resp.status_code}: {resp.text}")
+        except Exception as e:
+            print(f"Upload error on attempt {attempt}: {e}")
+            if attempt < max_retries:
+                time.sleep(3)
+            else:
+                raise
 
 if __name__ == '__main__':
     main()
