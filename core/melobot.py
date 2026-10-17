@@ -977,6 +977,13 @@ class MeloBotEngine:
                 except Exception:
                     pass
             return False
+        except Exception:
+            if os.path.exists(temp_dest):
+                try:
+                    os.remove(temp_dest)
+                except Exception:
+                    pass
+            raise
 
         if not downloaded_file or not os.path.isfile(temp_dest) or os.path.getsize(temp_dest) < 1024:
             if os.path.exists(temp_dest):

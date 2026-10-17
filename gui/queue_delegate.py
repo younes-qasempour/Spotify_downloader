@@ -28,6 +28,7 @@ from gui.styles import (
 
 import collections
 from concurrent.futures import ThreadPoolExecutor
+from gui.bridge import safe_emit
 
 class ThumbnailSignalEmitter(QObject):
     sig_internal_loaded = pyqtSignal(str, object)  # key, QImage
@@ -109,7 +110,7 @@ class ThumbnailCache:
                             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                             Qt.TransformationMode.SmoothTransformation
                         )
-                        self.emitter.sig_internal_loaded.emit(key, scaled)
+                        safe_emit(self.emitter.sig_internal_loaded, key, scaled)
                         return
             except Exception:
                 pass
@@ -413,7 +414,7 @@ class TrackCardDelegate(QStyledItemDelegate):
         qb = quality_badge.lower()
         if "24" in qb:
             return BADGE_FLAC_24_BG, BADGE_FLAC_24_TEXT
-        elif "16" in qb:
+        elif "16" in qb or "flac" in qb:
             return BADGE_FLAC_16_BG, BADGE_FLAC_16_TEXT
         elif "320" in qb:
             return BADGE_320K_BG, BADGE_320K_TEXT

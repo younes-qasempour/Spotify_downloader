@@ -360,16 +360,20 @@ class CascadingAudioEngine:
                         resolved.file_extension = act_ext
                         if act_ext == "flac":
                             resolved.quality_badge = "MeloBot FLAC"
-                        elif melo_src and getattr(melo_src, "quality_tier", None):
-                            resolved.quality_badge = melo_src.quality_tier
-                        else:
+                        elif act_ext == "mp3":
                             dur = track.duration_sec
                             sz = os.path.getsize(actual_file)
                             if dur > 0:
                                 bitrate = (sz * 8) / (dur * 1000)
                                 resolved.quality_badge = "MeloBot 320k" if bitrate >= 220 else "MeloBot 128k"
+                            elif melo_src and getattr(melo_src, "quality_tier", None):
+                                resolved.quality_badge = melo_src.quality_tier
                             else:
                                 resolved.quality_badge = "MeloBot 320k" if sz > 6 * 1024 * 1024 else "MeloBot 128k"
+                        elif melo_src and getattr(melo_src, "quality_tier", None):
+                            resolved.quality_badge = melo_src.quality_tier
+                        else:
+                            resolved.quality_badge = f"MeloBot {act_ext.upper()}"
                     else:
                         logger.warning(f"MeloBot download produced an invalid audio file ({reason}) for '{track.title}'.")
                         if os.path.exists(actual_file):
@@ -434,6 +438,31 @@ class CascadingAudioEngine:
             if cancel_check and cancel_check():
                 return None
             raise AudioSourceNotFoundError(f"Audio download failed to produce a valid file for '{track.title}'.")
+
+        # Remux .webm container to .opus immediately via FFmpeg if necessary
+        if final_file_path and final_file_path.lower().endswith(".webm") and os.path.isfile(final_file_path):
+            from core.utils import ensure_ffmpeg
+            import subprocess
+            ffmpeg_bin = ensure_ffmpeg()
+            if ffmpeg_bin:
+                opus_cand = os.path.splitext(final_file_path)[0] + ".opus"
+                cmd = [ffmpeg_bin, "-y", "-i", final_file_path, "-vn", "-c:a", "copy", opus_cand]
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+                try:
+                    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+                    if proc.returncode == 0 and os.path.isfile(opus_cand) and os.path.getsize(opus_cand) > 1000:
+                        try:
+                            os.remove(final_file_path)
+                        except Exception:
+                            pass
+                        final_file_path = opus_cand
+                        resolved.file_extension = "opus"
+                        if resolved.source_type == "YouTube":
+                            resolved.quality_badge = "YouTube Opus"
+                        else:
+                            resolved.quality_badge = "YTM Opus"
+                except Exception as e_remux:
+                    logger.warning(f"Failed to remux WebM to Opus: {e_remux}")
 
         # Strict integrity check on downloaded audio
         is_valid, reason = is_valid_audio_file(final_file_path)
@@ -522,6 +551,13 @@ class CascadingAudioEngine:
                 )
         except Exception as e:
             logger.error(f"Error tagging audio file: {e}")
+
+        # Check if file extension changed during tagging (e.g. remuxed to .opus)
+        if final_file_path and not os.path.isfile(final_file_path):
+            cand_opus = os.path.splitext(final_file_path)[0] + ".opus"
+            if os.path.isfile(cand_opus):
+                final_file_path = cand_opus
+                resolved.file_extension = "opus"
 
         # Post-tagging Verification & Auto-Repair Safety Net
         try:

@@ -663,7 +663,24 @@ d:\Spotify-Downloader\
   2. Wired `MeloBotEngine` into `run_headless_cli` in `main.py`.
   3. Expanded `QualityTier` and `DownloadStatus` literals in `core/types.py`.
   4. Preserved specific error details by raising `MusilonDownloadError` in `core/resolver.py`.
-  5. Moved imports to module top, precompiled `TRACK_PREFIX_PATTERN`, and sanitized bare `except:` handlers. All 68 tests passing cleanly.
+### 51. Deep Inspection Fixes: WebM Remux Sync, Genre Lock, Partial File Cleanup, and Badge Colors
+- **Bugs Diagnosed:**
+  1. **WebM Remux File Desynchronization (`core/resolver.py` & `core/tagger.py`):**
+     When YouTube produced `.webm` audio, `AudioTagger.tag_file()` remuxed the container to `.opus` on disk and deleted the `.webm` file. Because `final_file_path` in `CascadingAudioEngine.download_and_tag()` was a string, it was not updated, causing post-tagging verification to fail, returning a non-existent path, and aborting database indexing.
+  2. **Genre Cache Thread Race Condition (`core/genre.py`):**
+     `GenreResolver` lacked thread synchronization. During concurrent downloads across 5 worker threads, simultaneous writes to `genre_cache.json.tmp` failed on Windows with `PermissionError: [WinError 32]`.
+  3. **Partial `.part` File Leak on Network Error (`core/melobot.py`):**
+     `_async_download_track` only caught `asyncio.CancelledError` for `.part` cleanup, leaking incomplete files on network disconnects or Telethon errors.
+  4. **`MeloBot FLAC` Quality Badge Color Fallthrough (`gui/queue_delegate.py`):**
+     `_get_badge_colors` only matched `"16"` or `"24"` for FLAC colors, causing `"MeloBot FLAC"` to fall through to orange/yellow YTM styling instead of emerald FLAC lossless.
+  5. **MeloBot MP3 True Bitrate Guard (`core/resolver.py`):**
+     Added physical on-disk bitrate computation (`(size * 8) / (duration * 1000)`) before assigning `"MeloBot 320k"` badge to downloaded MP3s.
+- **Fix Implemented:**
+  1. Implemented immediate WebM to Opus container remuxing via FFmpeg in `CascadingAudioEngine` right after download, and synchronized `final_file_path` across post-tagging checks.
+  2. Added `threading.RLock()` to `GenreResolver` to serialize cache file writes and in-memory updates.
+  3. Added catch-all `temp_dest` `.part` cleanup on `except Exception:` in `MeloBotEngine._async_download_track()`.
+  4. Updated `_get_badge_colors` in `TrackCardDelegate` to recognize `"flac"` and styled `MeloBot FLAC` with emerald lossless badges; guarded thumbnail emitter with `safe_emit`.
+  5. Initialized `output_file` defensively in `core/transcoder.py`. All 68 tests passing cleanly.
 
 
 ## 5. Development Cheat Sheet

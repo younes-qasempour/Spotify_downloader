@@ -52,6 +52,7 @@ def transcode_audio(
     if target in ("original", "", "native"):
         return input_file
 
+    output_file: str = ""
     if not os.path.isfile(input_file):
         raise TranscodeError(f"Source audio file not found for transcoding: {input_file}")
 

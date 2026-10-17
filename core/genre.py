@@ -378,6 +378,7 @@ class GenreResolver:
         self._track_cache: Dict[str, List[str]] = {}
         self._failed_queries: Set[str] = set()
         self._dirty = False
+        self._lock = threading.RLock()
         self._cache_file = os.path.join(str(get_cache_dir()), "genre_cache.json")
         self._load_cache()
 
@@ -394,28 +395,29 @@ class GenreResolver:
 
     def _save_cache(self, force: bool = False):
         """Atomically saves genre cache to disk using temporary file replacement."""
-        if not self._dirty and not force:
-            return
-        tmp_file = f"{self._cache_file}.tmp"
-        try:
-            os.makedirs(os.path.dirname(os.path.abspath(self._cache_file)), exist_ok=True)
-            with open(tmp_file, "w", encoding="utf-8") as f:
-                json.dump({
-                    "artists": self._artist_cache,
-                    "tracks": self._track_cache
-                }, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_file, self._cache_file)
-            self._dirty = False
-            logger.debug("Successfully saved genre cache to disk.")
-        except Exception as e:
-            logger.debug(f"Could not save genre cache: {e}")
-            if os.path.exists(tmp_file):
-                try:
-                    os.remove(tmp_file)
-                except Exception:
-                    pass
+        with self._lock:
+            if not self._dirty and not force:
+                return
+            tmp_file = f"{self._cache_file}.tmp"
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(self._cache_file)), exist_ok=True)
+                with open(tmp_file, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "artists": self._artist_cache,
+                        "tracks": self._track_cache
+                    }, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_file, self._cache_file)
+                self._dirty = False
+                logger.debug("Successfully saved genre cache to disk.")
+            except Exception as e:
+                logger.debug(f"Could not save genre cache: {e}")
+                if os.path.exists(tmp_file):
+                    try:
+                        os.remove(tmp_file)
+                    except Exception:
+                        pass
 
     def save_cache(self):
         """Public method to flush cached genres to disk."""
@@ -492,23 +494,24 @@ class GenreResolver:
 
         # Cache results and persist to disk
         new_cached = False
-        if track_key and track_key not in self._track_cache:
-            self._track_cache[track_key] = final_list
-            new_cached = True
-
-        if artist_key:
-            if artist_key not in self._artist_cache:
-                self._artist_cache[artist_key] = final_list
+        with self._lock:
+            if track_key and track_key not in self._track_cache:
+                self._track_cache[track_key] = final_list
                 new_cached = True
-            elif final_list:
-                merged = sorted(list(set(self._artist_cache[artist_key] + final_list)))
-                if merged != self._artist_cache[artist_key]:
-                    self._artist_cache[artist_key] = merged
-                    new_cached = True
 
-        if new_cached:
-            self._dirty = True
-            self._save_cache()
+            if artist_key:
+                if artist_key not in self._artist_cache:
+                    self._artist_cache[artist_key] = final_list
+                    new_cached = True
+                elif final_list:
+                    merged = sorted(list(set(self._artist_cache[artist_key] + final_list)))
+                    if merged != self._artist_cache[artist_key]:
+                        self._artist_cache[artist_key] = merged
+                        new_cached = True
+
+            if new_cached:
+                self._dirty = True
+                self._save_cache()
 
         return final_list
 
