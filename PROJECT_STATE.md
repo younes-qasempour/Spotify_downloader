@@ -696,6 +696,23 @@ d:\Spotify-Downloader\
   4. Updated `_get_badge_colors` in `TrackCardDelegate` to recognize `"flac"` and styled `MeloBot FLAC` with emerald lossless badges; guarded thumbnail emitter with `safe_emit`.
   5. Initialized `output_file` defensively in `core/transcoder.py`. All 68 tests passing cleanly.
 
+### 8. MeloBot FloodWait, Zombie Coroutine Leak & Download Hang Fixes (v1.5.1)
+- **Symptoms:**
+  1. Telegram chat with `@melobot` received duplicate candidate clicks (`Ron Adelaar & Tom Merrall, Sorrow` twice) and duplicate quality clicks (`📥 کیفیت عالی` twice).
+  2. The bot delivered the song audio in Telegram, but the app timed out and fell back to YouTube Music (`YTM Opus`).
+  3. Subsequent songs (e.g. `Prayer` by Disturbed) resolved in MeloBot, but download hung for 180 seconds with `[WinError 5] Access is denied` in background senders, then fell back to YouTube Music.
+- **Root Causes:**
+  1. `MeloBotEngine._run_async()` did not cancel `future` on `TimeoutError` or exceptions. When Vector 1 timed out after 30s, it remained alive as a zombie coroutine in the background event loop, clicking buttons concurrently with Vector 2.
+  2. `_async_query_melobot()` polled `client.get_messages(min_id=last_id, limit=8)` every 0.2s, hammering Telegram with 5 `GetHistoryRequest` calls/sec and triggering a 17-second `FloodWaitError`.
+  3. `ParallelTransferrer` tried to create 4 raw MTProto TCP socket senders, which on Windows failed with `PermissionError: [WinError 5] Access is denied`, hanging until the 180s timeout expired.
+- **Fixes:**
+  1. `_run_async()` now calls `future.cancel()` in `except (Exception, asyncio.CancelledError):`, immediately terminating timed-out coroutines.
+  2. `_async_query_melobot()` now uses Telethon MTProto push updates via `events.NewMessage(chats=bot_entity)` and `events.MessageEdited(chats=bot_entity)` with an `asyncio.Queue` and gentle fallback polling (1.5s interval), eliminating `FloodWaitError` completely.
+  3. Added `clicked_msg_ids = set()` deduplication to guarantee 0 duplicate button clicks.
+  4. Increased resolution timeout to 50s and audio delivery wait to 35s to allow MeloBot transcoding time.
+  5. Replaced `ParallelTransferrer` with native, stable `client.download_media()` with `cryptg` C acceleration, smooth progress callbacks, and increased timeout to 300s, preventing Windows raw socket permission errors and download hangs.
+
+
 
 ## 5. Development Cheat Sheet
 

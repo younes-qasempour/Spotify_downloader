@@ -11,7 +11,7 @@ from typing import Optional, List, Dict, Any, Callable, Tuple, AsyncGenerator
 from pathlib import Path
 from difflib import SequenceMatcher
 
-from telethon import TelegramClient, utils
+from telethon import TelegramClient, utils, events
 from telethon.network import MTProtoSender
 from telethon.tl.alltlobjects import LAYER
 from telethon.tl.functions import InvokeWithLayerRequest
@@ -248,7 +248,11 @@ class MeloBotEngine:
     def _run_async(self, coro, timeout: Optional[float] = None) -> Any:
         """Executes an async coroutine inside the dedicated background thread safely."""
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=timeout)
+        try:
+            return future.result(timeout=timeout)
+        except (Exception, asyncio.CancelledError):
+            future.cancel()
+            raise
 
     @property
     def enabled(self) -> bool:
@@ -546,7 +550,7 @@ class MeloBotEngine:
                 try:
                     src = self._run_async(
                         self._async_query_melobot(track=track, query=query_str, cancel_check=cancel_check),
-                        timeout=30.0
+                        timeout=50.0
                     )
                     if src:
                         logger.info(f"Resolved '{track.title}' via MeloBot ({src.quality_tier}) using '{vector_name}'")
@@ -570,40 +574,69 @@ class MeloBotEngine:
         Sends a query message to @melobot, inspects the response for audio files
         or interactive keyboard buttons, handles candidate selection & quality picking,
         and returns a MeloBotSource.
+        Uses Telethon event push updates with gentle fallback polling to completely prevent
+        flood waits (FloodWaitError) and guarantees no duplicate button clicks.
         """
         client = self._ensure_client()
         bot_entity = await client.get_input_entity(self.bot_username)
 
-        # Get current latest message ID before sending so we only process new responses
-        existing_msgs = await client.get_messages(bot_entity, limit=1)
-        last_id = existing_msgs[0].id if existing_msgs else 0
+        # Queue for incoming bot push events
+        event_queue: asyncio.Queue[Message] = asyncio.Queue()
 
-        # Send query
-        sent_msg = await client.send_message(bot_entity, query)
-        sent_time = time.time()
-        last_id = sent_msg.id
+        async def _bot_msg_handler(event):
+            if not getattr(event, "out", False):
+                await event_queue.put(event.message)
 
-        # Wait for bot response across interaction steps (up to 12 seconds per stage)
+        client.add_event_handler(_bot_msg_handler, events.NewMessage(chats=bot_entity))
+        client.add_event_handler(_bot_msg_handler, events.MessageEdited(chats=bot_entity))
+
+        # Track message IDs with clicked buttons to guarantee 0 duplicate clicks
+        clicked_msg_ids = set()
         audio_msg: Optional[Message] = None
-        max_wait = 12.0
-        poll_interval = 0.2
 
-        while time.time() - sent_time < max_wait:
-            if cancel_check and cancel_check():
-                return None
+        try:
+            # Send query message to the bot
+            sent_msg = await client.send_message(bot_entity, query)
+            last_id = sent_msg.id
 
-            await asyncio.sleep(poll_interval)
-            new_msgs = await client.get_messages(bot_entity, min_id=last_id, limit=8)
-            if not new_msgs:
-                continue
+            vector_start = time.time()
+            stage_start = time.time()
+            stage_timeout = 15.0  # 15s to get initial candidate / quality menu
+            max_vector_time = 50.0  # Total time allowed for this vector
 
-            for msg in reversed(new_msgs):
-                if getattr(msg, "out", False):
+            while time.time() - vector_start < max_vector_time:
+                if cancel_check and cancel_check():
+                    return None
+
+                remaining_stage = stage_timeout - (time.time() - stage_start)
+                if remaining_stage <= 0:
+                    logger.info(f"MeloBot stage timeout ({stage_timeout:.1f}s) reached for vector query '{query}'.")
+                    break
+
+                # Await incoming push update or do a safe rate-limited poll every 1.5s
+                wait_slice = min(1.5, max(0.1, remaining_stage))
+                incoming_msg: Optional[Message] = None
+                try:
+                    incoming_msg = await asyncio.wait_for(event_queue.get(), timeout=wait_slice)
+                except asyncio.TimeoutError:
+                    # Gentle fallback poll: only 1 request per 1.5s, strictly safe from flood wait
+                    try:
+                        poll_msgs = await client.get_messages(bot_entity, min_id=last_id, limit=4)
+                        for pm in reversed(poll_msgs):
+                            if not getattr(pm, "out", False) and pm.id not in clicked_msg_ids:
+                                incoming_msg = pm
+                                break
+                    except Exception as e_poll:
+                        logger.debug(f"MeloBot fallback poll error: {e_poll}")
+
+                if not incoming_msg or incoming_msg.id <= sent_msg.id:
                     continue
+
+                msg = incoming_msg
+                last_id = max(last_id, msg.id)
 
                 # 1. Direct audio file received
                 if self._is_audio_message(msg):
-                    # Validate audio duration if available to prevent mismatched downloads
                     target_dur = track.duration_sec
                     doc = getattr(msg.media, "document", None) if getattr(msg, "media", None) else None
                     dur = 0
@@ -631,15 +664,14 @@ class MeloBotEngine:
                     break
 
                 # 2. Interactive keyboard received (Candidate Picker or Quality Selector)
-                if getattr(msg, "buttons", None):
+                if getattr(msg, "buttons", None) and msg.id not in clicked_msg_ids:
                     clicked = await self._handle_bot_keyboard(msg, track, bot_entity)
                     if clicked:
-                        # Reset wait timer for the next bot action/file delivery
-                        sent_time = time.time()
-                        last_id = msg.id
-                        break
+                        clicked_msg_ids.add(msg.id)
+                        stage_start = time.time()
+                        stage_timeout = 35.0  # Allow up to 35 seconds for audio transcoding & upload
+                        continue
                     else:
-                        # The bot replied with a candidate or quality menu, but options did not satisfy criteria
                         logger.info(f"MeloBot keyboard options for '{track.title}' did not satisfy candidate/quality criteria. Ending vector early.")
                         return None
 
@@ -650,8 +682,9 @@ class MeloBotEngine:
                         logger.info(f"MeloBot reported no results for '{query}'. Ending vector early.")
                         return None
 
-            if audio_msg:
-                break
+        finally:
+            client.remove_event_handler(_bot_msg_handler, events.NewMessage(chats=bot_entity))
+            client.remove_event_handler(_bot_msg_handler, events.MessageEdited(chats=bot_entity))
 
         if not audio_msg:
             return None
@@ -1061,7 +1094,7 @@ class MeloBotEngine:
                             cancel_check=cancel_check,
                             pause_wait=pause_wait
                         ),
-                        timeout=180.0
+                        timeout=300.0
                     )
                 )
             except Exception as e:
@@ -1102,7 +1135,7 @@ class MeloBotEngine:
 
             now = time.time()
             elapsed = now - last_time[0]
-            if elapsed >= 0.4:
+            if elapsed >= 0.3:
                 speed_bps = (received_bytes - last_bytes[0]) / elapsed if elapsed > 0 else 0
                 speed_str = f"{format_bytes(speed_bps)}/s" if speed_bps > 0 else "0 KB/s"
                 remaining = max(0, total - received_bytes)
@@ -1116,91 +1149,26 @@ class MeloBotEngine:
                 if progress_callback:
                     progress_callback(percent, speed_str, eta_str)
 
-        download_success = False
-        doc = getattr(msg.media, "document", None) if getattr(msg, "media", None) else None
-
-        # Multi-connection FastTelethon parallel download (512KB parts across 4 parallel MTProto connections)
-        if doc and total_size > 512 * 1024:
-            transferrer: Optional[ParallelTransferrer] = None
-            try:
-                dc_id, loc = utils.get_input_location(doc)
-                part_size = 512 * 1024
-                connections = min(4, max(1, math.ceil(total_size / part_size)))
-
-                transferrer = ParallelTransferrer(client, dc_id=dc_id)
-                await transferrer.init_download(loc, total_size, connection_count=connections, part_size=part_size)
-
-                downloaded_bytes = 0
-                with open(temp_dest, "wb") as f_out:
-                    async for chunk in transferrer.download(total_size, part_size=part_size):
-                        if cancel_check and cancel_check():
-                            raise asyncio.CancelledError("Download cancelled by user.")
-                        if pause_wait:
-                            pause_wait()
-
-                        f_out.write(chunk)
-                        downloaded_bytes += len(chunk)
-
-                        now = time.time()
-                        elapsed = now - last_time[0]
-                        if elapsed >= 0.25:
-                            speed_bps = (downloaded_bytes - last_bytes[0]) / elapsed if elapsed > 0 else 0
-                            speed_str = f"{format_bytes(speed_bps)}/s" if speed_bps > 0 else "0 KB/s"
-                            remaining = max(0, total_size - downloaded_bytes)
-                            eta_sec = int(remaining / speed_bps) if speed_bps > 0 else 0
-                            eta_str = f"{eta_sec // 60:02d}:{eta_sec % 60:02d}"
-                            percent = min(99.0, (downloaded_bytes / max(1, total_size)) * 100.0)
-
-                            last_time[0] = now
-                            last_bytes[0] = downloaded_bytes
-                            if progress_callback:
-                                progress_callback(percent, speed_str, eta_str)
-
-                download_success = os.path.isfile(temp_dest) and os.path.getsize(temp_dest) >= total_size
-            except asyncio.CancelledError:
-                if os.path.exists(temp_dest):
-                    try:
-                        os.remove(temp_dest)
-                    except Exception:
-                        pass
-                return False
-            except Exception as e_fast:
-                logger.warning(f"FastTelethon parallel download failed ({e_fast}); falling back to standard download.")
-                if os.path.exists(temp_dest):
-                    try:
-                        os.remove(temp_dest)
-                    except Exception:
-                        pass
-                download_success = False
-            finally:
-                if transferrer:
-                    try:
-                        await transferrer.cleanup()
-                    except Exception:
-                        pass
-
-        # Standard Telethon download fallback
-        if not download_success:
-            try:
-                downloaded_file = await client.download_media(
-                    msg,
-                    file=temp_dest,
-                    progress_callback=telethon_progress
-                )
-            except asyncio.CancelledError:
-                if os.path.exists(temp_dest):
-                    try:
-                        os.remove(temp_dest)
-                    except Exception:
-                        pass
-                return False
-            except Exception:
-                if os.path.exists(temp_dest):
-                    try:
-                        os.remove(temp_dest)
-                    except Exception:
-                        pass
-                raise
+        try:
+            downloaded_file = await client.download_media(
+                msg,
+                file=temp_dest,
+                progress_callback=telethon_progress
+            )
+        except asyncio.CancelledError:
+            if os.path.exists(temp_dest):
+                try:
+                    os.remove(temp_dest)
+                except Exception:
+                    pass
+            return False
+        except Exception as e_dl:
+            if os.path.exists(temp_dest):
+                try:
+                    os.remove(temp_dest)
+                except Exception:
+                    pass
+            raise MeloBotDownloadError(f"Telethon download error: {e_dl}")
 
         if not os.path.isfile(temp_dest) or os.path.getsize(temp_dest) < 1024:
             if os.path.exists(temp_dest):

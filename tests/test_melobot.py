@@ -437,6 +437,26 @@ class TestMeloBotIntegration(unittest.TestCase):
         transferrer = ParallelTransferrer(mock_client, dc_id=2)
         self.assertEqual(transferrer.dc_id, 2)
 
+    def test_run_async_cancels_future_on_timeout(self):
+        import asyncio
+        engine = MeloBotEngine(session_name="test_dummy_unauth_session")
+        cancelled_flag = [False]
+
+        async def slow_coro():
+            try:
+                await asyncio.sleep(5.0)
+            except asyncio.CancelledError:
+                cancelled_flag[0] = True
+                raise
+
+        with self.assertRaises((TimeoutError, Exception)):
+            engine._run_async(slow_coro(), timeout=0.05)
+
+        # Allow loop thread a moment to process the CancelledError
+        import time
+        time.sleep(0.15)
+        self.assertTrue(cancelled_flag[0])
+
 
 if __name__ == "__main__":
     unittest.main()
