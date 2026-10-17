@@ -91,8 +91,15 @@ def main():
 
     installer_name = os.path.basename(installer_path)
     if installer_name in existing_assets:
-        print(f"Asset '{installer_name}' is already attached to release.")
-        return
+        old_asset_id = existing_assets[installer_name]
+        print(f"Deleting previous asset '{installer_name}' (ID={old_asset_id}) to re-upload freshly compiled build...")
+        del_req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}/releases/assets/{old_asset_id}",
+            headers=headers,
+            method='DELETE'
+        )
+        urllib.request.urlopen(del_req)
+        print("Previous asset deleted.")
 
     file_size = os.path.getsize(installer_path)
     print(f"Uploading '{installer_name}' ({file_size:,} bytes) to GitHub Release...")
