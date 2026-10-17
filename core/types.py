@@ -6,6 +6,9 @@ QualityTier = Literal[
     "Musilon FLAC 16",
     "Musilon 320k",
     "Musilon Standard",
+    "MeloBot FLAC",
+    "MeloBot 320k",
+    "MeloBot 128k",
     "YTM Opus",
     "YTM M4A",
     "YouTube Opus",
@@ -25,7 +28,9 @@ DownloadStatus = Literal[
     "Failed",
     "Cancelled",
     "Stopped",
-    "Musilon Limit Reached"
+    "Musilon Limit Reached",
+    "MeloBot Limit Reached",
+    "Rate Limit Reached"
 ]
 
 CollectionType = Literal["track", "album", "playlist", "artist"]

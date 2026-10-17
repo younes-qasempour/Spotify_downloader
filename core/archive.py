@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import threading
 import logging
@@ -13,6 +14,8 @@ from core.utils import extract_embedded_cover, is_valid_audio_file, sanitize_fil
 from core.paths import get_archive_db_path, get_cache_dir, get_covers_dir, get_default_download_dir
 
 logger = logging.getLogger("core.archive")
+
+TRACK_PREFIX_PATTERN = re.compile(r"^(\d{1,3})[\s.\-_]+")
 
 
 def normalize_path(path: str) -> str:
@@ -992,8 +995,7 @@ class ArchiveManager:
                 if is_album:
                     c_type = "album"
                     if track_num == 0:
-                        import re
-                        m_num = re.match(r"^(\d{1,3})[\s.\-_]+", fname)
+                        m_num = TRACK_PREFIX_PATTERN.match(fname)
                         if m_num:
                             try:
                                 track_num = int(m_num.group(1))

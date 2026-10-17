@@ -322,6 +322,7 @@ class CascadingAudioEngine:
                     except Exception:
                         pass
                 logger.warning(f"Musilon stream download failed for '{track.title}': {e}")
+                raise MusilonDownloadError(f"Musilon stream download failed for '{track.title}': {e}")
         if resolved.source_type == "MeloBot":
             if status_callback:
                 status_callback("Downloading (MeloBot VIP)")

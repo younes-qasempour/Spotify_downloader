@@ -4,6 +4,8 @@ import re
 import shutil
 import subprocess
 import logging
+import gzip
+import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple, Callable
 
@@ -81,9 +83,6 @@ def sanitize_path_template(path_str: str, max_segment_length: int = 80) -> str:
 
     return os.path.normpath(os.path.join(*cleaned_segments))
 
-
-import gzip
-import urllib.request
 
 FFMPEG_DOWNLOAD_URL = "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/ffmpeg-win32-x64.gz"
 

@@ -24,6 +24,7 @@ from gui.styles import (
     BG_CARD, BORDER_SUBTLE, SPOTIFY_EMERALD, TEXT_PRIMARY,
     TEXT_SECONDARY, TEXT_MUTED, STATUS_COLORS
 )
+from gui.bridge import safe_emit, safe_invoke
 
 
 class TelegramLoginDialog(MessageBoxBase):
@@ -125,7 +126,7 @@ class TelegramLoginDialog(MessageBoxBase):
 
         def worker():
             res = self.engine.send_code(phone)
-            self.sig_send_code_done.emit(res)
+            safe_emit(self.sig_send_code_done, res)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -164,7 +165,7 @@ class TelegramLoginDialog(MessageBoxBase):
                 phone_code_hash=self._phone_code_hash,
                 phone=phone
             )
-            self.sig_sign_in_done.emit(res)
+            safe_emit(self.sig_sign_in_done, res)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1289,7 +1290,7 @@ class SettingsView(QScrollArea):
                 name = user_info.get("first_name") or user_info.get("username") or "Connected"
                 phone = user_info.get("phone") or ""
                 disp = f"Connected: {name} (+{phone})" if phone else f"Connected: {name}"
-            self.sig_tg_status_result.emit(is_auth, disp)
+            safe_emit(self.sig_tg_status_result, is_auth, disp)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1304,7 +1305,7 @@ class SettingsView(QScrollArea):
     def _logout_telegram(self):
         def worker():
             self.melobot_engine.log_out()
-            self.sig_tg_logout_result.emit()
+            safe_emit(self.sig_tg_logout_result)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1435,7 +1436,7 @@ class SettingsView(QScrollArea):
 
         def worker():
             success, msg = self.musilon_engine.login_with_credentials(user, pwd)
-            self.sig_login_result.emit(success, msg)
+            safe_emit(self.sig_login_result, success, msg)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1465,7 +1466,7 @@ class SettingsView(QScrollArea):
 
         def worker():
             connected, is_auth, is_vip, msg = self.musilon_engine.test_connection()
-            self.sig_test_result.emit(connected, is_auth, is_vip, msg)
+            safe_emit(self.sig_test_result, connected, is_auth, is_vip, msg)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1567,7 +1568,7 @@ class SettingsView(QScrollArea):
                         try:
                             name = client.get_current_user_name()
                             if name:
-                                QTimer.singleShot(0, self._update_spotify_badge)
+                                QTimer.singleShot(0, lambda: safe_invoke(self._update_spotify_badge))
                         finally:
                             self._fetching_sp_user = False
                     threading.Thread(target=_fetch, daemon=True, name="SettingsSpotifyNameFetcher").start()
@@ -1603,11 +1604,11 @@ class SettingsView(QScrollArea):
                 if ok:
                     user_name = client.get_current_user_name()
                     msg = f"Logged in as @{user_name}! Full playlist access unlocked." if user_name else "Spotify account successfully authorized!"
-                    self.sig_spotify_auth_result.emit(True, msg)
+                    safe_emit(self.sig_spotify_auth_result, True, msg)
                 else:
-                    self.sig_spotify_auth_result.emit(False, "Authorization was cancelled or did not return tokens.")
+                    safe_emit(self.sig_spotify_auth_result, False, "Authorization was cancelled or did not return tokens.")
             except Exception as e:
-                self.sig_spotify_auth_result.emit(False, str(e))
+                safe_emit(self.sig_spotify_auth_result, False, str(e))
 
         threading.Thread(target=worker, daemon=True, name="SettingsSpotifyAuthWorker").start()
 
@@ -1633,9 +1634,9 @@ class SettingsView(QScrollArea):
                 client = SpotifyClient(client_id=cid, client_secret=sec)
                 res = client.resolve("https://open.spotify.com/track/3AJwUDP919kvQ9QcozQPxg")
                 auth_status = "User Authorized (Full Library Access)" if client.has_user_auth() else "Keys Valid (Click 'Authorize' to unlock >100 songs)"
-                self.sig_spotify_result.emit(True, f"API Verified: '{res[0].title}' — {auth_status}")
+                safe_emit(self.sig_spotify_result, True, f"API Verified: '{res[0].title}' — {auth_status}")
             except Exception as e:
-                self.sig_spotify_result.emit(False, str(e))
+                safe_emit(self.sig_spotify_result, False, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1701,14 +1702,14 @@ class SettingsView(QScrollArea):
         self.ffmpeg_status_label.setText("Connecting to repository...")
 
         def progress_cb(pct: float, msg: str):
-            self.sig_ffmpeg_progress.emit(pct, msg)
+            safe_emit(self.sig_ffmpeg_progress, pct, msg)
 
         def worker():
             res = download_ffmpeg(progress_callback=progress_cb)
             if res:
-                self.sig_ffmpeg_finished.emit(True, f"FFmpeg installed at {res}")
+                safe_emit(self.sig_ffmpeg_finished, True, f"FFmpeg installed at {res}")
             else:
-                self.sig_ffmpeg_finished.emit(False, "FFmpeg download or validation failed.")
+                safe_emit(self.sig_ffmpeg_finished, False, "FFmpeg download or validation failed.")
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1754,9 +1755,9 @@ class SettingsView(QScrollArea):
                     f"relocated {stats['relocated_covers']} covers to cache, "
                     f"reorganized {stats['reorganized_lyrics']} lyrics files."
                 )
-                QTimer.singleShot(0, lambda: self._on_clean_finished(True, msg))
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_clean_finished, True, msg))
             except Exception as e:
-                QTimer.singleShot(0, lambda: self._on_clean_finished(False, str(e)))
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_clean_finished, False, str(e)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1775,7 +1776,7 @@ class SettingsView(QScrollArea):
         self.maint_status_label.setText("Starting library scan across downloads...")
 
         def progress_cb(cur: int, total: int, msg: str):
-            QTimer.singleShot(0, lambda: self.maint_status_label.setText(f"[{cur}/{total}] {msg}"))
+            QTimer.singleShot(0, lambda: safe_invoke(self.maint_status_label.setText, f"[{cur}/{total}] {msg}"))
 
         def worker():
             try:
@@ -1786,9 +1787,9 @@ class SettingsView(QScrollArea):
                     f"Healed {stats['healed_covers']} covers, "
                     f"embedded {stats['healed_lyrics']} lyrics."
                 )
-                QTimer.singleShot(0, lambda: self._on_repair_finished(True, msg))
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_repair_finished, True, msg))
             except Exception as e:
-                QTimer.singleShot(0, lambda: self._on_repair_finished(False, str(e)))
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_repair_finished, False, str(e)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1808,7 +1809,7 @@ class SettingsView(QScrollArea):
         self.maint_status_label.setText("Starting multi-source genre retagger across library...")
 
         def progress_cb(cur: int, total: int, msg: str):
-            QTimer.singleShot(0, lambda: self.maint_status_label.setText(f"[{cur}/{total}] {msg}"))
+            QTimer.singleShot(0, lambda: safe_invoke(self.maint_status_label.setText, f"[{cur}/{total}] {msg}"))
 
         def worker():
             try:
@@ -1819,9 +1820,9 @@ class SettingsView(QScrollArea):
                     f"Retagged {stats['retagged']} files, "
                     f"{stats['already_tagged']} already tagged, {stats['errors']} error(s)."
                 )
-                QTimer.singleShot(0, lambda: self._on_retag_finished(True, msg))
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_retag_finished, True, msg))
             except Exception as e:
-                QTimer.singleShot(0, lambda: self._on_retag_finished(False, str(e)))
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_retag_finished, False, str(e)))
 
         threading.Thread(target=worker, daemon=True, name="GenreRetaggerWorker").start()
 
@@ -1833,7 +1834,7 @@ class SettingsView(QScrollArea):
             InfoBar.success("Genres Synchronized", msg, duration=5000, parent=self)
             win = self.window()
             if hasattr(win, "sig_reload_library"):
-                win.sig_reload_library.emit()
+                safe_emit(win.sig_reload_library)
         else:
             InfoBar.error("Retag Error", f"Failed to retag genres: {msg}", duration=5000, parent=self)
 
@@ -1844,7 +1845,7 @@ class SettingsView(QScrollArea):
         self.maint_status_label.setText("Analyzing audio loudness & peak via EBU R128...")
 
         def progress_cb(cur: int, total: int, msg: str):
-            QTimer.singleShot(0, lambda: self.maint_status_label.setText(f"[{cur}/{total}] {msg}"))
+            QTimer.singleShot(0, lambda: safe_invoke(self.maint_status_label.setText, f"[{cur}/{total}] {msg}"))
 
         def worker():
             try:
@@ -1854,9 +1855,9 @@ class SettingsView(QScrollArea):
                     f"ReplayGain 2.0 analysis complete: {stats['scanned']} files scanned. "
                     f"Calculated and embedded loudness tags on {stats['calculated']} files ({stats['errors']} error(s))."
                 )
-                QTimer.singleShot(0, lambda: self._on_replaygain_finished(True, msg))
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_replaygain_finished, True, msg))
             except Exception as e:
-                QTimer.singleShot(0, lambda: self._on_replaygain_finished(False, str(e)))
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_replaygain_finished, False, str(e)))
 
         threading.Thread(target=worker, daemon=True, name="ReplayGainWorker").start()
 

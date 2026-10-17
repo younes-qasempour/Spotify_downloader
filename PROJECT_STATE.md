@@ -646,6 +646,25 @@ d:\Spotify-Downloader\
   2. **Persian & Arabic Digit Normalization in Quality Selector:** `_get_quality_tier` now normalizes Persian digits (`۳۲۰` -> `320`) and supports ASCII `320`/`128` and extended Persian phrases (`کیفیت 320`, `کیفیت 128`, `320k`, `128k`).
   3. **Genuine Quality Badge Attribution:** `CascadingAudioEngine` now preserves the authentic `melo_src.quality_tier` (`MeloBot FLAC`, `MeloBot 320k`, or `MeloBot 128k`) and dynamically checks the downloaded file bitrate/size rather than hardcoding `MeloBot 320k`.
 
+### 50. Project-Wide Audit & Hardening: Thread Safety, Headless CLI, Types & Anti-Patterns
+- **Bugs Diagnosed:**
+  1. **C++ Object Deletion in Worker Threads (`RuntimeError: wrapped C/C++ object has been deleted`):**
+     Background worker threads (e.g. library cleaners, auth fetchers, sync routines, signal bridges) occasionally emitted Qt signals or executed `QTimer.singleShot` after a parent widget was garbage collected or destroyed.
+  2. **Headless CLI Disconnect (`main.py:run_headless_cli`):**
+     `run_headless_cli` failed to initialize `MeloBotEngine`, preventing CLI downloads whenever `source_engine` was set to `melobot`.
+  3. **Quality & Status Type Literal Inconsistencies (`core/types.py`):**
+     Missing `"MeloBot FLAC"`, `"MeloBot 320k"`, `"MeloBot 128k"`, and `"MeloBot Limit Reached"` in `QualityTier` / `DownloadStatus`.
+  4. **Musilon Stream Exception Swallowing (`core/resolver.py`):**
+     Generic exceptions during Musilon downloads were caught and logged without raising, causing errors to collapse into generic `AudioSourceNotFoundError`.
+  5. **Antipatterns Cleaned:**
+     Mid-file `import gzip, urllib.request` in `core/utils.py`, inner-loop regex compilation in `core/archive.py`, and bare `except:` clauses in `tests/test_saved_playlists.py`.
+- **Fix Implemented:**
+  1. Added `safe_emit(signal, *args)` and `safe_invoke(fn, *args, **kwargs)` in `gui/bridge.py` and wrapped all async signal emissions across views (`settings_view.py`, `completed_view.py`, `playlists_view.py`, `queue_view.py`).
+  2. Wired `MeloBotEngine` into `run_headless_cli` in `main.py`.
+  3. Expanded `QualityTier` and `DownloadStatus` literals in `core/types.py`.
+  4. Preserved specific error details by raising `MusilonDownloadError` in `core/resolver.py`.
+  5. Moved imports to module top, precompiled `TRACK_PREFIX_PATTERN`, and sanitized bare `except:` handlers. All 68 tests passing cleanly.
+
 
 ## 5. Development Cheat Sheet
 

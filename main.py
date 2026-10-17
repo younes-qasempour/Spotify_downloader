@@ -62,6 +62,7 @@ def run_headless_cli(spotify_url: str, output_dir: str | None = None):
     from core.spotify_client import SpotifyClient
     from core.resolver import CascadingAudioEngine
     from core.musilon import MusilonEngine
+    from core.melobot import MeloBotEngine
     from core.ytdlp_engine import YtdlpEngine
     from core.lyrics import LyricsEngine
     from core.tagger import AudioTagger
@@ -86,12 +87,14 @@ def run_headless_cli(spotify_url: str, output_dir: str | None = None):
         password=config.get("musilon.password", ""),
         enabled=config.get("musilon.enabled", True)
     )
+    melobot_eng = MeloBotEngine()
     ytdlp_eng = YtdlpEngine(output_dir=dest_dir)
     lyrics_eng = LyricsEngine()
     tagger = AudioTagger()
 
     engine = CascadingAudioEngine(
         musilon_engine=musilon_eng,
+        melobot_engine=melobot_eng,
         ytdlp_engine=ytdlp_eng,
         lyrics_engine=lyrics_eng,
         tagger=tagger
@@ -100,7 +103,7 @@ def run_headless_cli(spotify_url: str, output_dir: str | None = None):
     for idx, t in enumerate(tracks, 1):
         print(f"\n--- [{idx}/{len(tracks)}] {t.title} - {t.artist_str} ({t.duration_sec:.1f}s) ---")
         print(f"Folder: {t.target_folder}/")
-        print("Resolving audio source (Tier 1-3 Musilon -> Tier 4 YTM)...")
+        print("Resolving audio source (MeloBot / Musilon / YouTube)...")
         resolved = engine.resolve_source(t)
         if not resolved:
             print("❌ No matching source found.")

@@ -15,8 +15,10 @@ def run_tests():
     print("Step 1: Starting test...", flush=True)
     db_path = os.path.join(os.path.dirname(__file__), "test_temp.db")
     if os.path.exists(db_path):
-        try: os.remove(db_path)
-        except: pass
+        try:
+            os.remove(db_path)
+        except OSError:
+            pass
 
     # Reset singleton if needed
     ArchiveManager._instance = None
@@ -181,8 +183,10 @@ def run_tests():
     assert len(archive.get_saved_playlist_tracks("test12345")) == 0
 
     if os.path.exists(db_path):
-        try: os.remove(db_path)
-        except: pass
+        try:
+            os.remove(db_path)
+        except OSError:
+            pass
 
     print("ALL ARCHIVE SAVED PLAYLIST TESTS PASSED SUCCESSFULLY!", flush=True)
 

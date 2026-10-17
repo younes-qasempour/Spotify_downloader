@@ -16,7 +16,7 @@ from qfluentwidgets import (
 
 from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
-from gui.bridge import EngineSignalBridge
+from gui.bridge import EngineSignalBridge, safe_invoke, safe_emit
 from gui.styles import TEXT_MUTED, BG_CARD, SPOTIFY_EMERALD
 from core.archive import ArchiveManager
 from core.spotify_client import TrackMetadata
@@ -1008,7 +1008,7 @@ class CompletedView(QWidget):
 
         def worker():
             indexed = self.archive.scan_and_index_directory(out_dir)
-            QTimer.singleShot(0, lambda: self._on_rescan_done(indexed))
+            QTimer.singleShot(0, lambda: safe_invoke(self._on_rescan_done, indexed))
 
         threading.Thread(target=worker, daemon=True, name="ManualRescanWorker").start()
 
@@ -1028,7 +1028,7 @@ class CompletedView(QWidget):
         if item and item.output_path and os.path.isfile(item.output_path):
             main_win = self.window()
             if hasattr(main_win, "play_audio_track"):
-                items = [self.model.get_item(i) for i in range(self.model.rowCount())]
+                items = getattr(self.model, "items", None) or [self.model.get_item(i) for i in range(self.model.rowCount())]
                 valid_items = [it for it in items if it and it.output_path and os.path.isfile(it.output_path)]
                 curr_idx = valid_items.index(item) if item in valid_items else -1
                 main_win.play_audio_track(item.output_path, item.track, item.quality_badge, playlist=valid_items, index=curr_idx)
@@ -1105,11 +1105,11 @@ class CompletedView(QWidget):
                 if rg:
                     ok = AudioTagger().tag_replaygain(fpath, rg[0], rg[1])
                     if ok:
-                        QTimer.singleShot(0, lambda: InfoBar.success("ReplayGain Applied", f"Tagged '{title}' ({rg[0]}, peak {rg[1]})", duration=4000, parent=self))
+                        QTimer.singleShot(0, lambda: safe_invoke(InfoBar.success, "ReplayGain Applied", f"Tagged '{title}' ({rg[0]}, peak {rg[1]})", duration=4000, parent=self))
                         return
-                QTimer.singleShot(0, lambda: InfoBar.warning("Analysis Missed", f"Could not calculate loudness for '{title}'.", duration=4000, parent=self))
+                QTimer.singleShot(0, lambda: safe_invoke(InfoBar.warning, "Analysis Missed", f"Could not calculate loudness for '{title}'.", duration=4000, parent=self))
             except Exception as e:
-                QTimer.singleShot(0, lambda: InfoBar.error("ReplayGain Error", str(e), duration=4000, parent=self))
+                QTimer.singleShot(0, lambda: safe_invoke(InfoBar.error, "ReplayGain Error", str(e), duration=4000, parent=self))
 
         threading.Thread(target=worker, daemon=True, name=f"RG_{item.track.id}").start()
 

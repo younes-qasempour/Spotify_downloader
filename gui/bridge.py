@@ -1,5 +1,22 @@
 from PyQt6.QtCore import QObject, pyqtSignal
 
+
+def safe_emit(signal, *args):
+    """Safely emits a PyQt signal, guarding against deleted underlying C++ QObjects."""
+    try:
+        signal.emit(*args)
+    except (RuntimeError, AttributeError):
+        pass
+
+
+def safe_invoke(fn, *args, **kwargs):
+    """Safely invokes a UI callback or method, suppressing RuntimeError if the widget is deleted."""
+    try:
+        fn(*args, **kwargs)
+    except (RuntimeError, AttributeError):
+        pass
+
+
 class EngineSignalBridge(QObject):
     """
     Thread-safe bridge connecting core multimedia engine callbacks to PyQt6 signals.
@@ -16,15 +33,15 @@ class EngineSignalBridge(QObject):
 
     def bind_queue_manager(self, qm):
         """Binds queue manager callback hooks to emit these Qt signals."""
-        qm.on_track_enqueued = lambda item: self.sig_track_enqueued.emit(item)
-        qm.on_tracks_enqueued = lambda items: self.sig_tracks_enqueued.emit(items)
-        qm.on_track_source_resolved = lambda tid, st, qb: self.sig_source_resolved.emit(tid, st, qb)
-        qm.on_track_progress = lambda tid, pct, spd, eta: self.sig_progress.emit(tid, pct, spd, eta)
-        qm.on_track_status_changed = lambda tid, st: self.sig_status_changed.emit(tid, st)
-        qm.on_track_completed = lambda tid, path: self.sig_completed.emit(tid, path)
-        qm.on_track_failed = lambda tid, err: self.sig_failed.emit(tid, err)
-        qm.on_musilon_limit_reached = lambda trk, itm, rsn, cb: self.sig_musilon_limit_reached.emit(trk, itm, rsn, cb)
+        qm.on_track_enqueued = lambda item: safe_emit(self.sig_track_enqueued, item)
+        qm.on_tracks_enqueued = lambda items: safe_emit(self.sig_tracks_enqueued, items)
+        qm.on_track_source_resolved = lambda tid, st, qb: safe_emit(self.sig_source_resolved, tid, st, qb)
+        qm.on_track_progress = lambda tid, pct, spd, eta: safe_emit(self.sig_progress, tid, pct, spd, eta)
+        qm.on_track_status_changed = lambda tid, st: safe_emit(self.sig_status_changed, tid, st)
+        qm.on_track_completed = lambda tid, path: safe_emit(self.sig_completed, tid, path)
+        qm.on_track_failed = lambda tid, err: safe_emit(self.sig_failed, tid, err)
+        qm.on_musilon_limit_reached = lambda trk, itm, rsn, cb: safe_emit(self.sig_musilon_limit_reached, trk, itm, rsn, cb)
 
     def bind_config(self, cfg):
         """Binds core configuration manager changes to Qt signals."""
-        cfg.add_listener(lambda key, val: self.sig_config_changed.emit(key, val))
+        cfg.add_listener(lambda key, val: safe_emit(self.sig_config_changed, key, val))

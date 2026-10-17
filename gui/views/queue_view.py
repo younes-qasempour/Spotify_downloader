@@ -20,7 +20,7 @@ from core.queue_manager import DownloadQueueManager, QueueItem
 from core.config import config
 from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
-from gui.bridge import EngineSignalBridge
+from gui.bridge import EngineSignalBridge, safe_emit, safe_invoke
 from gui.styles import BG_PRIMARY, BG_CARD, SPOTIFY_EMERALD, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED
 
 
@@ -577,11 +577,11 @@ class QueueView(QWidget):
                         errors.append(f"{target_url}: {e}")
 
             if all_resolved_tracks:
-                self.sig_resolved_tracks.emit(all_resolved_tracks)
+                safe_emit(self.sig_resolved_tracks, all_resolved_tracks)
             elif errors:
-                self.sig_resolve_error.emit("; ".join(errors))
+                safe_emit(self.sig_resolve_error, "; ".join(errors))
             else:
-                self.sig_resolved_tracks.emit([])
+                safe_emit(self.sig_resolved_tracks, [])
 
         threading.Thread(target=batch_resolve_worker, daemon=True).start()
 

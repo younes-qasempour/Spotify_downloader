@@ -23,7 +23,7 @@ from core.config import config
 from core.utils import format_duration
 from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
-from gui.bridge import EngineSignalBridge
+from gui.bridge import EngineSignalBridge, safe_invoke, safe_emit
 from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, BG_CARD, SPOTIFY_EMERALD
 
 PRESET_NORMAL_STYLE = """
@@ -986,7 +986,7 @@ class PlaylistsView(QWidget):
                     try:
                         name = self.spotify_client.get_current_user_name()
                         if name:
-                            QTimer.singleShot(0, self._update_api_banner)
+                            QTimer.singleShot(0, lambda: safe_invoke(self._update_api_banner))
                     finally:
                         self._fetching_user_name = False
                 threading.Thread(target=_fetch, daemon=True, name="SpotifyBannerNameFetcher").start()
@@ -1030,11 +1030,11 @@ class PlaylistsView(QWidget):
                 if success:
                     user_name = self.spotify_client.get_current_user_name()
                     msg = f"Connected as @{user_name}!" if user_name else "Successfully connected to Spotify account!"
-                    self.sig_auth_done.emit(True, msg)
+                    safe_emit(self.sig_auth_done, True, msg)
                 else:
-                    self.sig_auth_done.emit(False, "Could not complete Spotify authorization.")
+                    safe_emit(self.sig_auth_done, False, "Could not complete Spotify authorization.")
             except Exception as e:
-                self.sig_auth_done.emit(False, str(e))
+                safe_emit(self.sig_auth_done, False, str(e))
         threading.Thread(target=worker, daemon=True, name="SpotifyAuthWorker").start()
 
     def _on_auth_done(self, success: bool, msg: str):
@@ -1159,9 +1159,9 @@ class PlaylistsView(QWidget):
                 saved_info["owner_name"] = getattr(self.spotify_client, "last_owner_name", "")
                 saved_info["auth_user"] = self.spotify_client.get_current_user_name()
 
-                self.sig_playlist_saved.emit(saved_info)
+                safe_emit(self.sig_playlist_saved, saved_info)
             except Exception as e:
-                self.sig_save_failed.emit(str(e))
+                safe_emit(self.sig_save_failed, str(e))
 
         threading.Thread(target=worker, daemon=True, name="SavePlaylistWorker").start()
 
@@ -1407,13 +1407,13 @@ class PlaylistsView(QWidget):
                     tracks = ytdlp_engine.extract_from_url_or_search(pl_url)
 
                 if not tracks:
-                    self.sig_sync_failed.emit(playlist_id, "Could not retrieve songs from online source.")
+                    safe_emit(self.sig_sync_failed, playlist_id, "Could not retrieve songs from online source.")
                     return
 
                 res = self.archive.sync_saved_playlist(playlist_id, tracks)
-                self.sig_sync_done.emit(playlist_id, res)
+                safe_emit(self.sig_sync_done, playlist_id, res)
             except Exception as e:
-                self.sig_sync_failed.emit(playlist_id, str(e))
+                safe_emit(self.sig_sync_failed, playlist_id, str(e))
 
         threading.Thread(target=sync_worker, daemon=True, name=f"SyncPlaylist_{playlist_id}").start()
 
@@ -1499,7 +1499,7 @@ class PlaylistsView(QWidget):
                 else:
                     InfoBar.info("All Playlists Up to Date", msg, duration=4000, parent=self)
 
-            QTimer.singleShot(0, on_finish)
+            QTimer.singleShot(0, lambda: safe_invoke(on_finish))
 
         threading.Thread(target=worker, daemon=True, name="SyncAllPlaylistsWorker").start()
 
