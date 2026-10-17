@@ -64,6 +64,7 @@ hiddenimports = [
 hiddenimports += collect_submodules('qfluentwidgets')
 hiddenimports += collect_submodules('mutagen')
 hiddenimports += collect_submodules('yt_dlp')
+hiddenimports += collect_submodules('telethon')
 
 # Exclude unnecessary large packages to shrink the bundle footprint by 150MB+
 excludes = [

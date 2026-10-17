@@ -20,10 +20,12 @@ SECRET_KEYS: Set[str] = {
     "client_secret",
     "arcsjs",
     "arcsjsc",
+    "api_hash",
 }
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
+    "source_engine": "musilon",  # "musilon" or "melobot"
     "musilon": {
         "session_cookie": "",
         "username": "",
@@ -35,6 +37,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "cooldown_min_sec": 15,
         "cooldown_max_sec": 35,
         "stream_concurrency": 1,
+    },
+    "telegram": {
+        "enabled": False,
+        "bot_username": "melobot",
+        "api_id": 2040,
+        "api_hash": "b18441a1ff607e10a989891a5462e627",
+        "phone": "",
+        "session_name": "telegram_session",
+        "preferred_quality": "320",
+        "safe_delay_sec": 2,
     },
     "spotify": {
         "client_id": "",

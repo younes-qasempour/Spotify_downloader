@@ -163,6 +163,27 @@ class YtdlpEngine:
         return opts
 
     @staticmethod
+    def _is_classical(title: str, artists: List[str]) -> bool:
+        """Determines if a track is a classical, orchestral, or opera piece."""
+        all_text = (title + " " + " ".join(artists)).lower()
+        classical_terms = [
+            "symphony", "concerto", "sonata", "scherzo", "allegro", "adagio", "andante",
+            "presto", "moderato", "largo", "vivace", "overture", "nozze", "figaro",
+            "requiem", "canzonetta", "duettino", "aria", "cavatina", "philharmoniker",
+            "philharmonic", "sinfonia", "orchestra", "orchester", "mozart", "bruckner",
+            "beethoven", "bach", "brahms", "chopin", "tchaikovsky", "dvorak", "dvořák",
+            "vivaldi", "schubert", "mahler", "wagner", "handel", "haydn", "shostakovich",
+            "berliner", "wiener", "staatskapelle"
+        ]
+        if any(term in all_text for term in classical_terms):
+            return True
+        if re.search(r'\b(?:op|wab|bwv|hob|k|rv)\.?\s*\d+\b', all_text, re.IGNORECASE):
+            return True
+        if re.search(r'\b(?:act|akt)\s*(?:[ivxlcdm]+|\d+)\b', all_text, re.IGNORECASE):
+            return True
+        return False
+
+    @staticmethod
     def _normalize_text(text: str) -> str:
         """Lowercases, removes punctuation, and normalizes whitespace."""
         t = text.lower()
@@ -238,6 +259,12 @@ class YtdlpEngine:
         # Strip classical arrangement / transcription subtitles in parentheses/brackets
         core = re.sub(r'[\(\[]\s*(?:arr\.?|arranged|transcription)\b[^\)\]]*[\)\]]', '', core, flags=re.IGNORECASE)
 
+        # Strip classical version / edition / year / catalogue parentheticals like (2nd version, 1877), (1877 Version), (Ed. Nowak)
+        core = re.sub(r'[\(\[]\s*(?:\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{4})?|\d{4}\s+version|version\s*,\s*\d{4}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*)\s*[\)\]]', '', core, flags=re.IGNORECASE)
+
+        # Strip foreign movie titles in parentheses like (Die Verurteilten)
+        core = re.sub(r'[\(\[]\s*(?:die\s+verurteilten|shawshank|soundtrack|ost|score|theme)\b[^\)\]]*[\)\]]', '', core, flags=re.IGNORECASE)
+
         # Strip movie / soundtrack / edition / series trailing tags after separators
         for sep in [" - ", " – ", " — "]:
             if sep in core:
@@ -285,10 +312,13 @@ class YtdlpEngine:
         cand_dur = cand.get("duration") or 0
         diff = abs(cand_dur - target_dur)
 
+        is_classical = self._is_classical(raw_title, all_artists)
+        max_dur_tol = max(45.0, target_dur * 0.15) if is_classical else self.DURATION_TOLERANCE_SEC
+
         # 1. Hard Disqualifications
-        # Exclude duration mismatch > 25 seconds for standard tracks
-        if diff > self.DURATION_TOLERANCE_SEC and target_dur < 600:
-            return -999.0, f"Duration mismatch too high ({diff:.1f}s > {self.DURATION_TOLERANCE_SEC}s)"
+        # Exclude duration mismatch
+        if diff > max_dur_tol and target_dur < 600:
+            return -999.0, f"Duration mismatch too high ({diff:.1f}s > {max_dur_tol:.1f}s)"
 
         # Hard rejection for known cover / tribute / karaoke phrases
         cover_tribute_phrases = [
@@ -438,14 +468,16 @@ class YtdlpEngine:
             or (is_cjk_title and (is_official_channel or is_topic_channel or norm_core in cand_title_norm))
             or (is_persian_label and diff <= 10.0 and (norm_core == norm_cand_core or norm_core in cand_title_norm or best_sim >= 0.65))
             or (best_sim >= 0.80 and diff <= 4.0)
+            or (is_classical and (is_topic_channel or is_official_channel or best_sim >= 0.50))
+            or (best_sim >= 0.70 and diff <= max_dur_tol)
         )
 
         # Strict check: Candidate must mention artist in channel/title/desc or be verified native/official delivery
-        if not (artist_verified or (is_topic_channel and is_various_artists)):
+        if not (artist_verified or (is_topic_channel and (is_various_artists or is_classical))):
             return -999.0, "Artist not found in channel, title, or description"
 
-        # Foreign Topic Channel Filter
-        if is_topic_channel and not (artist_in_channel or artist_in_desc or is_cjk_title) and not is_various_artists:
+        # Foreign Topic Channel Filter (skip for classical music or when title matches)
+        if is_topic_channel and not (artist_in_channel or artist_in_desc or is_cjk_title or is_classical) and not is_various_artists:
             return -999.0, "Foreign topic channel (unofficial cover)"
 
         # 5. Token Overlap & Penalties
@@ -494,12 +526,28 @@ class YtdlpEngine:
         else:
             title_score = (best_sim * 35.0) + (word_overlap * 15.0)
 
-        # Penalize missing significant core words
-        if sig_missing:
+        # Check segmented matching for classical/soundtrack works (Work: Aria / Movement)
+        matched_segment = False
+        seg_dur_tol = max_dur_tol if is_classical else 12.0
+        if ":" in raw_title or " - " in raw_title or "..." in raw_title or "…" in raw_title:
+            for part in re.split(r'[:\-–—]|\.{2,}|\…', raw_title):
+                p_norm = self._normalize_text(re.sub(r'[\(\[].*?[\)\]]', '', part))
+                p_words = set(w for w in p_norm.split() if len(w) > 2)
+                if len(p_words) >= 2:
+                    matched_seg = p_words.intersection(all_cand_words)
+                    seg_ratio = len(matched_seg) / len(p_words)
+                    if seg_ratio >= 0.40 and diff <= seg_dur_tol:
+                        title_score = 30.0 + (seg_ratio * 20.0)
+                        sig_missing = []
+                        matched_segment = True
+                        break
+
+        # Penalize missing significant core words (only if no distinct segment matched)
+        if sig_missing and not matched_segment:
             title_score -= len(sig_missing) * 15.0
 
         # Penalize extra unexplained words
-        if sig_extra:
+        if sig_extra and not matched_segment:
             title_score -= len(sig_extra) * 8.0
 
         if title_score < 10.0:
@@ -563,6 +611,8 @@ class YtdlpEngine:
             dur_score = 20.0 - (diff * 2.0)
         elif diff <= 12.0:
             dur_score = 10.0 - diff
+        elif diff <= max_dur_tol:
+            dur_score = 10.0 - (diff * 0.5)
         else:
             dur_score = -diff
 
@@ -629,17 +679,49 @@ class YtdlpEngine:
         if clean_artist != artist:
             queries.append(f'ytsearch5:{clean_artist} {core_title}')
 
-        # Add multi-artist performer queries (classical composers vs performers, duets, collaborations)
-        for sec_artist in (track.artists[1:] if track.artists else []):
+        # For classical or opera works with 'Work: Aria' structure, extract clean aria/movement
+        is_classical = self._is_classical(clean_raw_title, all_artists)
+        if is_classical or ":" in core_title or "..." in core_title or "…" in core_title:
+            parts = [re.sub(r'[\(\[].*?[\)\]]', '', p).strip() for p in re.split(r'[:\-–—]|\.{2,}|\…', core_title) if p.strip()]
+            if len(parts) >= 2:
+                work = parts[0]
+                work_clean = re.sub(r',?\s*\b(?:WAB|Op\.?|K\.?|BWV|Hob\.?|D\.?|RV|S\.)\s*\d+[a-zA-Z]?\b', '', work, flags=re.IGNORECASE).strip()
+                work_short = re.sub(r'\s+in\s+[A-G](?:\s+(?:flat|sharp))?(?:\s+(?:major|minor))?', '', work_clean, flags=re.IGNORECASE).strip()
+
+                mvt = parts[1]
+                mvt_clean = re.sub(r'\.{2,}', ' ', mvt).strip()
+                m = re.search(r'\b(?:I{1,3}|IV|V|VI|VII|VIII|IX|X|\d+)?\.?\s*(Scherzo|Allegro|Adagio|Andante|Presto|Moderato|Largo|Vivace|Grave|Maestoso|Canzonetta|Duettino|Aria|Cavatina|Overture)\b[^\.\-–—]*', mvt_clean, re.IGNORECASE)
+                mvt_word = m.group(0).strip() if m else mvt_clean.split('.')[0].strip()
+
+                classical_queries: List[str] = []
+                for art in [artist] + (track.artists[1:3] if track.artists else []):
+                    art_clean = art.strip()
+                    if not art_clean:
+                        continue
+                    if mvt_word:
+                        classical_queries.append(f'ytsearch5:{art_clean} {work_short} {mvt_word}')
+                        classical_queries.append(f'ytsearch5:{art_clean} {mvt_word}')
+                        classical_queries.append(f'ytsearch5:{art_clean} {mvt_word} Topic')
+                    if len(parts) >= 3 and parts[2].strip():
+                        classical_queries.append(f'ytsearch5:{art_clean} {parts[2].strip()}')
+
+                # Insert classical queries right after ISRC at priority position
+                insert_pos = 1 if isrc else 0
+                for cq in reversed(classical_queries):
+                    if cq not in queries:
+                        queries.insert(insert_pos, cq)
+
+        # Add multi-artist performer queries (limit to top 2 secondary artists)
+        for sec_artist in (track.artists[1:3] if track.artists else []):
             sec_clean = sec_artist.strip()
             if sec_clean and sec_clean.lower() != artist.lower():
                 queries.append(f'ytsearch5:{sec_clean} {core_title}')
                 queries.append(f'ytsearch5:{sec_clean} - {core_title}')
                 queries.append(f'ytsearch5:{sec_clean} {core_title} Topic')
 
-        # Add distinctive artist tokens (surnames) and Persian aliases queries
+        # Add distinctive artist tokens (surnames) and Persian aliases queries (limit to top 3 artists)
         distinctive_artists: List[str] = []
-        for a in all_artists:
+        for a in all_artists[:3]:
             tokens = [t for t in re.split(r'[\s\-]+', a) if len(t) >= 4]
             for t in tokens:
                 if t.lower() not in [x.lower() for x in distinctive_artists] and t.lower() != artist.lower():
@@ -650,7 +732,7 @@ class YtdlpEngine:
                     if alias not in distinctive_artists and alias.lower() != artist.lower():
                         distinctive_artists.append(alias)
 
-        for da in distinctive_artists:
+        for da in distinctive_artists[:3]:
             queries.append(f'ytsearch5:{da} {core_title}')
             queries.append(f'ytsearch5:{core_title} {da}')
 
@@ -689,12 +771,12 @@ class YtdlpEngine:
             queries.append(f'ytsearch5:{core_title} {artist}')
             queries.append(f'ytsearch5:{core_title} Topic')
 
-        # Deduplicate queries while preserving order
+        # Deduplicate queries while preserving order and hard-cap at 12 to avoid long queues
         dedup_queries: List[str] = []
         for q in queries:
             if q not in dedup_queries:
                 dedup_queries.append(q)
-        queries = dedup_queries
+        queries = dedup_queries[:12]
 
         node_path = shutil.which("node")
         ydl_opts: Dict[str, Any] = {

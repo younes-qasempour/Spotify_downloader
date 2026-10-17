@@ -105,6 +105,49 @@ class TestNewEnhancements(unittest.TestCase):
         self.assertEqual(src.video_id, "dQw4w9WgXcQ")
         self.assertEqual(src.url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
+    def test_classical_track_title_cleaning_and_detection(self):
+        engine = YtdlpEngine()
+        bruckner_title = "Symphony No. 2 in C Minor, WAB 102 (2nd version, 1877): III. Scherzo. Mäßig schnell - Trio. Gleiches Tempo"
+        bruckner_artists = ["Anton Bruckner", "Berliner Philharmoniker", "Paavo Järvi"]
+        self.assertTrue(engine._is_classical(bruckner_title, bruckner_artists))
+
+        core, feat, flags = engine._clean_title_for_search(bruckner_title)
+        self.assertNotIn("2nd version", core)
+        self.assertNotIn("1877", core)
+
+        mozart_title = "Die Hochzeit des Figaro, K. 492, 3. Akt: Canzonetta sull aria… Che soave zeffiretto (Die Verurteilten): Sinfonia"
+        mozart_artists = ["Wolfgang Amadeus Mozart", "Marina Mescheriakova", "Judith Halász"]
+        self.assertTrue(engine._is_classical(mozart_title, mozart_artists))
+
+        core_m, feat_m, flags_m = engine._clean_title_for_search(mozart_title)
+        self.assertNotIn("Die Verurteilten", core_m)
+
+    def test_classical_candidate_scoring_and_segmentation(self):
+        engine = YtdlpEngine()
+        bruckner_cand = {
+            "id": "whCD843Dz6M",
+            "title": "Symphony No. 2 in C Minor, WAB 102: III. Scherzo. Massig schnell - Trio - Scherzo",
+            "duration": 389,
+            "uploader": "Paavo Järvi - Topic"
+        }
+        b_title = "Symphony No. 2 in C Minor, WAB 102 (2nd version, 1877): III. Scherzo. Mäßig schnell - Trio. Gleiches Tempo"
+        b_artists = ["Anton Bruckner", "Berliner Philharmoniker", "Paavo Järvi"]
+        core_b, _, flags_b = engine._clean_title_for_search(b_title)
+        score_b, reason_b = engine._score_candidate(bruckner_cand, b_artists, core_b, b_title, flags_b, 399.8)
+        self.assertGreater(score_b, 80.0, f"Bruckner score too low: {score_b} ({reason_b})")
+
+        mozart_cand = {
+            "id": "zCQTi7TzfLo",
+            "title": "Die Hochzeit des Figaro, K. 492, 3. Akt: Canzonetta sull aria… Che soave zeffiretto (Die...",
+            "duration": 240,
+            "uploader": "Sona Ghazarian - Topic"
+        }
+        m_title = "Die Hochzeit des Figaro, K. 492, 3. Akt: Canzonetta sull aria… Che soave zeffiretto (Die Verurteilten): Sinfonia"
+        m_artists = ["Wolfgang Amadeus Mozart", "Marina Mescheriakova", "Judith Halász", "Nicolaus Esterhazy Sinfonia", "Michael Halasz"]
+        core_m, _, flags_m = engine._clean_title_for_search(m_title)
+        score_m, reason_m = engine._score_candidate(mozart_cand, m_artists, core_m, m_title, flags_m, 244.56)
+        self.assertGreater(score_m, 80.0, f"Mozart score too low: {score_m} ({reason_m})")
+
 
 if __name__ == "__main__":
     unittest.main()

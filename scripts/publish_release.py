@@ -22,28 +22,28 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.4.1'
-    release_name = 'Flacify v1.4.1 — Parallel Song Search, 5-Worker Concurrency & Media Controls'
+    tag = 'v1.5'
+    release_name = 'Flacify v1.5 — MeloBot Telegram Integration, Classical Search & Concurrency'
 
     release_body = (
-        "# 🚀 Flacify v1.4.1 Release Notes\n\n"
-        "### ⚡ Parallel Song Search & 5-Worker Concurrent Download Pipeline\n"
-        "- **Unblocked Parallel Searching**: Eliminated the global resolution bottleneck. Song search and source lookup now execute concurrently across all workers instead of serializing the queue one song at a time.\n"
-        "- **5 Concurrent Workers by Default**: Increased default download concurrency from 2 to 5 workers for dramatically faster playlist and library downloads.\n"
-        "- **Dynamic Concurrency Control**: Added a new **'Concurrent Downloads & Searches'** setting (1–10) in the Settings view to dynamically scale worker threads in real-time without restarting.\n"
-        "- **Decoupled Stream Semaphore & VIP Cooldown**: High-speed Musilon CDN streams are protected by a dedicated semaphore while YouTube Music and local archive downloads run at full 5-thread parallelism.\n\n"
-        "### 🎧 Dynamic Audio Output Device Routing & Auto-Switching\n"
-        "- **Automatic Endpoint Switching**: Flacify now dynamically monitors Windows audio topology and default endpoint changes. Switching default devices in Windows immediately routes audio to the new device without restarting the app.\n"
-        "- **Seamless Stream Migration**: When output switches, playback position and playing state are seamlessly preserved with zero interruptions.\n"
-        "- **Audio Output Selector**: Added a dedicated Audio Device button (`FluentIcon.HEADPHONE`) with a quick popup menu allowing users to choose between 'System Default (Auto-Switch)' or any specific connected audio output device.\n\n"
-        "### ⌨️ Universal Keyboard & Media Hardware Controls\n"
-        "- **Full-Window Transport Controls**: Space (Play/Pause), Left/Right arrows (Seek -5s / +5s, Shift for 10s), Ctrl+Left/Right (Previous/Next track), Up/Down arrows (Volume), and hotkeys (J/K/L/M/N/P) work anywhere in the application.\n"
-        "- **Smart Text-Input Isolation**: When typing in search inputs, URLs, playlist rename fields, or metadata dialogs, standard keys pass through naturally without hijacking user typing.\n"
-        "- **Windows Native Media & Headset Keys**: Integrated hardware media keys (Play, Pause, Next, Prev, Stop) and `WM_APPCOMMAND` / `WM_HOTKEY` support so Bluetooth headset buttons and multimedia keyboard keys control playback even in the background.\n\n"
+        "# 🚀 Flacify v1.5 Release Notes\n\n"
+        "### 🤖 MeloBot Telegram Integration (@melobot)\n"
+        "- **High-Speed Lossless FLAC & 320 kbps MP3 Retrieval**: Direct integration with Telegram via `telethon` enables instantaneous streaming and download of genuine Lossless FLAC and Studio 320 kbps MP3 tracks via `@melobot`.\n"
+        "- **Intelligent Interactive Keyboard Automation**: Automatically navigates multi-step Telegram bot dialogs—detects candidate songs, evaluates nested album tracklists, filters out promotional buttons, and picks the highest quality tier (FLAC > 320k > 128k).\n"
+        "- **Single-Song Concurrency Guard**: Dedicated single-stream serialization (`_telegram_stream_lock`) enforces 1-by-1 downloads for Telegram bot queries, preventing bot flood rate limits (`FloodWaitError`) and chat state collisions.\n"
+        "- **Fluent Settings Telegram Login Flow**: Connect your Telegram account directly from the Settings interface via an interactive, secure two-step login modal (phone number -> SMS/App code -> 2FA password) with live connection status.\n\n"
+        "### 🎼 Classical & Multi-Part Aria Search Engine\n"
+        "- **Automatic Classical Detection**: Accurately recognizes classical and opera compositions across all eras via catalog numbers (`Op`, `WAB`, `BWV`, `Hob`, `K`, `RV`) and terminology (`Symphony`, `Concerto`, `Sonata`, `Scherzo`, `Aria`, `Canzonetta`).\n"
+        "- **Clean Movement & Aria Extraction**: Automatically strips 100+ character Spotify titles down to concise movement and aria phrases across colons, hyphens, and ellipses (`...`), preventing search engine query bloat.\n"
+        "- **Adaptive Classical Duration Tolerance**: Expands duration tolerance for classical works to `max(45s, 15%)` with gentle penalty slopes, accommodating natural tempo variations between different conductors and orchestras.\n"
+        "- **Topic Channel Verification**: Authenticates performer-named Topic channels without false 'Foreign topic channel' cover rejections.\n\n"
+        "### ⚡ Concurrency & Pipeline Enhancements\n"
+        "- **Dynamic Concurrency Control**: Seamlessly switches between full multi-worker parallelism (up to 10 workers for Musilon/YouTube) and serialized single-song downloads when MeloBot is active.\n"
+        "- **Auto-Repair & Accurate Tag Attributions**: Ensures YouTube Music Opus and M4A downloads are accurately recorded in the library archive with proper badges.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.4.1.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.4.1.exe`\n"
+        "Download and run **`Flacify_Setup_v1.5.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.5.exe`\n"
     )
 
     token = get_github_token()
@@ -91,7 +91,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.4.1.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")

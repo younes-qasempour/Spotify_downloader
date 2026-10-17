@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import Optional, Callable, Tuple, Any
 
 from core.spotify_client import TrackMetadata
-from core.musilon import MusilonEngine, MusilonSource, MusilonRateLimitExceededError
+from core.musilon import MusilonEngine, MusilonSource, MusilonError, MusilonVipError, MusilonRateLimitExceededError, MusilonDownloadError
+from core.melobot import MeloBotEngine, MeloBotSource, MeloBotError, MeloBotDownloadError
 from core.ytdlp_engine import YtdlpEngine, YtdlpSource
 from core.lyrics import LyricsEngine
 from core.tagger import AudioTagger
@@ -18,29 +19,30 @@ logger = logging.getLogger("core.resolver")
 
 @dataclass
 class ResolvedTrackSource:
-    source_type: str  # "Musilon" or "YouTube Music"
-    quality_badge: str  # e.g. "Musilon FLAC 16", "Musilon FLAC 24", "Musilon 320k", "YTM Opus"
-    source_obj: Any  # MusilonSource or YtdlpSource
+    source_type: str  # "Musilon", "MeloBot", or "YouTube Music"
+    quality_badge: str  # e.g. "Musilon FLAC 16", "MeloBot FLAC", "MeloBot 320k", "YTM Opus"
+    source_obj: Any  # MusilonSource, MeloBotSource, or YtdlpSource
     file_extension: str  # "flac", "mp3", "opus", "m4a"
 
 
 class CascadingAudioEngine:
     """
     High-Fidelity Cascading Audio Engine:
-    1. Tier 1: Musilon Lossless FLAC 16-bit (CD Quality)
-    2. Tier 2: Musilon Hi-Res FLAC 24-bit (Studio Master)
-    3. Tier 3: Musilon Studio MP3 320 kbps (CBR)
-    4. Tier 4: YouTube Music native high-bitrate Opus (Safety Net strictly when Musilon catalog is completely exhausted)
+    - Tier 1 (Option A): Musilon Lossless FLAC / Hi-Res / 320 kbps MP3
+    - Tier 1 (Option B): MeloBot Premium FLAC / 320 kbps MP3 via Telegram
+    - Tier 2: YouTube Music native high-bitrate Opus (Safety Net fallback)
     """
 
     def __init__(
         self,
         musilon_engine: Optional[MusilonEngine] = None,
+        melobot_engine: Optional[MeloBotEngine] = None,
         ytdlp_engine: Optional[YtdlpEngine] = None,
         lyrics_engine: Optional[LyricsEngine] = None,
         tagger: Optional[AudioTagger] = None
     ):
         self.musilon = musilon_engine or MusilonEngine()
+        self.melobot = melobot_engine or MeloBotEngine()
         self.ytdlp = ytdlp_engine or YtdlpEngine()
         self.lyrics = lyrics_engine or LyricsEngine()
         self.tagger = tagger or AudioTagger()
@@ -76,8 +78,31 @@ class CascadingAudioEngine:
                 )
             return None
 
-        # 1. Try Musilon Tiers 1-3 across all multi-vector search stages
-        if self.musilon.enabled and not skip_musilon:
+        # Determine active high-quality engine
+        source_engine = str(config.get("source_engine", "musilon")).strip().lower()
+        use_melobot = (source_engine == "melobot" or (config.get("telegram.enabled", False) and not self.musilon.enabled))
+
+        # 1. Option A: Try MeloBot if chosen as active source
+        if use_melobot and self.melobot.enabled and not skip_musilon:
+            try:
+                melo_src = self.melobot.resolve_track(track, cancel_check=cancel_check)
+                if cancel_check and cancel_check():
+                    return None
+                if melo_src:
+                    logger.info(f"Resolved via MeloBot ({melo_src.quality_tier}): {track.title}")
+                    return ResolvedTrackSource(
+                        source_type="MeloBot",
+                        quality_badge=melo_src.quality_tier,
+                        source_obj=melo_src,
+                        file_extension=melo_src.file_extension
+                    )
+            except Exception as e_melo:
+                if cancel_check and cancel_check():
+                    return None
+                logger.warning(f"MeloBot resolution failed for {track.title}: {e_melo}")
+
+        # 1. Option B: Try Musilon Tiers 1-3 across all multi-vector search stages
+        elif self.musilon.enabled and not skip_musilon:
             try:
                 m_src = self.musilon.resolve_track(track, cancel_check=cancel_check)
                 if cancel_check and cancel_check():
@@ -94,6 +119,11 @@ class CascadingAudioEngine:
                         )
                     else:
                         logger.info(f"Musilon tier '{m_src.quality_tier}' rejected to satisfy FLAC/320k priority.")
+            except (MusilonRateLimitExceededError, MusilonVipError) as e_mus:
+                if cancel_check and cancel_check():
+                    return None
+                logger.warning(f"Musilon resolution encountered account/rate issue for '{track.title}': {e_mus}")
+                raise e_mus
             except Exception as e:
                 if cancel_check and cancel_check():
                     return None
@@ -105,14 +135,15 @@ class CascadingAudioEngine:
         # Check if fallback is disabled globally or explicitly requested
         allow_fallback = config.get("download.allow_fallback", True) and not musilon_only
         if not allow_fallback:
-            logger.info(f"Strict Musilon mode / Fallback disabled: skipping YouTube Music for '{track.title}'")
+            logger.info(f"Strict high-quality mode / Fallback disabled: skipping YouTube Music for '{track.title}'")
             return None
 
         # 2. Safety-Net Fallback to Tier 4: YouTube Music
+        active_source_name = "MeloBot" if use_melobot else "Musilon"
         if skip_musilon:
-            logger.info(f"Musilon skipped (daily quota/limit hit); resolving directly via YouTube Music for '{track.title}'...")
+            logger.info(f"{active_source_name} skipped; resolving directly via YouTube Music for '{track.title}'...")
         else:
-            logger.info(f"Musilon catalog completely exhausted for '{track.title}'; activating YouTube Music fallback...")
+            logger.info(f"Song not found in {active_source_name} catalog for '{track.title}'; activating YouTube Music fallback...")
         try:
             yt_src = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
             if cancel_check and cancel_check():
@@ -261,9 +292,11 @@ class CascadingAudioEngine:
                             os.remove(actual_file)
                         except Exception:
                             pass
+                        raise MusilonDownloadError(f"Musilon download produced an invalid audio file ({reason}) for '{track.title}'.")
                 else:
                     logger.warning(f"Musilon download failed after {retries} attempts for '{track.title}'.")
-            except MusilonRateLimitExceededError as e_limit:
+                    raise MusilonDownloadError(f"Musilon download failed after {retries} attempts for '{track.title}'.")
+            except (MusilonRateLimitExceededError, MusilonVipError, MusilonDownloadError) as e_mus:
                 if cancel_check and cancel_check():
                     return None
                 if os.path.exists(dest_file):
@@ -271,37 +304,76 @@ class CascadingAudioEngine:
                         os.remove(dest_file)
                     except Exception:
                         pass
-                logger.warning(f"Musilon download limit/quota exceeded for '{track.title}'. Raising for queue pause.")
-                raise e_limit
+                logger.warning(f"Musilon error for '{track.title}': {e_mus}. Raising for queue manager decision.")
+                raise e_mus
             except Exception as e:
                 if cancel_check and cancel_check():
                     return None
-                logger.warning(f"Musilon stream download failed ({e}).")
+                if os.path.exists(dest_file):
+                    try:
+                        os.remove(dest_file)
+                    except Exception:
+                        pass
+                logger.warning(f"Musilon stream download failed for '{track.title}': {e}")
+        if resolved.source_type == "MeloBot":
+            if status_callback:
+                status_callback("Downloading (MeloBot VIP)")
+            melo_src: MeloBotSource = resolved.source_obj
+            dest_file = f"{base_dest_without_ext}.{melo_src.file_extension}"
+            try:
+                success = self.melobot.download_track(
+                    source=melo_src,
+                    dest_path=dest_file,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
+                    pause_wait=pause_wait
+                )
+                if cancel_check and cancel_check():
+                    if os.path.exists(dest_file):
+                        try:
+                            os.remove(dest_file)
+                        except Exception:
+                            pass
+                    return None
 
-            # Fallback to YouTube Music ONLY as last resort after all Musilon retries fail
-            # AND strictly only if the user has NOT cancelled!
-            if cancel_check and cancel_check():
-                return None
-
-            allow_fallback = config.get("download.allow_fallback", True) and not musilon_only
-            if not final_file_path and allow_fallback:
+                candidate_files = [
+                    dest_file,
+                    f"{base_dest_without_ext}.flac",
+                    f"{base_dest_without_ext}.mp3",
+                    f"{base_dest_without_ext}.m4a",
+                    f"{base_dest_without_ext}.ogg"
+                ]
+                actual_file = next((f for f in candidate_files if os.path.isfile(f) and os.path.getsize(f) > 1024), None)
+                if success and actual_file:
+                    is_valid, reason = is_valid_audio_file(actual_file)
+                    if is_valid:
+                        final_file_path = actual_file
+                        act_ext = os.path.splitext(actual_file)[1].lstrip(".").lower()
+                        resolved.file_extension = act_ext
+                        if act_ext == "flac":
+                            resolved.quality_badge = "MeloBot FLAC"
+                        elif act_ext in ("mp3", "m4a", "ogg"):
+                            resolved.quality_badge = "MeloBot 320k"
+                    else:
+                        logger.warning(f"MeloBot download produced an invalid audio file ({reason}) for '{track.title}'.")
+                        if os.path.exists(actual_file):
+                            try:
+                                os.remove(actual_file)
+                            except Exception:
+                                pass
+                        raise MeloBotDownloadError(f"MeloBot audio integrity check failed ({reason})")
+                else:
+                    raise MeloBotDownloadError(f"MeloBot download failed to write audio file for '{track.title}'.")
+            except Exception as e_melo:
                 if cancel_check and cancel_check():
                     return None
-                logger.info(f"Musilon exhausted. Initiating last-resort safety-net fallback to YouTube Music for '{track.title}'...")
-                if status_callback:
-                    status_callback("Falling back to YTM (Last Resort)")
-                yt_fallback = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
-                if cancel_check and cancel_check():
-                    return None
-                if yt_fallback:
-                    act_ext = yt_fallback.audio_format or "opus"
-                    badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
-                    resolved = ResolvedTrackSource(
-                        source_type="YouTube Music",
-                        quality_badge=badge,
-                        source_obj=yt_fallback,
-                        file_extension=act_ext
-                    )
+                if os.path.exists(dest_file):
+                    try:
+                        os.remove(dest_file)
+                    except Exception:
+                        pass
+                logger.warning(f"MeloBot stream download failed for '{track.title}': {e_melo}")
+                raise MeloBotDownloadError(f"MeloBot download error: {e_melo}")
 
         if cancel_check and cancel_check():
             return None

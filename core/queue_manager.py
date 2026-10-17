@@ -12,7 +12,8 @@ import requests
 
 from core.spotify_client import TrackMetadata
 from core.resolver import CascadingAudioEngine, ResolvedTrackSource
-from core.musilon import MusilonRateLimitExceededError
+from core.musilon import MusilonRateLimitExceededError, MusilonVipError, MusilonDownloadError, MusilonError
+from core.melobot import MeloBotDownloadError, MeloBotError
 from core.archive import ArchiveManager
 from core.utils import sanitize_filename, is_valid_audio_file
 from core.config import config
@@ -71,6 +72,9 @@ class DownloadQueueManager:
         mus_streams = max(1, int(config.get("musilon.stream_concurrency", 1)))
         self._musilon_stream_lock = threading.Semaphore(mus_streams)
 
+        # Dedicated single-thread semaphore for Telegram MeloBot bot queries & downloads
+        self._telegram_stream_lock = threading.Semaphore(1)
+
         # Decoupled Event Callbacks
         self.on_track_enqueued: Optional[Callable[[QueueItem], None]] = None
         self.on_tracks_enqueued: Optional[Callable[[List[QueueItem]], None]] = None
@@ -84,21 +88,32 @@ class DownloadQueueManager:
         self._allow_yt_on_limit = False
         self._limit_lock = threading.Lock()
 
+    def get_effective_concurrency(self) -> int:
+        """
+        Returns effective concurrency. If MeloBot Telegram engine is active,
+        strictly enforces 1 concurrent song at a time to prevent Telegram chat collisions.
+        """
+        source = str(config.get("source_engine", "musilon")).strip().lower()
+        use_melobot = (source == "melobot" or (config.get("telegram.enabled", False) and not config.get("musilon.enabled", True)))
+        if use_melobot:
+            return 1
+        return max(1, min(10, self.max_workers))
+
     def start(self):
         with self._lock:
             self._paused.set()
             if not self._running:
                 self._running = True
 
-            # Ensure worker threads are alive
+            # Ensure worker threads are alive up to effective concurrency
             self._worker_threads = [t for t in self._worker_threads if t.is_alive()]
-            num_workers = self.max_workers
+            num_workers = self.get_effective_concurrency()
             while len(self._worker_threads) < num_workers:
                 idx = len(self._worker_threads)
                 t = threading.Thread(target=self._worker_loop, name=f"DownloadWorker-{idx}", daemon=True)
                 t.start()
                 self._worker_threads.append(t)
-            logger.info(f"Started DownloadQueueManager with {len(self._worker_threads)} workers.")
+            logger.info(f"Started DownloadQueueManager with {len(self._worker_threads)} workers (effective concurrency: {num_workers}).")
 
     def start_all(self) -> int:
         """
@@ -127,30 +142,33 @@ class DownloadQueueManager:
             self._running = True
             self._paused.set()
 
-            # Ensure worker threads are alive
+            # Ensure worker threads match effective concurrency
             self._worker_threads = [t for t in self._worker_threads if t.is_alive()]
-            num_workers = self.max_workers
+            num_workers = self.get_effective_concurrency()
             while len(self._worker_threads) < num_workers:
                 idx = len(self._worker_threads)
                 t = threading.Thread(target=self._worker_loop, name=f"DownloadWorker-{idx}", daemon=True)
                 t.start()
                 self._worker_threads.append(t)
 
-            logger.info(f"Started DownloadQueueManager: {pending_count} tracks enqueued for download across {len(self._worker_threads)} workers.")
+            logger.info(f"Started DownloadQueueManager: {pending_count} tracks enqueued for download across {len(self._worker_threads)} workers (effective limit: {num_workers}).")
             return pending_count
 
-    def update_concurrency(self, new_concurrency: int):
-        """Dynamically scales the worker pool up to the requested concurrency."""
+    def update_concurrency(self, new_concurrency: Optional[int] = None):
+        """Dynamically scales the worker pool up or down to the effective concurrency."""
         with self._lock:
-            self.max_workers = max(1, min(10, new_concurrency))
+            if new_concurrency is not None:
+                self.max_workers = max(1, min(10, new_concurrency))
+            target_workers = self.get_effective_concurrency()
+
             if self._running:
                 self._worker_threads = [t for t in self._worker_threads if t.is_alive()]
-                while len(self._worker_threads) < self.max_workers:
+                while len(self._worker_threads) < target_workers:
                     idx = len(self._worker_threads)
                     t = threading.Thread(target=self._worker_loop, name=f"DownloadWorker-{idx}", daemon=True)
                     t.start()
                     self._worker_threads.append(t)
-            logger.info(f"DownloadQueueManager concurrency set to {self.max_workers} (active workers: {len(self._worker_threads)})")
+            logger.info(f"DownloadQueueManager concurrency set to {target_workers} (base setting: {self.max_workers}, active workers: {len(self._worker_threads)})")
 
     def pause(self):
         with self._lock:
@@ -336,6 +354,17 @@ class DownloadQueueManager:
     def _worker_loop(self):
         while self._running:
             self._paused.wait()  # Block while paused
+
+            # Check if active workers exceed effective concurrency limit (e.g. scaled down for Telegram single-song mode)
+            with self._lock:
+                effective_limit = self.get_effective_concurrency()
+                alive_workers = [t for t in self._worker_threads if t.is_alive()]
+                if len(alive_workers) > effective_limit:
+                    current_t = threading.current_thread()
+                    if current_t in self._worker_threads:
+                        self._worker_threads.remove(current_t)
+                    logger.debug(f"Worker {current_t.name} gracefully exiting to respect effective concurrency of {effective_limit}.")
+                    return
 
             try:
                 item = self._queue.get(timeout=1.0)
@@ -539,7 +568,13 @@ class DownloadQueueManager:
                 self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
 
-            resolved = self.engine.resolve_source(track, skip_musilon=skip_mus, cancel_check=cancel_check)
+            source_engine = str(config.get("source_engine", "musilon")).strip().lower()
+            is_melobot_mode = (source_engine == "melobot" or (config.get("telegram.enabled", False) and not config.get("musilon.enabled", True)))
+            if is_melobot_mode:
+                with self._telegram_stream_lock:
+                    resolved = self.engine.resolve_source(track, skip_musilon=skip_mus, cancel_check=cancel_check)
+            else:
+                resolved = self.engine.resolve_source(track, skip_musilon=skip_mus, cancel_check=cancel_check)
 
             if cancel_check():
                 self._update_status(item, "Stopped")
@@ -547,7 +582,7 @@ class DownloadQueueManager:
                 return
 
             if not resolved:
-                raise AudioSourceNotFoundError("No matching audio source found across Musilon or YouTube Music.")
+                raise AudioSourceNotFoundError("No matching audio source found across MeloBot, Musilon, or YouTube Music.")
 
             item.source_type = resolved.source_type
             item.quality_badge = resolved.quality_badge
@@ -576,8 +611,9 @@ class DownloadQueueManager:
             def status_cb(status_str: str):
                 self._update_status(item, status_str)
 
-            # Download & Tag with controlled stream Semaphore and post-download cooldown for Musilon
+            # Download & Tag with controlled stream Semaphore and post-download cooldown
             is_musilon = (resolved.source_type == "Musilon")
+            is_melobot = (resolved.source_type == "MeloBot")
             if is_musilon:
                 with self._musilon_stream_lock:
                     if cancel_check():
@@ -615,6 +651,31 @@ class DownloadQueueManager:
                                 if cancel_check():
                                     break
                                 time.sleep(0.1)
+            elif is_melobot:
+                with self._telegram_stream_lock:
+                    if cancel_check():
+                        self._update_status(item, "Stopped")
+                        self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                        return
+
+                    file_path = self.engine.download_and_tag(
+                        track=track,
+                        resolved=resolved,
+                        output_dir=output_dir,
+                        naming_template=naming_tmpl,
+                        save_lrc=save_lrc,
+                        embed_lyrics=embed_lyrics,
+                        embed_art=embed_art,
+                        progress_callback=progress_cb,
+                        status_callback=status_cb,
+                        cancel_check=cancel_check,
+                        pause_wait=pause_wait
+                    )
+
+                # Polite pause between bot requests
+                delay_sec = max(0, int(config.get("telegram.safe_delay_sec", 1)))
+                if delay_sec > 0 and not cancel_check():
+                    time.sleep(delay_sec)
             else:
                 file_path = self.engine.download_and_tag(
                     track=track,
@@ -635,7 +696,22 @@ class DownloadQueueManager:
                 self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
 
-            if resolved:
+            if file_path and os.path.isfile(file_path):
+                act_ext = os.path.splitext(file_path)[1].lstrip(".").lower()
+                # Strict sanity check: Opus or M4A files from YouTube Music must never be marked as Musilon
+                if act_ext == "opus" or (resolved and resolved.source_type in ("YouTube Music", "YouTube")):
+                    item.source_type = "YouTube Music" if resolved and resolved.source_type != "YouTube" else "YouTube"
+                    item.quality_badge = "YTM Opus" if act_ext == "opus" else ("YTM M4A" if act_ext == "m4a" else item.quality_badge)
+                    if self.on_track_source_resolved:
+                        self.on_track_source_resolved(track_id, item.source_type, item.quality_badge)
+                elif resolved:
+                    if resolved.quality_badge and resolved.quality_badge != item.quality_badge:
+                        item.quality_badge = resolved.quality_badge
+                    if resolved.source_type and resolved.source_type != item.source_type:
+                        item.source_type = resolved.source_type
+                    if self.on_track_source_resolved:
+                        self.on_track_source_resolved(track_id, item.source_type, item.quality_badge)
+            elif resolved:
                 if resolved.quality_badge and resolved.quality_badge != item.quality_badge:
                     item.quality_badge = resolved.quality_badge
                 if resolved.source_type and resolved.source_type != item.source_type:
@@ -660,13 +736,41 @@ class DownloadQueueManager:
             if self.on_track_completed:
                 self.on_track_completed(track_id, item.output_path)
 
-        except MusilonRateLimitExceededError as e_limit:
+        except (MeloBotDownloadError, MeloBotError) as e_melo:
+            if cancel_check():
+                self._update_status(item, "Stopped")
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                return
+            logger.warning(f"MeloBot issue for '{track.title}': {e_melo}. Checking fallback...")
+            allow_fallback = config.get("download.allow_fallback", True)
+            if allow_fallback and not cancel_check():
+                self._fallback_to_youtube(
+                    item=item,
+                    track=track,
+                    output_dir=output_dir,
+                    naming_tmpl=naming_tmpl,
+                    save_lrc=save_lrc,
+                    embed_lyrics=embed_lyrics,
+                    embed_art=embed_art,
+                    progress_cb=progress_cb,
+                    status_cb=status_cb,
+                    cancel_check=cancel_check,
+                    pause_wait=pause_wait
+                )
+            else:
+                self._update_status(item, "Failed")
+                item.error_message = str(e_melo)
+                self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                if self.on_track_failed:
+                    self.on_track_failed(track_id, str(e_melo))
+
+        except (MusilonRateLimitExceededError, MusilonVipError, MusilonDownloadError, MusilonError) as e_musilon:
             if cancel_check():
                 self._update_status(item, "Stopped")
                 self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
 
-            logger.warning(f"Musilon rate limit / daily quota hit for '{track.title}'. Checking session preference or prompting user...")
+            logger.warning(f"Musilon issue encountered for '{track.title}': {e_musilon}. Prompting user or checking session preference...")
 
             use_yt = False
             with self._limit_lock:
@@ -674,7 +778,14 @@ class DownloadQueueManager:
                     use_yt = True
                 else:
                     self.pause()
-                    self._update_status(item, "Musilon Limit Reached")
+                    self._update_status(item, "Musilon Issue")
+
+                    if isinstance(e_musilon, MusilonRateLimitExceededError):
+                        reason_str = f"Download rate limit or daily VIP quota reached ({e_musilon})."
+                    elif isinstance(e_musilon, MusilonVipError):
+                        reason_str = f"VIP authentication or subscription required ({e_musilon})."
+                    else:
+                        reason_str = f"Musilon stream download failed ({e_musilon})."
 
                     decision_event = threading.Event()
                     decision_action = ["stop"]
@@ -685,7 +796,12 @@ class DownloadQueueManager:
 
                     if self.on_musilon_limit_reached:
                         try:
-                            self.on_musilon_limit_reached(track, item, on_decision)
+                            import inspect
+                            sig = inspect.signature(self.on_musilon_limit_reached)
+                            if len(sig.parameters) >= 4:
+                                self.on_musilon_limit_reached(track, item, reason_str, on_decision)
+                            else:
+                                self.on_musilon_limit_reached(track, item, on_decision)
                         except Exception as e_hook:
                             logger.error(f"Error invoking on_musilon_limit_reached: {e_hook}")
                             decision_event.set()
@@ -794,11 +910,10 @@ class DownloadQueueManager:
             self.archive.update_saved_track_status_by_spotify_id(track.id, "pending")
             return
 
-        if resolved_yt:
-            if resolved_yt.quality_badge and resolved_yt.quality_badge != item.quality_badge:
-                item.quality_badge = resolved_yt.quality_badge
-            if resolved_yt.source_type and resolved_yt.source_type != item.source_type:
-                item.source_type = resolved_yt.source_type
+        if file_path and os.path.isfile(file_path):
+            act_ext = os.path.splitext(file_path)[1].lstrip(".").lower()
+            item.source_type = "YouTube Music"
+            item.quality_badge = "YTM Opus" if act_ext == "opus" else ("YTM M4A" if act_ext == "m4a" else item.quality_badge)
             if self.on_track_source_resolved:
                 self.on_track_source_resolved(track.id, item.source_type, item.quality_badge)
 

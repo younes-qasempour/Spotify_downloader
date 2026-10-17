@@ -48,7 +48,12 @@ def format_network_error(e: Exception) -> str:
     return f"Musilon connection failed: {clean_msg}"
 
 
-class MusilonVipError(FlacifyError):
+class MusilonError(FlacifyError):
+    """Base exception for all Musilon errors."""
+    pass
+
+
+class MusilonVipError(MusilonError):
     """Raised when Musilon requires authentication or returns an unauthorized response."""
     pass
 
@@ -58,8 +63,13 @@ class MusilonRateLimitExceededError(MusilonVipError):
     pass
 
 
-class MusilonQualityUnavailableError(FlacifyError):
+class MusilonQualityUnavailableError(MusilonError):
     """Raised when the requested quality tier is not available for a specific track (HTTP 409)."""
+    pass
+
+
+class MusilonDownloadError(MusilonError):
+    """Raised when Musilon stream download fails or produces an invalid file for a resolved track."""
     pass
 
 
@@ -932,7 +942,7 @@ class MusilonEngine:
                     )
 
             if resp.status_code == 402 or (text_preview and ("download_premium_required" in text_preview or "premium subscription required" in text_preview)):
-                raise MusilonVipError("Musilon VIP subscription required or expired (HTTP 402). Fallback to YouTube Music will be used.")
+                raise MusilonVipError("Musilon VIP subscription required or expired (HTTP 402).")
 
             if resp.status_code == 409:
                 raise MusilonQualityUnavailableError("Requested quality tier unavailable for this track.")
@@ -1135,7 +1145,8 @@ class MusilonEngine:
                 if cancel_check and cancel_check():
                     return False
                 logger.warning(f"Musilon attempt {attempt}/{max_retries} encountered VIP issue: {e_vip}")
-                if "402" in str(e_vip) or "expired" in str(e_vip).lower():
+                is_sub_expired = ("402" in str(e_vip)) or ("subscription expired" in str(e_vip).lower()) or ("premium required" in str(e_vip).lower())
+                if is_sub_expired:
                     # VIP subscription expired on site; retrying credentials will not help
                     raise e_vip
                 if self.is_budget_exhausted(current_source.quality_tier):
@@ -1148,6 +1159,10 @@ class MusilonEngine:
                     if login_ok and not (cancel_check and cancel_check()):
                         time.sleep(random.uniform(0.5, 1.5))
                         continue
+                    else:
+                        raise MusilonVipError(f"Musilon session expired and re-authentication failed: {e_vip}")
+                else:
+                    raise e_vip
 
             except Exception as e:
                 if cancel_check and cancel_check():
@@ -1158,10 +1173,12 @@ class MusilonEngine:
                     raise MusilonRateLimitExceededError(f"Musilon download limit / daily quota reached for '{track.title}'.")
 
                 if "401" in str(e) or "403" in str(e) or "unauthorized" in str(e).lower():
-                    self.ensure_vip_session(force=True)
-                    if not (cancel_check and cancel_check()):
+                    login_ok = self.ensure_vip_session(force=True)
+                    if login_ok and not (cancel_check and cancel_check()):
                         time.sleep(random.uniform(0.5, 1.5))
                         continue
+                    else:
+                        raise MusilonVipError(f"Musilon authentication failed: {e}")
 
             if cancel_check and cancel_check():
                 return False
@@ -1169,4 +1186,4 @@ class MusilonEngine:
             time.sleep(random.uniform(1.0, 2.0))
 
         logger.error(f"All {max_retries} Musilon download attempts exhausted for '{track.title}'.")
-        return False
+        raise MusilonDownloadError(f"Musilon stream download failed after {max_retries} attempts for '{track.title}'.")

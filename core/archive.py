@@ -262,6 +262,28 @@ class ArchiveManager:
                             WHERE status = 'downloaded' AND (quality_badge IS NULL OR quality_badge = '') AND file_path != '';
                         """)
 
+                        # Auto-repair any .opus or .m4a files misattributed to Musilon
+                        conn.execute("""
+                            UPDATE downloaded_tracks
+                            SET quality_badge = 'YTM Opus', source_type = 'YouTube Music'
+                            WHERE LOWER(file_path) LIKE '%.opus' AND source_type != 'YouTube Music';
+                        """)
+                        conn.execute("""
+                            UPDATE downloaded_tracks
+                            SET quality_badge = 'YTM M4A', source_type = 'YouTube Music'
+                            WHERE LOWER(file_path) LIKE '%.m4a' AND source_type NOT IN ('YouTube', 'YouTube Music');
+                        """)
+                        conn.execute("""
+                            UPDATE saved_playlist_tracks
+                            SET quality_badge = 'YTM Opus', source_type = 'YouTube Music'
+                            WHERE LOWER(file_path) LIKE '%.opus' AND source_type != 'YouTube Music';
+                        """)
+                        conn.execute("""
+                            UPDATE saved_playlist_tracks
+                            SET quality_badge = 'YTM M4A', source_type = 'YouTube Music'
+                            WHERE LOWER(file_path) LIKE '%.m4a' AND source_type NOT IN ('YouTube', 'YouTube Music');
+                        """)
+
                     cur_g = conn.execute("SELECT 1 FROM saved_playlist_tracks WHERE (genre IS NULL OR genre = '') LIMIT 1")
                     if cur_g.fetchone():
                         conn.execute("""
@@ -354,6 +376,13 @@ class ArchiveManager:
             return False
 
         norm_path = normalize_path(file_path)
+        ext = os.path.splitext(norm_path)[1].lower()
+        if ext == ".opus":
+            quality_badge = "YTM Opus"
+            source_type = "YouTube Music"
+        elif ext == ".m4a" and source_type not in ("YouTube", "YouTube Music"):
+            quality_badge = "YTM M4A"
+            source_type = "YouTube Music"
         if file_size <= 0:
             try:
                 file_size = os.path.getsize(norm_path)
@@ -2057,6 +2086,13 @@ class ArchiveManager:
             source_type = source_type or st_inf
 
         norm_fp = normalize_path(file_path)
+        ext = os.path.splitext(norm_fp)[1].lower()
+        if ext == ".opus":
+            quality_badge = "YTM Opus"
+            source_type = "YouTube Music"
+        elif ext == ".m4a" and source_type not in ("YouTube", "YouTube Music"):
+            quality_badge = "YTM M4A"
+            source_type = "YouTube Music"
         try:
             with self.connection() as conn:
                 # If genre wasn't provided, try querying it from downloaded_tracks

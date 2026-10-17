@@ -11,17 +11,183 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
     LineEdit, PrimaryPushButton, PushButton, ToolButton, SwitchButton,
-    CardWidget, InfoBar, InfoBarPosition, FluentIcon, Slider, ComboBox, CompactSpinBox
+    CardWidget, InfoBar, InfoBarPosition, FluentIcon, Slider, ComboBox, CompactSpinBox,
+    MessageBoxBase
 )
 
 from core.config import config
 from core.musilon import MusilonEngine
+from core.melobot import MeloBotEngine
 from core.spotify_client import SpotifyClient
 from core.utils import ensure_ffmpeg, download_ffmpeg
 from gui.styles import (
     BG_CARD, BORDER_SUBTLE, SPOTIFY_EMERALD, TEXT_PRIMARY,
     TEXT_SECONDARY, TEXT_MUTED, STATUS_COLORS
 )
+
+
+class TelegramLoginDialog(MessageBoxBase):
+    """Fluent Dialog for authenticating a Telegram account via phone and OTP verification code."""
+
+    sig_send_code_done = pyqtSignal(dict)
+    sig_sign_in_done = pyqtSignal(dict)
+
+    def __init__(self, melobot_engine: MeloBotEngine, parent=None):
+        super().__init__(parent)
+        self.engine = melobot_engine
+        self._phone_code_hash = None
+
+        self.titleLabel = SubtitleLabel("Connect Telegram Account", self)
+        self.viewLayout.addWidget(self.titleLabel)
+
+        guide_text = (
+            "Enter your Telegram phone number with international country code (e.g. +989123456789 or +1...).\n"
+            "Telegram will send an official verification code directly to your Telegram app."
+        )
+        self.guide_label = CaptionLabel(guide_text, self)
+        self.guide_label.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        self.guide_label.setWordWrap(True)
+        self.viewLayout.addWidget(self.guide_label)
+
+        # Phone Number Input + Send Code Button
+        phone_row = QHBoxLayout()
+        self.phone_input = LineEdit(self)
+        self.phone_input.setPlaceholderText("+989123456789")
+        self.phone_input.setText(config.get("telegram.phone", ""))
+        self.phone_input.setClearButtonEnabled(True)
+
+        self.send_code_btn = PushButton(FluentIcon.SEND, "Send Code", self)
+        self.send_code_btn.setMinimumWidth(110)
+        self.send_code_btn.clicked.connect(self._on_send_code_clicked)
+
+        phone_row.addWidget(self.phone_input, 1)
+        phone_row.addWidget(self.send_code_btn)
+        self.viewLayout.addLayout(phone_row)
+
+        # Verification Code
+        self.code_label = CaptionLabel("Enter Verification Code:", self)
+        self.code_label.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        self.viewLayout.addWidget(self.code_label)
+
+        self.code_input = LineEdit(self)
+        self.code_input.setPlaceholderText("5-digit code sent to Telegram")
+        self.code_input.setClearButtonEnabled(True)
+        self.code_input.textChanged.connect(self._on_code_text_changed)
+        self.code_input.returnPressed.connect(self._on_login_clicked)
+        self.phone_input.returnPressed.connect(self._on_send_code_clicked)
+        self.viewLayout.addWidget(self.code_input)
+
+        # Optional 2FA password
+        self.pwd_label = CaptionLabel("Two-Factor (2FA) Cloud Password (if enabled):", self)
+        self.pwd_label.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        self.pwd_label.setVisible(False)
+        self.viewLayout.addWidget(self.pwd_label)
+
+        self.pwd_input = LineEdit(self)
+        self.pwd_input.setPlaceholderText("2FA Cloud Password")
+        self.pwd_input.setEchoMode(LineEdit.EchoMode.Password)
+        self.pwd_input.setVisible(False)
+        self.pwd_input.returnPressed.connect(self._on_login_clicked)
+        self.viewLayout.addWidget(self.pwd_input)
+
+        # Status feedback label
+        self.status_label = CaptionLabel("", self)
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("color: #AAAAAA; font-size: 12px; margin-top: 4px;")
+        self.viewLayout.addWidget(self.status_label)
+
+        self.yesButton.setText("Log In")
+        self.cancelButton.setText("Cancel")
+        self.yesButton.setEnabled(False)
+        self.yesButton.clicked.connect(self._on_login_clicked)
+
+        # Connect thread-safe signals
+        self.sig_send_code_done.connect(self._on_send_code_done)
+        self.sig_sign_in_done.connect(self._on_login_done)
+
+    def validate(self) -> bool:
+        """Prevent MessageBoxBase from automatically closing dialog on yesButton click."""
+        return False
+
+    def _on_code_text_changed(self, text: str):
+        self.yesButton.setEnabled(len(text.strip()) >= 3)
+
+    def _on_send_code_clicked(self):
+        phone = self.phone_input.text().strip()
+        if not phone:
+            self.status_label.setText("Please enter a valid phone number.")
+            self.status_label.setStyleSheet("color: #FF5555; font-size: 12px;")
+            return
+
+        self.send_code_btn.setEnabled(False)
+        self.status_label.setText("Sending verification code to Telegram...")
+        self.status_label.setStyleSheet("color: #AAAAAA; font-size: 12px;")
+
+        def worker():
+            res = self.engine.send_code(phone)
+            self.sig_send_code_done.emit(res)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_send_code_done(self, res: dict):
+        self.send_code_btn.setEnabled(True)
+        if res.get("success"):
+            self._phone_code_hash = res.get("phone_code_hash")
+            self.status_label.setText("Code sent! Check your Telegram app for the official message.")
+            self.status_label.setStyleSheet("color: #1DB954; font-size: 12px;")
+            self.code_input.setFocus()
+            if len(self.code_input.text().strip()) >= 3:
+                self.yesButton.setEnabled(True)
+        else:
+            err = res.get("error", "Failed to send code.")
+            self.status_label.setText(f"Error: {err}")
+            self.status_label.setStyleSheet("color: #FF5555; font-size: 12px;")
+
+    def _on_login_clicked(self):
+        code = self.code_input.text().strip()
+        if not code:
+            self.status_label.setText("Please enter the verification code.")
+            self.status_label.setStyleSheet("color: #FF5555; font-size: 12px;")
+            return
+
+        phone = self.phone_input.text().strip()
+        pwd = self.pwd_input.text().strip() if self.pwd_input.isVisible() else None
+        self.yesButton.setEnabled(False)
+        self.send_code_btn.setEnabled(False)
+        self.status_label.setText("Verifying with Telegram...")
+        self.status_label.setStyleSheet("color: #AAAAAA; font-size: 12px;")
+
+        def worker():
+            res = self.engine.sign_in(
+                code=code,
+                password=pwd,
+                phone_code_hash=self._phone_code_hash,
+                phone=phone
+            )
+            self.sig_sign_in_done.emit(res)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_login_done(self, res: dict):
+        self.yesButton.setEnabled(True)
+        self.send_code_btn.setEnabled(True)
+        if res.get("success"):
+            user = res.get("user") or {}
+            name = user.get("first_name") or user.get("username") or "User"
+            self.status_label.setText(f"Success! Logged in as {name}.")
+            self.status_label.setStyleSheet("color: #1DB954; font-size: 12px;")
+            QTimer.singleShot(600, self.accept)
+        elif res.get("needs_password"):
+            self.pwd_label.setVisible(True)
+            self.pwd_input.setVisible(True)
+            self.status_label.setText("Two-Step Verification password is required.")
+            self.status_label.setStyleSheet("color: #FFA500; font-size: 12px;")
+            self.pwd_input.setFocus()
+        else:
+            err = res.get("error", "Sign in failed.")
+            self.status_label.setText(f"Error: {err}")
+            self.status_label.setStyleSheet("color: #FF5555; font-size: 12px;")
+
 
 
 class SettingsView(QScrollArea):
@@ -43,8 +209,16 @@ class SettingsView(QScrollArea):
     sig_spotify_auth_result = pyqtSignal(bool, str)
     sig_ffmpeg_progress = pyqtSignal(float, str)
     sig_ffmpeg_finished = pyqtSignal(bool, str)
+    sig_tg_status_result = pyqtSignal(bool, str)
+    sig_tg_logout_result = pyqtSignal()
 
-    def __init__(self, musilon_engine: Optional[MusilonEngine] = None, queue_manager: Optional[Any] = None, parent=None):
+    def __init__(
+        self,
+        musilon_engine: Optional[MusilonEngine] = None,
+        melobot_engine: Optional[MeloBotEngine] = None,
+        queue_manager: Optional[Any] = None,
+        parent=None
+    ):
         super().__init__(parent)
         self.qm = queue_manager
         self.setObjectName("settings_view")
@@ -62,6 +236,11 @@ class SettingsView(QScrollArea):
             password=config.get("musilon.password", ""),
             enabled=config.get("musilon.enabled", True)
         )
+        self.melobot_engine = melobot_engine or MeloBotEngine(
+            api_id=config.get("telegram.api_id", 2040),
+            api_hash=config.get("telegram.api_hash", "b18441a1ff607e10a989891a5462e627"),
+            bot_username=config.get("telegram.bot_username", "melobot")
+        )
 
         # Connect thread-safe result signals
         self.sig_login_result.connect(self._on_login_finished)
@@ -70,6 +249,8 @@ class SettingsView(QScrollArea):
         self.sig_spotify_auth_result.connect(self._on_spotify_auth_done)
         self.sig_ffmpeg_progress.connect(self._on_ffmpeg_progress)
         self.sig_ffmpeg_finished.connect(self._on_ffmpeg_finished)
+        self.sig_tg_status_result.connect(self._on_tg_status_done)
+        self.sig_tg_logout_result.connect(self._on_tg_logout_done)
 
         self._init_ui()
 
@@ -81,6 +262,50 @@ class SettingsView(QScrollArea):
         # Page Header
         page_title = SubtitleLabel("Settings & Preferences", self.container)
         main_layout.addWidget(page_title)
+
+        # =====================================================================
+        # 0. High-Quality Audio Source Selection
+        # =====================================================================
+        main_layout.addWidget(StrongBodyLabel("High-Quality Audio Engine Selection", self.container))
+
+        source_card = CardWidget(self.container)
+        sc_layout = QVBoxLayout(source_card)
+        sc_layout.setContentsMargins(20, 18, 20, 20)
+        sc_layout.setSpacing(12)
+
+        sc_row = QHBoxLayout()
+        sc_info = QVBoxLayout()
+        sc_title = BodyLabel("Primary High-Quality Download Source", source_card)
+        sc_title.setStyleSheet("font-weight: bold;")
+        sc_desc = CaptionLabel(
+            "Select which service to use for Lossless FLAC & 320 kbps MP3. "
+            "If a song is not found in the selected source, Flacify automatically falls back to YouTube Music.",
+            source_card
+        )
+        sc_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        sc_desc.setWordWrap(True)
+        sc_info.addWidget(sc_title)
+        sc_info.addWidget(sc_desc)
+
+        self.source_combo = ComboBox(source_card)
+        self.source_combo.addItems([
+            "👑 Musilon VIP / Premium CDN",
+            "✈️ MeloBot Premium (@melobot Telegram)"
+        ])
+        current_engine = str(config.get("source_engine", "musilon")).lower()
+        if current_engine == "melobot" or (config.get("telegram.enabled", False) and not config.get("musilon.enabled", True)):
+            self.source_combo.setCurrentIndex(1)
+        else:
+            self.source_combo.setCurrentIndex(0)
+
+        self.source_combo.currentIndexChanged.connect(self._on_source_engine_changed)
+        self.source_combo.setMinimumWidth(280)
+
+        sc_row.addLayout(sc_info, 1)
+        sc_row.addWidget(self.source_combo)
+        sc_layout.addLayout(sc_row)
+
+        main_layout.addWidget(source_card)
 
         # =====================================================================
         # 1. Musilon VIP Account Section
@@ -307,6 +532,106 @@ class SettingsView(QScrollArea):
         main_layout.addWidget(musilon_card)
 
         # =====================================================================
+        # 1b. MeloBot VIP (Telegram Bot @melobot) Section
+        # =====================================================================
+        main_layout.addWidget(StrongBodyLabel("MeloBot VIP / Telegram Account", self.container))
+
+        melobot_card = CardWidget(self.container)
+        mb_layout = QVBoxLayout(melobot_card)
+        mb_layout.setContentsMargins(20, 18, 20, 20)
+        mb_layout.setSpacing(14)
+
+        # Status Header Row
+        mb_status_row = QHBoxLayout()
+        mb_icon = BodyLabel("✈️", melobot_card)
+        mb_icon.setStyleSheet("font-size: 18px;")
+        mb_title = BodyLabel("MeloBot Account & Telegram Connection", melobot_card)
+        mb_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        self.tg_status_badge = CaptionLabel("Checking...", melobot_card)
+        self.tg_status_badge.setStyleSheet(
+            "background-color: #333333; color: #AAAAAA; padding: 3px 10px; border-radius: 10px;"
+        )
+
+        mb_status_row.addWidget(mb_icon)
+        mb_status_row.addWidget(mb_title)
+        mb_status_row.addStretch(1)
+        mb_status_row.addWidget(self.tg_status_badge)
+        mb_layout.addLayout(mb_status_row)
+
+        mb_desc = CaptionLabel(
+            "Connect your Telegram account to search and download directly from @melobot with your MeloBot Premium subscription. "
+            "Tracks are fetched in Lossless FLAC or highest 320 kbps MP3 quality. Telegram credentials are pre-configured.",
+            melobot_card
+        )
+        mb_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        mb_desc.setWordWrap(True)
+        mb_layout.addWidget(mb_desc)
+
+        # Action Buttons Row (Connect Account + Disconnect + Check Status)
+        mb_btn_row = QHBoxLayout()
+        mb_btn_row.setSpacing(10)
+
+        self.tg_connect_btn = PrimaryPushButton(FluentIcon.PEOPLE, "Connect Telegram Account", melobot_card)
+        self.tg_connect_btn.setMinimumWidth(210)
+        self.tg_connect_btn.clicked.connect(self._open_telegram_login)
+
+        self.tg_check_btn = PushButton(FluentIcon.SYNC, "Check Status", melobot_card)
+        self.tg_check_btn.setMinimumWidth(130)
+        self.tg_check_btn.clicked.connect(self._check_telegram_status)
+
+        self.tg_logout_btn = PushButton(FluentIcon.DELETE, "Log Out / Disconnect", melobot_card)
+        self.tg_logout_btn.setMinimumWidth(170)
+        self.tg_logout_btn.clicked.connect(self._logout_telegram)
+
+        mb_btn_row.addWidget(self.tg_connect_btn)
+        mb_btn_row.addWidget(self.tg_check_btn)
+        mb_btn_row.addWidget(self.tg_logout_btn)
+        mb_btn_row.addStretch(1)
+        mb_layout.addLayout(mb_btn_row)
+
+        # MeloBot Toggle Row
+        mb_toggle_row = QHBoxLayout()
+        mb_toggle_info = QVBoxLayout()
+        mb_toggle_title = BodyLabel("Enable MeloBot Telegram Engine", melobot_card)
+        mb_toggle_title.setStyleSheet("font-weight: bold;")
+        mb_toggle_desc = CaptionLabel("When active, tracks are queried from @melobot using your connected Telegram account.", melobot_card)
+        mb_toggle_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        mb_toggle_desc.setWordWrap(True)
+        mb_toggle_info.addWidget(mb_toggle_title)
+        mb_toggle_info.addWidget(mb_toggle_desc)
+
+        self.melobot_switch = SwitchButton(melobot_card)
+        self.melobot_switch.setChecked(config.get("telegram.enabled", False) or config.get("source_engine") == "melobot")
+        self.melobot_switch.checkedChanged.connect(self._on_melobot_switch_changed)
+
+        mb_toggle_row.addLayout(mb_toggle_info, 1)
+        mb_toggle_row.addWidget(self.melobot_switch)
+        mb_layout.addLayout(mb_toggle_row)
+
+        # Telegram Safe Delay Row
+        delay_row = QHBoxLayout()
+        delay_info = QVBoxLayout()
+        delay_title = CaptionLabel("Telegram Request Delay (Seconds):", melobot_card)
+        delay_title.setStyleSheet("font-weight: bold;")
+        delay_desc = CaptionLabel("Polite pause between songs to prevent bot flood limits.", melobot_card)
+        delay_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        delay_info.addWidget(delay_title)
+        delay_info.addWidget(delay_desc)
+
+        self.tg_delay_spin = CompactSpinBox(melobot_card)
+        self.tg_delay_spin.setRange(0, 30)
+        self.tg_delay_spin.setValue(int(config.get("telegram.safe_delay_sec", 2)))
+        self.tg_delay_spin.setFixedWidth(95)
+        self.tg_delay_spin.valueChanged.connect(lambda val: (config.set("telegram.safe_delay_sec", val), config.save()))
+
+        delay_row.addLayout(delay_info, 1)
+        delay_row.addWidget(self.tg_delay_spin)
+        mb_layout.addLayout(delay_row)
+
+        main_layout.addWidget(melobot_card)
+
+        # =====================================================================
         # 2. Spotify Metadata Credentials Section
         # =====================================================================
         sp_header_row = QHBoxLayout()
@@ -439,15 +764,15 @@ class SettingsView(QScrollArea):
         concurrency_info = QVBoxLayout()
         concurrency_title = BodyLabel("Concurrent Downloads & Searches", down_card)
         concurrency_title.setStyleSheet("font-weight: bold;")
-        concurrency_desc = CaptionLabel(
+        self.concurrency_desc = CaptionLabel(
             "Number of simultaneous songs to search and download in parallel (Default: 5). "
             "Parallel resolution prevents searches from blocking subsequent songs in the queue.",
             down_card
         )
-        concurrency_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
-        concurrency_desc.setWordWrap(True)
+        self.concurrency_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        self.concurrency_desc.setWordWrap(True)
         concurrency_info.addWidget(concurrency_title)
-        concurrency_info.addWidget(concurrency_desc)
+        concurrency_info.addWidget(self.concurrency_desc)
 
         self.concurrency_spin = CompactSpinBox(down_card)
         self.concurrency_spin.setRange(1, 10)
@@ -859,10 +1184,135 @@ class SettingsView(QScrollArea):
         # Check initial status
         self._update_status_badge()
         self._update_ffmpeg_badge()
+        self._update_concurrency_ui()
+        QTimer.singleShot(400, self._check_telegram_status)
+
+    def _update_concurrency_ui(self):
+        engine_name = str(config.get("source_engine", "musilon")).lower()
+        is_melobot = (engine_name == "melobot" or (config.get("telegram.enabled", False) and not config.get("musilon.enabled", True)))
+        if hasattr(self, "concurrency_desc") and hasattr(self, "concurrency_spin"):
+            if is_melobot:
+                self.concurrency_desc.setText(
+                    "MeloBot Premium is active: Telegram queries are strictly serialized to 1 song at a time to prevent chat state collisions. Concurrency is locked to 1."
+                )
+                self.concurrency_spin.setEnabled(False)
+            else:
+                self.concurrency_desc.setText(
+                    "Number of simultaneous songs to search and download in parallel (Default: 5). Parallel resolution prevents searches from blocking subsequent songs in the queue."
+                )
+                self.concurrency_spin.setEnabled(True)
 
     # -------------------------------------------------------------------------
     # Event Handlers
     # -------------------------------------------------------------------------
+    def _on_source_engine_changed(self, idx: int):
+        engine_name = "melobot" if idx == 1 else "musilon"
+        config.set("source_engine", engine_name)
+        if engine_name == "melobot":
+            config.set("musilon.enabled", False)
+            config.set("telegram.enabled", True)
+            self.musilon_engine.enabled = False
+            if hasattr(self, "musilon_switch"):
+                self.musilon_switch.setChecked(False)
+            if hasattr(self, "melobot_switch"):
+                self.melobot_switch.setChecked(True)
+            if self.qm and hasattr(self.qm, "update_concurrency"):
+                self.qm.update_concurrency(1)
+        else:
+            config.set("musilon.enabled", True)
+            config.set("telegram.enabled", False)
+            self.musilon_engine.enabled = True
+            if hasattr(self, "musilon_switch"):
+                self.musilon_switch.setChecked(True)
+            if hasattr(self, "melobot_switch"):
+                self.melobot_switch.setChecked(False)
+            if self.qm and hasattr(self.qm, "update_concurrency"):
+                base_concur = int(config.get("download.concurrency", 5))
+                self.qm.update_concurrency(base_concur)
+        config.save()
+        self._update_concurrency_ui()
+        InfoBar.success(
+            "Primary Source Updated",
+            f"Active high-quality source set to: {'MeloBot Premium (@melobot Telegram)' if engine_name == 'melobot' else 'Musilon VIP'}",
+            parent=self.window() or self,
+            duration=3000
+        )
+
+    def _on_melobot_switch_changed(self, enabled: bool):
+        config.set("telegram.enabled", enabled)
+        if enabled:
+            config.set("source_engine", "melobot")
+            config.set("musilon.enabled", False)
+            self.musilon_engine.enabled = False
+            if hasattr(self, "source_combo"):
+                self.source_combo.setCurrentIndex(1)
+            if hasattr(self, "musilon_switch"):
+                self.musilon_switch.setChecked(False)
+            if self.qm and hasattr(self.qm, "update_concurrency"):
+                self.qm.update_concurrency(1)
+            InfoBar.info("MeloBot Enabled", "MeloBot Telegram VIP engine is active.", duration=2500, parent=self)
+        else:
+            config.set("source_engine", "musilon")
+            config.set("musilon.enabled", True)
+            self.musilon_engine.enabled = True
+            if hasattr(self, "source_combo"):
+                self.source_combo.setCurrentIndex(0)
+            if hasattr(self, "musilon_switch"):
+                self.musilon_switch.setChecked(True)
+            if self.qm and hasattr(self.qm, "update_concurrency"):
+                base_concur = int(config.get("download.concurrency", 5))
+                self.qm.update_concurrency(base_concur)
+            InfoBar.info("MeloBot Disabled", "Switched back to Musilon VIP engine.", duration=2500, parent=self)
+        config.save()
+        self._update_concurrency_ui()
+
+    def _open_telegram_login(self):
+        diag = TelegramLoginDialog(self.melobot_engine, parent=self.window() or self)
+        if diag.exec():
+            self._check_telegram_status()
+            InfoBar.success(
+                "Telegram Connected",
+                "Your Telegram account has been connected to MeloBot!",
+                parent=self.window() or self,
+                duration=4000
+            )
+
+    def _check_telegram_status(self):
+        self.tg_status_badge.setText("Checking...")
+        self.tg_status_badge.setStyleSheet("background-color: #333333; color: #AAAAAA; padding: 3px 10px; border-radius: 10px;")
+
+        def worker():
+            is_auth = self.melobot_engine.is_authorized()
+            user_info = self.melobot_engine.get_me() if is_auth else None
+            disp = ""
+            if user_info:
+                name = user_info.get("first_name") or user_info.get("username") or "Connected"
+                phone = user_info.get("phone") or ""
+                disp = f"Connected: {name} (+{phone})" if phone else f"Connected: {name}"
+            self.sig_tg_status_result.emit(is_auth, disp)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_tg_status_done(self, is_auth: bool, disp: str):
+        if is_auth:
+            self.tg_status_badge.setText(disp or "Connected")
+            self.tg_status_badge.setStyleSheet("background-color: #1DB954; color: #FFFFFF; font-weight: bold; padding: 3px 10px; border-radius: 10px;")
+        else:
+            self.tg_status_badge.setText("Not Connected")
+            self.tg_status_badge.setStyleSheet("background-color: #555555; color: #CCCCCC; padding: 3px 10px; border-radius: 10px;")
+
+    def _logout_telegram(self):
+        def worker():
+            self.melobot_engine.log_out()
+            self.sig_tg_logout_result.emit()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_tg_logout_done(self):
+        self.tg_status_badge.setText("Not Connected")
+        self.tg_status_badge.setStyleSheet("background-color: #555555; color: #CCCCCC; padding: 3px 10px; border-radius: 10px;")
+        InfoBar.info("Telegram Disconnected", "You have been logged out of Telegram.", parent=self.window() or self, duration=3000)
+
     def _on_cookie_changed(self, text: str):
         config.set("musilon.session_cookie", text.strip())
         self.musilon_engine.set_credentials(

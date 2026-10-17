@@ -3,7 +3,7 @@
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
   <strong>Next-Generation High-Fidelity Spotify Audio Downloader & Library Manager for Windows 11</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.4.1-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.4.1"></a>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.5-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.5"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Fluent">
   <img src="https://img.shields.io/badge/Audio-24bit%20Hi--Res%20%7C%2016bit%20FLAC-00C853?style=for-the-badge&logo=flac&logoColor=white" alt="Lossless FLAC">
@@ -27,12 +27,24 @@ Built on a completely **decoupled two-layer architecture**:
 
 ## 🌟 Key Features
 
+### 🤖 MeloBot Telegram Integration (v1.5)
+- **High-Fidelity Lossless & 320 kbps Streaming via Telegram:** Direct MTProto client integration via `telethon` enables ultra-fast resolution and downloading of pristine Lossless FLAC and Studio 320 kbps MP3 files via `@melobot`.
+- **Intelligent Bot Interactive Keyboard Navigation:** Automatically negotiates multi-step Telegram bot dialogs—detects search candidates, navigates album menus, rejects promotional/navigation buttons, and clicks optimal audio quality buttons (FLAC > 320k > 128k).
+- **Single-Song Serialized Concurrency Guard:** Automatically serializes Telegram bot queries to 1-at-a-time while allowing parallel local processing, preventing bot flood limits (`FloodWaitError`) and chat state collisions.
+- **Dedicated Telegram Settings & Auth Flow:** Connect your Telegram account directly from the Fluent Settings interface via an interactive, secure two-step login modal (phone number -> SMS/App code -> 2FA password).
+
+### 🎼 Classical & Multi-Part Aria Search Engine (v1.5)
+- **Automatic Classical Detection:** Identifies classical and opera works across all eras (Mozart, Bruckner, Beethoven, Bach, Vivaldi, etc.) via catalog numbers (`Op`, `WAB`, `BWV`, `Hob`, `K`, `RV`) and composition terminology (`Symphony`, `Concerto`, `Sonata`, `Scherzo`, `Aria`, `Canzonetta`).
+- **Clean Movement & Aria Extraction:** Automatically strips complex 100+ character Spotify titles down to core movement and aria phrases across colons, hyphens, and ellipses (`...`), preventing search engine query bloat.
+- **Adaptive Classical Duration Tolerance:** Expands duration matching to $\max(45.0\text{s}, \text{target\_dur} \times 0.15)$ with gentle penalty slopes, accommodating natural tempo variations between different conductors and orchestras.
+- **Topic Channel Verification:** Accurately verifies performer-named Topic channels without false "Foreign topic channel" rejections.
+
 ### 🎧 High-Fidelity Cascading Audio Ladder
 Every queued track automatically traverses an intelligent cascading resolution ladder to guarantee the highest acoustic fidelity available:
-1. **Tier 1 (Target):** **Musilon Studio Master 24-bit Hi-Res FLAC** (48 kHz – 96 kHz / 24-bit PCM).
+1. **Tier 1 (Target):** **Musilon Studio Master 24-bit Hi-Res FLAC** (48 kHz – 96 kHz / 24-bit PCM) or **MeloBot Lossless FLAC**.
 2. **Tier 2 (Lossless):** **Musilon CD-Quality 16-bit FLAC** (44.1 kHz / 16-bit Lossless).
-3. **Tier 3 (Pristine):** **Musilon Studio 320 kbps MP3 / OGG** (Constant Bitrate, 320 kbps).
-4. **Tier 4 (Safety Net):** **YouTube Music native Opus/AAC** stream via `yt-dlp` with strict $\pm 5$s duration matching. *Engages automatically if a song is not indexed on lossless CDNs.*
+3. **Tier 3 (Pristine):** **Musilon / MeloBot Studio 320 kbps MP3** (Constant Bitrate, 320 kbps).
+4. **Tier 4 (Safety Net):** **YouTube Music native Opus/AAC** stream via `yt-dlp` with strict duration validation. *Engages automatically if a song is not indexed on lossless CDNs.*
 
 ### 🔍 Precision Catalog Matching & Anti-False-Positive Heuristics
 - **Exact ISRC Resolution:** Matches tracks against International Standard Recording Codes (ISRC) for instant 100% verified track matching.

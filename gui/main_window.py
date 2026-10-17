@@ -13,6 +13,7 @@ from gui.media_keys import MediaControllerManager
 
 from core.queue_manager import DownloadQueueManager
 from core.musilon import MusilonEngine
+from core.melobot import MeloBotEngine
 from core.ytdlp_engine import YtdlpEngine
 from core.lyrics import LyricsEngine
 from core.tagger import AudioTagger
@@ -75,6 +76,7 @@ class MainWindow(FluentWindow):
             password=config.get("musilon.password", ""),
             enabled=config.get("musilon.enabled", True)
         )
+        self.melobot_engine = MeloBotEngine()
         self.ytdlp_engine = YtdlpEngine(
             output_dir=config.get("download.output_dir", "")
         )
@@ -83,6 +85,7 @@ class MainWindow(FluentWindow):
 
         self.audio_engine = CascadingAudioEngine(
             musilon_engine=self.musilon_engine,
+            melobot_engine=self.melobot_engine,
             ytdlp_engine=self.ytdlp_engine,
             lyrics_engine=self.lyrics_engine,
             tagger=self.tagger
@@ -115,6 +118,7 @@ class MainWindow(FluentWindow):
 
         self.settings_view = SettingsView(
             musilon_engine=self.musilon_engine,
+            melobot_engine=self.melobot_engine,
             queue_manager=self.queue_manager,
             parent=self
         )
@@ -319,18 +323,40 @@ class MainWindow(FluentWindow):
                 3000
             )
 
-    def _show_musilon_limit_dialog(self, track, item, decision_callback):
+    def _show_musilon_limit_dialog(self, track, item, reason_or_cb, decision_callback=None):
         from qfluentwidgets import MessageBox
+        if decision_callback is None and callable(reason_or_cb):
+            decision_callback = reason_or_cb
+            reason = "Musilon download rate limit or daily VIP quota reached."
+        else:
+            reason = str(reason_or_cb or "Musilon stream download rejected.")
+
         track_title = getattr(track, "title", "Track")
         artist_name = getattr(track, "primary_artist", "Unknown Artist")
 
+        is_quota = any(w in reason.lower() for w in ("limit", "quota", "429", "budget"))
+        is_vip = any(w in reason.lower() for w in ("vip", "auth", "401", "402", "403", "credential", "subscription", "session"))
+
+        if is_quota:
+            title = "Musilon Download Limit Reached"
+            desc = "Musilon has reached its download rate limit or daily VIP quota while downloading:"
+            action_prompt = "Would you like to continue downloading from YouTube Music, or stop the downloading process?"
+        elif is_vip:
+            title = "Musilon VIP / Account Issue"
+            desc = "Musilon encountered an account or VIP subscription issue while downloading:"
+            action_prompt = "Would you like to continue downloading from YouTube Music, or stop to fix your VIP credentials in Settings?"
+        else:
+            title = "Musilon Download Failed"
+            desc = "Musilon failed or rejected the download stream for:"
+            action_prompt = "Would you like to continue downloading from YouTube Music, or stop the downloading process?"
+
         dialog = MessageBox(
-            title="Musilon Download Limit Reached",
+            title=title,
             content=(
-                f"Musilon has reached its download rate limit or daily VIP quota while downloading:\n\n"
+                f"{desc}\n\n"
                 f"  • {track_title} - {artist_name}\n\n"
-                "This track was found on Musilon, but the site rejected the download stream due to rate restrictions.\n\n"
-                "Would you like to continue downloading from YouTube Music, or stop the downloading process?"
+                f"Details: {reason}\n\n"
+                f"{action_prompt}"
             ),
             parent=self
         )

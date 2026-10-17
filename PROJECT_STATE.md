@@ -554,6 +554,76 @@ d:\Spotify-Downloader\
   3. Added `DownloadQueueManager.update_concurrency()` to dynamically scale active worker threads on the fly without restarting the application.
   4. Added unit tests for dynamic concurrency scaling in `tests/test_queue_manager.py`.
 
+### 45. Telegram MeloBot (@melobot) High-Quality Download Source Integration
+- **MeloBot MTProto Engine (`core/melobot.py`):**
+  1. Headless MTProto user client using `Telethon` running in a dedicated background asyncio thread and event loop (`TelethonLoopThread`).
+  2. Bundled standard official Telegram desktop client credentials (`api_id=2040`), completely bypassing `my.telegram.org` "Too many attempts" rate-limit issues.
+  3. Interactive authentication: `send_code(phone)`, `sign_in(code, password=None)`, `is_authorized()`, and `log_out()`. Session is saved permanently in `cache/telegram_session.session`.
+  4. Optimized Multi-Vector Search Ladder: (1) `Artist - Title` (primary, matches in <1s) -> (2) Clean Title & Artist -> (3) Title Query -> (4) Spotify Track URL.
+  5. Multi-Stage Intelligent Interactive Bot Clicker: Handles MeloBot's 2-stage interaction flow:
+     - Stage 1 (Candidate Selection): Scored candidate matching on track title/artist words, prefix bonuses (`🎵`/`📀`), variation penalties (`live`, `remix`), and token filtering (ignores navigation `⬅️`, home, and artists `🗣`).
+     - Stage 2 (Quality Selection): Automatically recognizes MeloBot VIP Persian phrasing `"📥 کیفیت عالی"` / `"عالی"` (320k), `"flac"` / `"lossless"` (FLAC), and `"کیفیت معمولی"` (128k fallback).
+   6. Chunked media downloader with real-time download speed (KB/s, MB/s) and ETA calculations, cancellation/pause tokens, and strict `is_valid_audio_file` validation.
+   7. Advanced Candidate Match Engine (`_score_candidate`):
+      - Bidirectional descriptor verification across English and Persian: rejects extraneous `live`/`لایو`/`کنسرت`, `remix`/`ریمیکس`/`میکس`, `acoustic`/`آکوستیک`, `acapella`/`آکاپلا`, `instrumental`/`بی کلام`, `sped up`, `slowed`, `reverb`, `nightcore`, `8d`, `ai`/`هوش مصنوعی`, and `cover`/`کاور` variants unless explicitly requested in the Spotify track title.
+      - Multi-Artist Verification: Checks all artists in `track.artists`. If any featured artist or singer matches (e.g. `Homayoun Shajarian` when `Shayan Gorjidouz` is first), candidate is accepted.
+      - Exact Word Tokenization (`_match_token`): Replaced loose substring checks with exact/stem token matching (`w == bw` or `SequenceMatcher >= 0.82` with length difference <= 1). Prevents false matches like `'khial'` matching inside `'bikhial'`.
+      - Title Match Strictness: 2-word titles require both words to match (0.8 threshold) to avoid matching unrelated songs that share a single generic word.
+      - Album Tracklist Menu Support: Detects album menus (`"آلبوم"` or `"دانلود همه"`), ignores bulk download buttons (`دانلود همه`), and evaluates the nested song tracklist buttons to click the authentic individual track (e.g. `🎵 Naghshe Khial (Saaz Va Avaz)`).
+      - Single track marker (`🎵`) given precedence (+15 pts) over full albums (`📀`, +5 pts).
+      - Disqualifies non-song buttons (artist profiles `🗣`, navigation `⬅️`/`➡️`, cancel, search `🔍`).
+   8. Ultra-Fast Early Exit & Search Ladder:
+      - When MeloBot responds with candidates or "no result", if no candidate matches, the vector aborts immediately without waiting for the full 25s polling loop.
+      - Replaced raw Spotify URLs with artist search ladder vectors (`f"{artist} - {title}"`).
+      - Complete end-to-end multi-stage resolution reduced from ~100s to ~10-12s.
+   9. Verified End-to-End:
+      - Resolved and downloaded 14.45 MB 320 kbps MP3 for Gary Moore - Still Got The Blues.
+      - Resolved and downloaded 26.71 MB 320 kbps MP3 for Homayoun Shajarian - Naghshe Khial (Saaz Va Avaz) directly from album tracklist menu in 12s.
+- **Cascading Resolver & Queue Pipeline (`core/resolver.py`, `core/queue_manager.py`):
+  1. Integrated `MeloBotEngine` into `CascadingAudioEngine`.
+  2. If `source_engine == "melobot"`, tracks are resolved via MeloBot across all vectors before falling back to YouTube Music.
+  3. Strict Concurrency Serialization for Telegram:
+     - `get_effective_concurrency()` returns 1 when MeloBot is the active engine, preventing concurrent Telegram chat state collisions.
+     - Worker pool dynamically scales down to 1 worker for MeloBot, and restores full user-configured parallel workers (e.g. 5) when switching back to Musilon VIP.
+     - Protected with `_telegram_stream_lock` Semaphore and `_chat_lock` RLock for thread-safe atomicity.
+  4. Added error handling for `MeloBotDownloadError` with automatic fallback to YouTube Music if fallback is enabled.
+  5. Full metadata tagging, cover art embedding, and synchronized `.lrc` lyrics generation remain identical across all sources.
+- **Fluent Settings Interface (`gui/views/settings_view.py`, `gui/main_window.py`):
+  1. Added **Primary High-Quality Download Source Selector** card (choose between Musilon VIP and MeloBot Premium).
+  2. Dynamic Concurrency Locking: Settings view automatically disables the Concurrency spinbox and updates explanatory text when MeloBot is active, notifying the user that Telegram downloads are serialized to 1 at a time. Switching back to Musilon restores concurrency spinbox and scales workers back up.
+  3. Added **MeloBot VIP / Telegram Account** card with live status badge (`Connected: @user` / `Not Connected`), connect button, status checker, and disconnect button.
+  4. Built `TelegramLoginDialog(MessageBoxBase)`: provides a smooth two-step login flow (phone number -> OTP code -> optional 2FA password).
+  5. Thread-Safe Cross-Thread UI Signal Architecture: Fixed cross-thread signal delivery using dedicated `pyqtSignal` events (`sig_send_code_done`, `sig_sign_in_done`, `sig_tg_status_result`, `sig_tg_logout_result`), overridden `validate()` to prevent premature modal closing, and dynamic text-changed button enabling for the "Log In" button.
+
+### 46. Classical & Multi-Part Track Search Optimization (`core/ytdlp_engine.py`, `core/melobot.py`)
+- **Problem Diagnosed:**
+  1. Classical titles on Spotify bundle composer, catalogue/opus number, edition parentheses, movement number, tempo, and foreign movie subtitles into 100+ character strings (e.g. `Die Hochzeit des Figaro, K. 492, 3. Akt: Canzonetta sull aria... Che soave zeffiretto (Die Verurteilten): Sinfonia`).
+  2. Passing these bloated strings caused YouTube Music and MeloBot to return irrelevant full-work videos, artist profiles (`🗣`), or zero results.
+  3. Rigid duration threshold ($\le 25.0$s) rejected legitimate recordings whose tempo varied by 30–45s between different conductors/orchestras.
+  4. Empty descriptions from `extract_flat: True` caused official classical Topic channels to be falsely rejected as "Foreign topic channel (unofficial cover)".
+  5. Rigid `diff <= 12.0` in segmented title matching penalized unmentioned words from other movements at $-15.0$ each, crashing the title score to $-156.0$.
+- **Solution Implemented:**
+  1. **Classical Detection & Movement/Aria Extraction (`_is_classical`):**
+     - Automatically identifies classical compositions by keywords (`symphony`, `scherzo`, `aria`, `canzonetta`, `mozart`, `bruckner`, etc.) and catalogue IDs (`WAB`, `Op`, `BWV`, `Hob`, `K`, `RV`).
+     - Extracts clean movements and arias using regex delimiters (`:`, `-`, `...`, `…`) and tempo keywords, prioritizing concise queries (e.g. `Wolfgang Amadeus Mozart Canzonetta sull aria Che soave zeffiretto`).
+  2. **Adaptive Classical Duration Tolerance:**
+     - Expands duration tolerance for classical works to $\max(45.0\text{s}, \text{target\_dur} \times 0.15)$ with a gentle duration penalty slope instead of a hard cutoff.
+  3. **Topic Channel Verification:**
+     - Exempts classical works from the foreign-artist topic filter when the track is authenticated as classical music.
+  4. **Multi-Part & Ellipsis Segmentation:**
+     - Splits multi-part titles across colons, dashes, and ellipses (`\.{2,}|\…`). When any distinct segment matches $\ge 40\%$ of core words within duration tolerance, the candidate is accepted without missing-word penalties.
+
+### 47. Release v1.5: MeloBot Telegram Integration, Classical Music Resolution & Concurrency Serialization
+- **Release Version Bump (v1.5):**
+  - Updated all version variables across `core/__init__.py` (`1.5.0`), `version_info.txt` (`1.5.0.0`), `installer.iss` (`1.5`), `build_windows.py` (`Flacify_Setup_v1.5.exe`), `main.py` (`Flacify.App.1.5`), `core/lyrics.py`, and `core/genre.py`.
+- **Integrated Capabilities:**
+  1. **MeloBot MTProto Downloader:** Direct integration with Telegram via `telethon` allowing seamless resolution of Lossless FLAC and Studio 320 kbps MP3 streams.
+  2. **Interactive Bot Keyboard Automation:** Detects inline keyboards, clicks quality tiers (FLAC > 320k > 128k), inspects nested album tracklists, and discards promotional buttons.
+  3. **Strict Concurrency Serialization:** Guaranteed 1-at-a-time serialization for Telegram bot interactions via `_telegram_stream_lock` Semaphore while scaling parallel workers up to 10 for Musilon/YouTube.
+  4. **Classical Search Engine:** Comprehensive movement and aria extraction, adaptive duration tolerances ($\max(45\text{s}, 15\%)$), ellipsis-aware segmentation, and topic channel verification.
+  5. **Auto-Repair & Accurate Tag Attributions:** Strict database and runtime checks ensure Opus/M4A files from YouTube Music are accurately attributed to YouTube Music with proper quality badges.
+
+
 ## 5. Development Cheat Sheet
 
 ### Run the GUI Application:
