@@ -505,9 +505,8 @@ class MeloBotEngine:
                         last_id = msg.id
                         break
                     else:
-                        # The bot replied with its candidate menu, but NONE of the candidates match!
-                        # The bot will not send another candidate menu for this query.
-                        logger.info(f"MeloBot returned candidates for '{track.title}', but none matched criteria. Ending vector early.")
+                        # The bot replied with a candidate or quality menu, but options did not satisfy criteria
+                        logger.info(f"MeloBot keyboard options for '{track.title}' did not satisfy candidate/quality criteria. Ending vector early.")
                         return None
 
                 # 3. Text-only message indicating no results found
@@ -573,17 +572,20 @@ class MeloBotEngine:
             # Candidate buttons or lengthy strings are never quality buttons
             if any(t.startswith(icon) for icon in ('🎵', '📀', '🗣', '👤', '🎬', '🎧', '⬅️', '➡️')):
                 return None
-            if len(t) > 28:
+            if len(t) > 40:
                 return None
-            t_lower = t.lower()
+            t_clean = t.lower()
+            for fa_d, en_d in (('۰', '0'), ('۱', '1'), ('۲', '2'), ('۳', '3'), ('۴', '4'), ('۵', '5'), ('۶', '6'), ('۷', '7'), ('۸', '8'), ('۹', '9')):
+                t_clean = t_clean.replace(fa_d, en_d)
+
             # 1. FLAC / Lossless
-            if any(k in t_lower for k in ("کیفیت flac", "flac", "lossless", "hi-res")):
+            if any(k in t_clean for k in ("کیفیت flac", "flac", "lossless", "hi-res")):
                 return "flac"
             # 2. 320 kbps / High Quality
-            if any(k in t_lower for k in ("کیفیت عالی", "کیفیت ۳۲۰", "320 kbps", "۳۲۰ kbps")) or t_lower in ("320", "۳۲۰", "عالی", "high quality"):
+            if any(k in t_clean for k in ("کیفیت عالی", "کیفیت 320", "320 kbps", "320k")) or t_clean in ("320", "عالی", "high quality"):
                 return "320"
             # 3. 128 kbps / Standard Quality
-            if any(k in t_lower for k in ("کیفیت معمولی", "کیفیت ۱۲۸", "128 kbps", "۱۲۸ kbps")) or t_lower in ("128", "۱۲۸", "معمولی", "standard quality"):
+            if any(k in t_clean for k in ("کیفیت معمولی", "کیفیت 128", "128 kbps", "128k")) or t_clean in ("128", "معمولی", "standard quality"):
                 return "128"
             return None
 
@@ -625,15 +627,22 @@ class MeloBotEngine:
                         await self._client.send_message(bot_entity, txt)
                     return True
 
-            # 3. Standard Quality (128 kbps) fallback
-            for r, c, txt, btn in buttons:
-                if _get_quality_tier(txt) == "128":
-                    logger.info(f"MeloBot clicking Standard Quality (128k) button: '{txt}'")
-                    try:
-                        await btn.click()
-                    except Exception:
-                        await self._client.send_message(bot_entity, txt)
-                    return True
+            # 3. Standard Quality (128 kbps) - only if explicitly allowed or user preferred 128k
+            pref_q = str(config.get("telegram.preferred_quality", config.get("download.preferred_quality", "320"))).strip().lower()
+            allow_128k = config.get("download.allow_128k", False) or pref_q in ("128", "standard", "low")
+
+            if allow_128k:
+                for r, c, txt, btn in buttons:
+                    if _get_quality_tier(txt) == "128":
+                        logger.info(f"MeloBot clicking Standard Quality (128k) button: '{txt}'")
+                        try:
+                            await btn.click()
+                        except Exception:
+                            await self._client.send_message(bot_entity, txt)
+                        return True
+            else:
+                logger.info(f"MeloBot only offered 128k standard quality ('کیفیت معمولی'). Rejecting to satisfy FLAC/320k priority.")
+                return False
 
             return False
 

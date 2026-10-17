@@ -637,6 +637,15 @@ d:\Spotify-Downloader\
   3. **Delivered Audio Duration Verification:**
      - Evaluates `DocumentAttributeAudio.duration` against `track.duration_sec`. If delivered audio exceeds duration tolerance ($\le 25$s for standard songs), it is discarded with a warning and resolution continues down the vector ladder or falls back to YouTube Music.
 
+### 49. Release v1.5.1 Update: MeloBot Quality Tier Enforcement & True Bitrate Attribution
+- **Bugs Diagnosed:**
+  1. In `core/resolver.py`, `resolved.quality_badge` was unconditionally overwritten with `"MeloBot 320k"` for any `.mp3`/`.m4a`/`.ogg` downloaded from MeloBot, masquerading 128 kbps standard files as 320 kbps in the UI.
+  2. When MeloBot's library only contained 128 kbps standard quality (`کیفیت معمولی`) for a song, `_handle_bot_keyboard` automatically clicked the 128k button even when the user specified high quality (`preferred_quality="320"` or `"flac"`), and `CascadingAudioEngine` accepted it without checking tier validity.
+- **Fix Implemented:**
+  1. **Standard Quality (128k) Rejection:** In `core/melobot.py` and `core/resolver.py`, 128 kbps is strictly rejected when high quality (`320` or `flac`) is preferred and `allow_128k` is False. The engine ends the vector and allows safe fallback to YouTube Music (Opus 160k) or reports not found.
+  2. **Persian & Arabic Digit Normalization in Quality Selector:** `_get_quality_tier` now normalizes Persian digits (`۳۲۰` -> `320`) and supports ASCII `320`/`128` and extended Persian phrases (`کیفیت 320`, `کیفیت 128`, `320k`, `128k`).
+  3. **Genuine Quality Badge Attribution:** `CascadingAudioEngine` now preserves the authentic `melo_src.quality_tier` (`MeloBot FLAC`, `MeloBot 320k`, or `MeloBot 128k`) and dynamically checks the downloaded file bitrate/size rather than hardcoding `MeloBot 320k`.
+
 
 ## 5. Development Cheat Sheet
 

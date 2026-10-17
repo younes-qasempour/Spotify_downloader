@@ -90,6 +90,41 @@ class TestMeloBotIntegration(unittest.TestCase):
         mock_melobot.resolve_track.assert_called_once()
         mock_yt.resolve_track.assert_called_once()
 
+    def test_resolver_rejects_melobot_128k_when_high_quality_preferred(self):
+        mock_melobot = MagicMock(spec=MeloBotEngine)
+        mock_melobot.enabled = True
+        mock_source_128 = MeloBotSource(
+            track_id="sp_test_128",
+            title="Standard Song",
+            artist="Artist",
+            quality_tier="MeloBot 128k",
+            message_id=456,
+            chat_id=123,
+            file_extension="mp3",
+            file_size=2500000,
+            duration=150
+        )
+        mock_melobot.resolve_track.return_value = mock_source_128
+
+        mock_yt = MagicMock()
+        mock_yt_source = MagicMock()
+        mock_yt_source.audio_format = "opus"
+        mock_yt.resolve_track.return_value = mock_yt_source
+
+        engine = CascadingAudioEngine(melobot_engine=mock_melobot, ytdlp_engine=mock_yt)
+        track = TrackMetadata(id="sp_test_128", title="Standard Song", artists=["Artist"], album="Album")
+
+        config.set("source_engine", "melobot")
+        config.set("download.preferred_quality", "320")
+        config.set("download.allow_128k", False)
+        config.set("download.allow_fallback", True)
+
+        resolved = engine.resolve_source(track)
+        self.assertIsNotNone(resolved)
+        # Should reject MeloBot 128k and fallback to YouTube Music
+        self.assertEqual(resolved.source_type, "YouTube Music")
+        self.assertEqual(resolved.quality_badge, "YTM Opus")
+
     def test_telegram_login_dialog_flow(self):
         import sys, time
         from PyQt6.QtWidgets import QApplication, QWidget
@@ -337,6 +372,32 @@ class TestMeloBotIntegration(unittest.TestCase):
         mock_q_btn_320.click.assert_called_once()
         mock_q_btn_128.click.assert_not_called()
         mock_singer_btn.click.assert_not_called()
+
+        # Mock quality message when MeloBot ONLY has 128k (standard quality)
+        mock_only_128_btn = MagicMock()
+        mock_only_128_btn.text = "📥 کیفیت معمولی"
+        mock_only_128_btn.click = unittest.mock.AsyncMock()
+
+        mock_only_128_msg = MagicMock()
+        mock_only_128_msg.text = "خب حالا میخوای با این آهنگ چه کنی ؟"
+        mock_only_128_msg.buttons = [
+            [mock_only_128_btn],
+            [mock_singer_btn]
+        ]
+
+        # By default (preferred_quality=320, allow_128k=False), it MUST reject 128k
+        config.set("download.preferred_quality", "320")
+        config.set("download.allow_128k", False)
+        clicked_rejected = asyncio.run(engine._handle_bot_keyboard(mock_only_128_msg, track, "bot_entity"))
+        self.assertFalse(clicked_rejected)
+        mock_only_128_btn.click.assert_not_called()
+
+        # When explicitly allowed (allow_128k=True), it accepts 128k
+        config.set("download.allow_128k", True)
+        clicked_allowed = asyncio.run(engine._handle_bot_keyboard(mock_only_128_msg, track, "bot_entity"))
+        self.assertTrue(clicked_allowed)
+        mock_only_128_btn.click.assert_called_once()
+        config.set("download.allow_128k", False)
 
 
 if __name__ == "__main__":

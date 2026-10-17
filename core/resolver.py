@@ -89,13 +89,20 @@ class CascadingAudioEngine:
                 if cancel_check and cancel_check():
                     return None
                 if melo_src:
-                    logger.info(f"Resolved via MeloBot ({melo_src.quality_tier}): {track.title}")
-                    return ResolvedTrackSource(
-                        source_type="MeloBot",
-                        quality_badge=melo_src.quality_tier,
-                        source_obj=melo_src,
-                        file_extension=melo_src.file_extension
-                    )
+                    pref_q = str(config.get("telegram.preferred_quality", config.get("download.preferred_quality", "320"))).strip().lower()
+                    allow_128k = config.get("download.allow_128k", False) or pref_q in ("128", "standard", "low")
+                    valid_tier = any(q in melo_src.quality_tier.lower() for q in ("flac", "320", "hires", "lossless"))
+
+                    if valid_tier or allow_128k:
+                        logger.info(f"Resolved via MeloBot ({melo_src.quality_tier}): {track.title}")
+                        return ResolvedTrackSource(
+                            source_type="MeloBot",
+                            quality_badge=melo_src.quality_tier,
+                            source_obj=melo_src,
+                            file_extension=melo_src.file_extension
+                        )
+                    else:
+                        logger.info(f"MeloBot tier '{melo_src.quality_tier}' rejected to satisfy FLAC/320k priority.")
             except Exception as e_melo:
                 if cancel_check and cancel_check():
                     return None
@@ -352,8 +359,16 @@ class CascadingAudioEngine:
                         resolved.file_extension = act_ext
                         if act_ext == "flac":
                             resolved.quality_badge = "MeloBot FLAC"
-                        elif act_ext in ("mp3", "m4a", "ogg"):
-                            resolved.quality_badge = "MeloBot 320k"
+                        elif melo_src and getattr(melo_src, "quality_tier", None):
+                            resolved.quality_badge = melo_src.quality_tier
+                        else:
+                            dur = track.duration_sec
+                            sz = os.path.getsize(actual_file)
+                            if dur > 0:
+                                bitrate = (sz * 8) / (dur * 1000)
+                                resolved.quality_badge = "MeloBot 320k" if bitrate >= 220 else "MeloBot 128k"
+                            else:
+                                resolved.quality_badge = "MeloBot 320k" if sz > 6 * 1024 * 1024 else "MeloBot 128k"
                     else:
                         logger.warning(f"MeloBot download produced an invalid audio file ({reason}) for '{track.title}'.")
                         if os.path.exists(actual_file):
