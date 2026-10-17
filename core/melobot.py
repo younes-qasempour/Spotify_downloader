@@ -550,7 +550,7 @@ class MeloBotEngine:
                 try:
                     src = self._run_async(
                         self._async_query_melobot(track=track, query=query_str, cancel_check=cancel_check),
-                        timeout=130.0
+                        timeout=70.0
                     )
                     if src:
                         logger.info(f"Resolved '{track.title}' via MeloBot ({src.quality_tier}) using '{vector_name}'")
@@ -575,8 +575,8 @@ class MeloBotEngine:
         or interactive keyboard buttons, handles candidate selection & quality picking,
         and returns a MeloBotSource.
         Uses Telethon event push updates with gentle fallback polling to completely prevent
-        flood waits (FloodWaitError). Retries button clicks (up to 3 times) and waits up to
-        120s for audio delivery to maximize MeloBot download success.
+        flood waits (FloodWaitError). Retries button clicks exactly 3 times at 5-second intervals
+        (15s click time) and waits 30s (45s total).
         """
         client = self._ensure_client()
         bot_entity = await client.get_input_entity(self.bot_username)
@@ -595,10 +595,10 @@ class MeloBotEngine:
         clicked_msg_ids = set()
         audio_msg: Optional[Message] = None
 
-        # Interactive state tracking for multi-click retry & extended wait
+        # Interactive state tracking: 3 retries at 5s intervals (15s) + 30s wait = 45s total
         last_clicked_msg: Optional[Message] = None
         last_clicked_is_quality: bool = False
-        click_attempts: int = 0
+        click_retries: int = 0
         last_click_time: float = 0.0
 
         try:
@@ -609,23 +609,22 @@ class MeloBotEngine:
             vector_start = time.time()
             stage_start = time.time()
             stage_timeout = 20.0  # 20s to get initial candidate / quality menu
-            max_vector_time = 130.0  # Total time allowed for this vector
+            max_vector_time = 70.0  # Total time allowed for this vector
 
             while time.time() - vector_start < max_vector_time:
                 if cancel_check and cancel_check():
                     return None
 
-                # Check if we need to re-click the button (user requested 2-3 click retries)
+                # Re-click button exactly 3 times after initial click with 5-second intervals (15s total)
                 now = time.time()
-                if last_clicked_msg and click_attempts < 3:
-                    retry_delay = 14.0 if last_clicked_is_quality else 6.0
-                    if (now - last_click_time) >= retry_delay:
+                if last_clicked_msg and click_retries < 3:
+                    if (now - last_click_time) >= 5.0:
+                        click_retries += 1
                         logger.info(
-                            f"MeloBot {'audio' if last_clicked_is_quality else 'quality menu'} response pending; "
-                            f"re-clicking {'quality' if last_clicked_is_quality else 'candidate'} button (attempt {click_attempts + 1}/3)..."
+                            f"MeloBot {'audio' if last_clicked_is_quality else 'quality menu'} not received after 5s; "
+                            f"re-clicking {'quality' if last_clicked_is_quality else 'candidate'} button (retry {click_retries}/3)..."
                         )
                         await self._handle_bot_keyboard(last_clicked_msg, track, bot_entity)
-                        click_attempts += 1
                         last_click_time = time.time()
 
                 remaining_stage = stage_timeout - (time.time() - stage_start)
@@ -691,17 +690,16 @@ class MeloBotEngine:
                         clicked_msg_ids.add(msg.id)
                         last_clicked_msg = msg
                         last_clicked_is_quality = is_qual
-                        click_attempts = 1
+                        click_retries = 0  # 3 retries available at 5s intervals
                         last_click_time = time.time()
                         stage_start = time.time()
                         if is_qual:
-                            # Quality clicked! MeloBot will transcode and upload the audio file (10MB-40MB).
-                            # Allow up to 120 seconds for full upload.
-                            stage_timeout = 120.0
-                            max_vector_time = max(max_vector_time, time.time() - vector_start + 120.0)
+                            # Quality clicked! 15s click time (3 retries x 5s) + 30s wait time = 45s total
+                            stage_timeout = 45.0
+                            max_vector_time = max(max_vector_time, time.time() - vector_start + 45.0)
                         else:
-                            # Candidate clicked! Quality menu will arrive within 18 seconds.
-                            stage_timeout = 18.0
+                            # Candidate clicked! 15s click time (3 retries x 5s) + 5s wait = 20s total
+                            stage_timeout = 20.0
                         continue
                     else:
                         logger.info(f"MeloBot keyboard options for '{track.title}' did not satisfy candidate/quality criteria. Ending vector early.")

@@ -708,8 +708,8 @@ d:\Spotify-Downloader\
 - **Fixes:**
   1. `_run_async()` now calls `future.cancel()` in `except (Exception, asyncio.CancelledError):`, immediately terminating timed-out coroutines.
   2. `_async_query_melobot()` now uses Telethon MTProto push updates via `events.NewMessage(chats=bot_entity)` and `events.MessageEdited(chats=bot_entity)` with an `asyncio.Queue` and gentle fallback polling (1.5s interval), eliminating `FloodWaitError` completely.
-  3. Added `clicked_msg_ids = set()` deduplication with intelligent multi-click retry (re-clicking up to 3 times if bot response is delayed or dropped by Telegram).
-  4. Increased resolution timeout to 130s and audio delivery wait to 120s, ensuring large files (11MB - 40MB) have sufficient time to finish transcoding and uploading without premature YouTube fallbacks.
+  3. Added `clicked_msg_ids = set()` deduplication with intelligent multi-click retry (re-clicking up to 3 times exactly at 5-second intervals = 15s click time).
+  4. Adjusted stage wait time to 45s total (15s click retries + 30s wait time) with 70s vector budget, ensuring ample time for MeloBot audio delivery without unnecessary delays.
   5. Replaced `ParallelTransferrer` with native, stable `client.download_media()` with `cryptg` C acceleration, smooth progress callbacks, and increased timeout to 300s, preventing Windows raw socket permission errors and download hangs.
 
 
