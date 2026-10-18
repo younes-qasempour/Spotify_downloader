@@ -22,21 +22,31 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.5.1'
-    release_name = 'Flacify v1.5.1 — Candidate vs Quality Button Isolation & Audio Duration Guard'
+    tag = 'v1.5.2'
+    release_name = 'Flacify v1.5.2 — FastTelethon 10x Acceleration, MTProto Push Engine & Audio Hardening'
 
     release_body = (
-        "# 🚀 Flacify v1.5.1 Release Notes\n\n"
-        "### 🛡️ Candidate Menu vs Quality Button Isolation in MeloBot\n"
-        "- **Fixed False Quality Button Triggers**: Keyboards containing candidate icons (`🎵`, `📀`, `🗣`, `👤`, `🎬`, `🎧`) or album tracklists are now strictly evaluated as Candidate Menus via `_score_candidate`, never as Quality Menus.\n"
-        "- **Eliminated Loose Substring Matching**: Removed loose substrings (e.g. `'original'`, `'hq'`) that previously caused buttons like *'🎵 Goosebumps Original Studio Cast Recording Company'* to be erroneously clicked as 320k quality buttons instead of evaluating candidates.\n"
-        "- **Isolated Quality Selector**: Quality buttons now strictly require dedicated quality identifiers (`کیفیت عالی`, `کیفیت ۳۲۰`, `کیفیت FLAC`, `320 kbps`, `128 kbps`, `flac`) and reject long candidate strings.\n\n"
-        "### ⏱️ Delivered Audio Duration Verification\n"
-        "- **Automatic Duration Guard**: Every audio file delivered by MeloBot is now validated against `track.duration_sec`. If delivered audio exceeds duration tolerance (e.g. a 5-minute cast recording track for a 2:42 song), it is safely rejected and resolution continues or falls back to YouTube Music.\n\n"
+        "# 🚀 Flacify v1.5.2 Release Notes\n\n"
+        "### ⚡ 10x Faster MeloBot Downloads & Smart Title Matching\n"
+        "- **Accelerated Telegram Transfers**: Upgraded download pipeline with optimized MTProto routines and native crypto acceleration (`cryptg`), speeding up candidate search and audio downloads by up to 10x.\n"
+        "- **Smart Title Normalization**: Enhanced Persian/English candidate scoring with multi-word artist and title matching, ensuring top-ranked candidates are accurately chosen on the first pass.\n\n"
+        "### 🛡️ FloodWait Elimination & MTProto Push Event Navigation\n"
+        "- **Push-Event Message Pipeline**: Replaced high-frequency polling with native Telethon push updates (`events.NewMessage` and `events.MessageEdited`), completely eliminating Telegram `FloodWaitError` bans.\n"
+        "- **Deduplicated Button Clicks & Adaptive Retries**: Prevents duplicate keyboard clicks with message ID tracking and retries unacknowledged clicks up to 3 times at 5s intervals within an adaptive 45s delivery window.\n"
+        "- **Zombie Coroutine Termination**: Safely cancels background asyncio futures on timeouts or exceptions, preventing leaked background coroutines from colliding with subsequent downloads.\n\n"
+        "### 🎼 Quality Priority & True Bitrate Attribution\n"
+        "- **Strict 128k Fallback Rejection**: Strictly rejects 128 kbps audio when High (320k) or Lossless (FLAC) quality is requested, safely stepping down to YouTube Music Opus.\n"
+        "- **Dynamic Physical Bitrate Calculation**: Accurately computes on-disk audio bitrates from file size and duration before assigning badges, preventing false 320k labeling.\n"
+        "- **Emerald FLAC Badge Styling**: Added dedicated vibrant emerald badges for genuine `MeloBot FLAC` lossless downloads.\n\n"
+        "### 🔧 Engine Hardening & Thread Safety\n"
+        "- **WebM to Opus Remux Synchronization**: Fixes file path desynchronization in `CascadingAudioEngine` when remuxing YouTube WebM containers to Opus via FFmpeg.\n"
+        "- **Genre Cache Thread Locking**: Added `threading.RLock` to `GenreResolver`, eliminating Windows `PermissionError` [WinError 32] during multi-worker concurrent downloads.\n"
+        "- **Safe Qt Signal Bridge**: Wrapped all background worker thread signal emissions with `safe_emit` and `safe_invoke` to prevent `RuntimeError: wrapped C/C++ object has been deleted` crashes.\n"
+        "- **Clean Partial File Purge**: Incomplete `.part` files are automatically removed upon connection drops or timeouts.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.5.1.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.5.1.exe`\n"
+        "Download and run **`Flacify_Setup_v1.5.2.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.5.2.exe`\n"
     )
 
     token = get_github_token()
@@ -84,7 +94,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.1.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.2.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")

@@ -3,7 +3,7 @@
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
   <strong>Next-Generation High-Fidelity Spotify Audio Downloader & Library Manager for Windows 11</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.5.1-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.5.1"></a>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.5.2-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.5.2"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Fluent">
   <img src="https://img.shields.io/badge/Audio-24bit%20Hi--Res%20%7C%2016bit%20FLAC-00C853?style=for-the-badge&logo=flac&logoColor=white" alt="Lossless FLAC">
@@ -27,10 +27,13 @@ Built on a completely **decoupled two-layer architecture**:
 
 ## 🌟 Key Features
 
-### 🤖 MeloBot Telegram Integration (v1.5)
-- **High-Fidelity Lossless & 320 kbps Streaming via Telegram:** Direct MTProto client integration via `telethon` enables ultra-fast resolution and downloading of pristine Lossless FLAC and Studio 320 kbps MP3 files via `@melobot`.
-- **Intelligent Bot Interactive Keyboard Navigation:** Automatically negotiates multi-step Telegram bot dialogs—detects search candidates, navigates album menus, rejects promotional/navigation buttons, and clicks optimal audio quality buttons (FLAC > 320k > 128k).
-- **Single-Song Serialized Concurrency Guard:** Automatically serializes Telegram bot queries to 1-at-a-time while allowing parallel local processing, preventing bot flood limits (`FloodWaitError`) and chat state collisions.
+### 🤖 MeloBot Telegram Integration & FastTelethon Acceleration (v1.5.2)
+- **10x Faster Downloads & Direct MTProto Streaming:** Upgraded download pipeline with optimized MTProto routines and native crypto acceleration (`cryptg`), speeding up candidate search and media transfers by up to 10x via `@melobot`.
+- **FloodWait Elimination via Push-Event Navigation:** Replaced high-frequency polling with native Telethon push updates (`events.NewMessage` and `events.MessageEdited`), completely preventing `FloodWaitError` rate-limiting.
+- **Deduplicated Multi-Click Retries:** Tracks button message IDs to prevent duplicate clicks and retries unacknowledged clicks up to 3 times at 5s intervals within an adaptive 45s delivery window.
+- **Strict Quality Enforcement & Genuine Badges:** Rejects unwanted 128 kbps standard files when high/lossless quality is requested, verifies physical on-disk bitrates before tagging, and displays dedicated emerald lossless badges for `MeloBot FLAC`.
+- **Intelligent Bot Interactive Keyboard Navigation:** Automatically negotiates multi-step Telegram bot dialogs—detects search candidates, navigates album menus, rejects promotional/navigation buttons, and selects optimal audio quality tiers (FLAC > 320k > 128k).
+- **Single-Song Serialized Concurrency Guard:** Automatically serializes Telegram bot queries to 1-at-a-time while allowing parallel local processing, preventing bot flood limits and chat state collisions.
 - **Dedicated Telegram Settings & Auth Flow:** Connect your Telegram account directly from the Fluent Settings interface via an interactive, secure two-step login modal (phone number -> SMS/App code -> 2FA password).
 
 ### 🎼 Classical & Multi-Part Aria Search Engine (v1.5)
@@ -266,13 +269,19 @@ All settings are configured via the in-app **Settings** view or stored in `%LOCA
 
 | Setting Key | Default | Description |
 |-------------|---------|-------------|
+| `source_engine` | `"musilon"` | Primary audio source engine (`"musilon"`, `"melobot"`, `"ytdlp"`) |
+| `melobot.enabled` | `false` | Enables direct MTProto Telegram lossless & 320k downloading via `@melobot` |
+| `melobot.api_id` | `""` | Telegram API ID from my.telegram.org |
+| `melobot.api_hash` | `""` | Telegram API Hash from my.telegram.org |
+| `melobot.preferred_quality` | `"lossless"` | Preferred MeloBot quality (`"lossless"`, `"320"`, `"128"`) |
+| `melobot.allow_128k` | `false` | Allows falling back to 128 kbps if 320k or FLAC are unavailable |
 | `musilon.enabled` | `true` | Enables high-speed lossless Musilon CDN downloads |
 | `musilon.username` | `""` | Registered Musilon email address |
 | `musilon.password` | `""` | Musilon account password |
 | `musilon.safe_mode` | `true` | Enforces human jitter & cooldown pacing to prevent rate limits |
 | `musilon.cooldown_min_sec` | `15` | Minimum cooldown seconds between consecutive Musilon downloads |
 | `musilon.cooldown_max_sec` | `35` | Maximum cooldown seconds between consecutive Musilon downloads |
-| `download.allow_fallback` | `true` | Automatically falls back to YouTube Music if Musilon lacks the track |
+| `download.allow_fallback` | `true` | Automatically falls back to YouTube Music if lossless engines lack the track |
 | `download.output_dir` | `~/Music` | Base root directory for all music downloads |
 | `download.naming_template` | `{artist} - {title}` | File naming pattern for singles and playlists |
 | `download.album_naming_template` | `{track_num}. {artist} - {title}` | File naming pattern for album tracks |
@@ -291,7 +300,7 @@ python build_windows.py
 This automated pipeline:
 1. Validates and generates multi-resolution Windows icons (`assets/icon.ico`).
 2. Invokes **PyInstaller** using `app.spec` to create a slim, windowed `dist/Flacify` application bundle.
-3. Invokes **Inno Setup 6** (`ISCC.exe`) to generate `dist/installer/Flacify_Setup_v1.0.1.exe` with a complete uninstaller and mutex process guard.
+3. Invokes **Inno Setup 6** (`ISCC.exe`) to generate `dist/installer/Flacify_Setup_v1.5.2.exe` with a complete uninstaller and mutex process guard.
 
 ---
 

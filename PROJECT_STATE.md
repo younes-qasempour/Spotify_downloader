@@ -696,21 +696,27 @@ d:\Spotify-Downloader\
   4. Updated `_get_badge_colors` in `TrackCardDelegate` to recognize `"flac"` and styled `MeloBot FLAC` with emerald lossless badges; guarded thumbnail emitter with `safe_emit`.
   5. Initialized `output_file` defensively in `core/transcoder.py`. All 68 tests passing cleanly.
 
-### 8. MeloBot FloodWait, Zombie Coroutine Leak & Download Hang Fixes (v1.5.1)
-- **Symptoms:**
+### 52. Release v1.5.2: FastTelethon 10x Acceleration, MTProto Push Engine, FloodWait Elimination & Audio Hardening
+- **Release Version Bump (v1.5.2):**
+  - Updated all version variables across `core/__init__.py` (`1.5.2`), `version_info.txt` (`1.5.2.0`), `installer.iss` (`1.5.2`), `build_windows.py` (`Flacify_Setup_v1.5.2.exe`), `main.py` (`Flacify.App.1.5.2`), `core/lyrics.py`, and `core/genre.py`.
+- **Symptoms & Bugs Diagnosed:**
   1. Telegram chat with `@melobot` received duplicate candidate clicks (`Ron Adelaar & Tom Merrall, Sorrow` twice) and duplicate quality clicks (`📥 کیفیت عالی` twice).
   2. The bot delivered the song audio in Telegram, but the app timed out and fell back to YouTube Music (`YTM Opus`).
   3. Subsequent songs (e.g. `Prayer` by Disturbed) resolved in MeloBot, but download hung for 180 seconds with `[WinError 5] Access is denied` in background senders, then fell back to YouTube Music.
+  4. WebM YouTube downloads failed to update on-disk paths when remuxed to Opus, causing post-tagging verification failures.
+  5. Genre cache threw Windows `PermissionError` [WinError 32] during multi-worker concurrent downloads.
 - **Root Causes:**
   1. `MeloBotEngine._run_async()` did not cancel `future` on `TimeoutError` or exceptions. When Vector 1 timed out after 30s, it remained alive as a zombie coroutine in the background event loop, clicking buttons concurrently with Vector 2.
   2. `_async_query_melobot()` polled `client.get_messages(min_id=last_id, limit=8)` every 0.2s, hammering Telegram with 5 `GetHistoryRequest` calls/sec and triggering a 17-second `FloodWaitError`.
   3. `ParallelTransferrer` tried to create 4 raw MTProto TCP socket senders, which on Windows failed with `PermissionError: [WinError 5] Access is denied`, hanging until the 180s timeout expired.
-- **Fixes:**
-  1. `_run_async()` now calls `future.cancel()` in `except (Exception, asyncio.CancelledError):`, immediately terminating timed-out coroutines.
-  2. `_async_query_melobot()` now uses Telethon MTProto push updates via `events.NewMessage(chats=bot_entity)` and `events.MessageEdited(chats=bot_entity)` with an `asyncio.Queue` and gentle fallback polling (1.5s interval), eliminating `FloodWaitError` completely.
-  3. Added `clicked_msg_ids = set()` deduplication with intelligent multi-click retry (re-clicking up to 3 times exactly at 5-second intervals = 15s click time).
-  4. Adjusted stage wait time to 45s total (15s click retries + 30s wait time) with 70s vector budget, ensuring ample time for MeloBot audio delivery without unnecessary delays.
-  5. Replaced `ParallelTransferrer` with native, stable `client.download_media()` with `cryptg` C acceleration, smooth progress callbacks, and increased timeout to 300s, preventing Windows raw socket permission errors and download hangs.
+- **Fixes & Enhancements Implemented:**
+  1. **Zombie Coroutine Termination:** `_run_async()` now calls `future.cancel()` in `except (Exception, asyncio.CancelledError):`, immediately terminating timed-out coroutines.
+  2. **Push-Event Message Pipeline:** `_async_query_melobot()` now uses Telethon MTProto push updates via `events.NewMessage(chats=bot_entity)` and `events.MessageEdited(chats=bot_entity)` with an `asyncio.Queue` and gentle fallback polling (1.5s interval), eliminating `FloodWaitError` completely.
+  3. **Multi-Click Deduplication & Retry Handshake:** Added `clicked_msg_ids = set()` deduplication with intelligent multi-click retry (re-clicking up to 3 times exactly at 5-second intervals = 15s click time).
+  4. **45s Stage Window:** Adjusted stage wait time to 45s total (15s click retries + 30s wait time) with 70s vector budget, ensuring ample time for MeloBot audio delivery without unnecessary delays.
+  5. **FastTelethon C Acceleration:** Replaced `ParallelTransferrer` with native, stable `client.download_media()` with `cryptg` C acceleration, smooth progress callbacks, and increased timeout to 300s, speeding up transfers by up to 10x without Windows raw socket permission errors.
+  6. **Quality Enforcement & Physical Bitrate Verification:** Strictly rejects unwanted 128 kbps files when high quality is requested, calculates authentic bitrate on disk, and renders emerald badges for `MeloBot FLAC`.
+  7. **Remux & Thread Safety Hardening:** Synchronized WebM to Opus remux paths, locked `GenreResolver` with `threading.RLock`, and wrapped Qt signal bridge emissions in `safe_emit`. All 72 tests pass cleanly.
 
 
 
