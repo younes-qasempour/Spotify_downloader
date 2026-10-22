@@ -741,9 +741,30 @@ d:\Spotify-Downloader\
   5. **External yt-dlp Plugin Isolation:** Added `compat_opts: {"no-plugins"}` across all yt-dlp option builders, eliminating Deno/POT script plugin timeouts.
   6. **Database Persistence & Portability:** Relative `output_dir` automatically migrates to absolute `~/Music/Spotify Downloads`. `normalize_path()` resolves against the configured directory. `find_track()` scans alternative and default music directories before purging records. Added `checkpoint_wal()` on startup and graceful exit. Inno Setup installer enforces `WorkingDir: "{app}"`. All 72 unit/integration tests passing cleanly.
 
+### 54. Release v1.5.4: Spotify Liked Songs (`collection/tracks`) Sync, Live Progress & Context Menu Actions
+- **Symptoms & Issues Diagnosed:**
+  1. **Liked Songs Out of Sync:** The user added 2 new songs ("死ぬか生きるか" and "SPIN") to Spotify's personal Liked Songs library (purple heart, 5,530 tracks). In Flacify, their saved "Liked Songs" playlist had 5,528 tracks and clicking "Sync Playlist" did not bring in the 2 songs.
+  2. **Root Cause:** In Spotify, liking a song adds it to the user's private library (`https://open.spotify.com/collection/tracks` / `/v1/me/tracks`). The user's playlist in Flacify was previously linked to a custom playlist URL (`https://open.spotify.com/playlist/77Se18cY0wrjmYyp2WgHDk`), which does NOT receive newly liked tracks unless added explicitly on Spotify. Additionally, Flacify previously rejected `collection/tracks` URLs and lacked `user-library-read` OAuth scope.
+  3. **No Visual Feedback:** For 5,500+ track playlists, fetching took 30+ seconds with a static "Syncing..." button, making it appear that nothing happened.
+  4. **Missing Delete & Re-download Context Menu:** Users had no way to delete a downloaded file directly from the app or force a re-download using an alternate engine (MeloBot VIP, Musilon VIP, or YouTube Music).
+  5. **Disk File Deletion Desync:** Deleting a file from the folder didn't automatically update the database record to pending.
+- **Fixes & Enhancements Implemented:**
+  1. **Native Liked Songs Collection Support:**
+     - `SpotifyClient.parse_url()` now recognizes `https://open.spotify.com/collection/tracks`, `spotify:collection:tracks`, and user collection variants, mapping to `("collection", "tracks")`.
+     - Added `_resolve_with_api()` for `collection` that paginates Spotify's `/v1/me/tracks` (`current_user_saved_tracks`).
+     - Added `user-library-read` OAuth scope with graceful detection of scope 403 errors and automatic re-authorization prompt.
+  2. **One-Click Playlist Migration & Real-Time Sync Progress:**
+     - In `EditPlaylistDialog`: Added `"Use Spotify Liked Songs (collection/tracks)"` button for 1-click conversion.
+     - In `PlaylistsView`: Added `sig_sync_progress` signal updating the button live (`"Syncing (1200/5530)..."`).
+     - Enhanced `_on_sync_done` with descriptive messages and tips explaining custom playlists vs Spotify Liked Songs.
+  3. **Delete & Re-download Actions (Context Menu):**
+     - Added "Delete Downloaded File" and "Delete & Re-download" (Auto, MeloBot VIP 320k, Musilon VIP 320k, YouTube Music Opus) to right-click menus in both `PlaylistsView` and `CompletedView`.
+     - Supported `preferred_engine` and bypassed archive caching (`skip_archive=True`) on re-downloads.
+  4. **Disk Reconciliation:**
+     - Implemented `reconcile_playlist_files(playlist_id)` to verify physical disk files and revert deleted files back to `pending`.
+  5. **Unit Tests:** Added `tests/test_liked_songs_sync.py` covering URL parsing, API pagination, and delta sync. All tests passing.
 
 
-## 5. Development Cheat Sheet
 
 ### Run the GUI Application:
 ```powershell

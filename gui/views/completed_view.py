@@ -234,10 +234,11 @@ class CompletedView(QWidget):
     - Direct folder navigation and one-click Rescan & Sync
     """
 
-    def __init__(self, bridge: EngineSignalBridge, archive_manager: Optional[ArchiveManager] = None, parent=None):
+    def __init__(self, bridge: EngineSignalBridge, archive_manager: Optional[ArchiveManager] = None, queue_manager: Optional[Any] = None, parent=None):
         super().__init__(parent)
         self.bridge = bridge
         self.archive = archive_manager or ArchiveManager()
+        self.qm = queue_manager
 
         self.model = TrackQueueModel(self)
         self.delegate = TrackCardDelegate(self)
@@ -1046,15 +1047,44 @@ class CompletedView(QWidget):
             return
 
         menu = QMenu(self)
+        menu_style = """
+            QMenu {
+                background-color: #242424;
+                color: #FFFFFF;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 20px 6px 12px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #383838;
+            }
+        """
+        menu.setStyleSheet(menu_style)
+
         play_act = menu.addAction("Play Track")
         show_act = menu.addAction("Show in Explorer")
         copy_act = menu.addAction("Copy Track Title")
         menu.addSeparator()
+
+        redl_menu = menu.addMenu("Delete & Re-download")
+        redl_menu.setStyleSheet(menu_style)
+        act_redl_auto = redl_menu.addAction("Auto (Best Available)")
+        act_redl_melo = redl_menu.addAction("From Telegram Bot (MeloBot)")
+        act_redl_musi = redl_menu.addAction("From Musilon (320k MP3)")
+        act_redl_yt = redl_menu.addAction("From YouTube Music")
+
+        act_del_file = menu.addAction("Delete File from Disk")
+        menu.addSeparator()
+
         m3u_act = menu.addAction("Export Playlist (.m3u8)...")
         details_act = menu.addAction("View Metadata & Genres")
         rg_act = menu.addAction("Calculate ReplayGain 2.0")
         menu.addSeparator()
-        delete_act = menu.addAction("Remove from Archive")
+        delete_act = menu.addAction("Remove from Archive Only")
 
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
         if action == play_act:
@@ -1077,6 +1107,44 @@ class CompletedView(QWidget):
                 InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == copy_act:
             QApplication.clipboard().setText(f"{item.track.title} - {item.track.artist_str}")
+        elif action in (act_redl_auto, act_redl_melo, act_redl_musi, act_redl_yt):
+            t = item.track
+            if item.output_path and os.path.exists(item.output_path):
+                try:
+                    os.remove(item.output_path)
+                except Exception:
+                    pass
+            self.archive.remove_downloaded_track(t.id)
+
+            engine_choice = "auto"
+            engine_label = "Auto (Best Available)"
+            if action == act_redl_melo:
+                engine_choice = "melobot"
+                engine_label = "Telegram Bot (MeloBot)"
+            elif action == act_redl_musi:
+                engine_choice = "musilon"
+                engine_label = "Musilon"
+            elif action == act_redl_yt:
+                engine_choice = "youtube"
+                engine_label = "YouTube Music"
+
+            t.preferred_engine = engine_choice
+            qm = self.qm or getattr(self.window(), "queue_manager", None)
+            if qm:
+                qm.enqueue([t])
+                qm.start_all()
+            self.reload_all()
+            InfoBar.info("Re-downloading", f"Re-downloading '{t.title}' via {engine_label}...", duration=4000, parent=self)
+        elif act_del_file and action == act_del_file:
+            t = item.track
+            if item.output_path and os.path.exists(item.output_path):
+                try:
+                    os.remove(item.output_path)
+                except Exception:
+                    pass
+            self.archive.remove_downloaded_track(t.id)
+            self.reload_all()
+            InfoBar.success("File Deleted", f"Deleted '{t.title}' from disk and removed from library.", duration=3500, parent=self)
         elif action == m3u_act:
             self._export_m3u_playlist()
         elif action == details_act:

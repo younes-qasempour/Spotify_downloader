@@ -868,16 +868,187 @@ class ArchiveManager:
             logger.error(f"Failed to fetch collection tracks for '{collection_name}': {e}")
             return []
 
-    def delete_track(self, spotify_id: str) -> bool:
-        """Deletes a track from the archive record."""
+    def remove_downloaded_track(self, spotify_id: str, playlist_id: Optional[str] = None) -> bool:
+        """
+        Removes a track from downloaded_tracks and resets its status in saved_playlist_tracks to 'pending'.
+        If playlist_id is provided, only that playlist's track status is reset; otherwise all saved playlists.
+        """
+        if not spotify_id:
+            return False
         try:
             with self.connection() as conn:
                 with conn:
                     conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (spotify_id,))
+                    if playlist_id:
+                        conn.execute("""
+                            UPDATE saved_playlist_tracks 
+                            SET status = 'pending', file_path = '', quality_badge = '', source_type = ''
+                            WHERE playlist_id = ? AND spotify_id = ?
+                        """, (playlist_id, spotify_id))
+                    else:
+                        conn.execute("""
+                            UPDATE saved_playlist_tracks 
+                            SET status = 'pending', file_path = '', quality_badge = '', source_type = ''
+                            WHERE spotify_id = ?
+                        """, (spotify_id,))
+
+                    if playlist_id:
+                        conn.execute("""
+                            UPDATE saved_playlists 
+                            SET total_tracks = (SELECT COUNT(*) FROM saved_playlist_tracks WHERE playlist_id = ?)
+                            WHERE id = ?
+                        """, (playlist_id, playlist_id))
+                    else:
+                        conn.execute("""
+                            UPDATE saved_playlists 
+                            SET total_tracks = (SELECT COUNT(*) FROM saved_playlist_tracks WHERE playlist_id = saved_playlists.id)
+                        """)
+                logger.info(f"Removed downloaded track {spotify_id} from archive and reset to pending.")
                 return True
         except Exception as e:
-            logger.error(f"Failed to delete track {spotify_id} from archive: {e}")
+            logger.error(f"Failed to remove downloaded track {spotify_id}: {e}")
             return False
+
+    def delete_track(self, spotify_id: str) -> bool:
+        """Deletes a track from the archive record and resets any associated playlist tracks."""
+        return self.remove_downloaded_track(spotify_id)
+
+    def reconcile_playlist_files(self, playlist_id: Optional[str] = None) -> Dict[str, int]:
+        """
+        Scans saved_playlist_tracks (and downloaded_tracks) and reconciles against files on disk.
+        - If a file path was moved/reorganized, updates file_path.
+        - If an audio file was deleted from disk, updates status to 'pending' and removes the record
+          from downloaded_tracks.
+        - Synchronizes saved_playlists.total_tracks with the actual count of tracks in saved_playlist_tracks.
+        """
+        reconciled = 0
+        repaired = 0
+        out_dir = config.get("download.output_dir", "downloads")
+        cand_dirs = [out_dir]
+        try:
+            from core.utils import get_default_download_dir
+            cand_dirs.append(str(get_default_download_dir()))
+        except Exception:
+            pass
+
+        try:
+            with self.connection() as conn:
+                # 1. First ensure total_tracks is synchronized with actual row count in saved_playlist_tracks
+                if playlist_id:
+                    conn.execute("""
+                        UPDATE saved_playlists 
+                        SET total_tracks = (
+                            SELECT COUNT(*) FROM saved_playlist_tracks WHERE playlist_id = saved_playlists.id
+                        )
+                        WHERE id = ?
+                    """, (playlist_id,))
+                else:
+                    conn.execute("""
+                        UPDATE saved_playlists 
+                        SET total_tracks = (
+                            SELECT COUNT(*) FROM saved_playlist_tracks WHERE playlist_id = saved_playlists.id
+                        )
+                    """)
+
+                # 2. Query tracks marked as downloaded
+                sql = """
+                    SELECT s.id, s.playlist_id, s.spotify_id, s.title, s.artist, s.album,
+                           s.file_path as s_path, d.file_path as d_path, p.name as playlist_name
+                    FROM saved_playlist_tracks s
+                    LEFT JOIN downloaded_tracks d ON s.spotify_id = d.spotify_id
+                    LEFT JOIN saved_playlists p ON s.playlist_id = p.id
+                    WHERE s.status = 'downloaded'
+                """
+                params = []
+                if playlist_id:
+                    sql += " AND s.playlist_id = ?"
+                    params.append(playlist_id)
+
+                rows = conn.execute(sql, tuple(params)).fetchall()
+                candidates = [dict(r) for r in rows]
+
+            # Reconcile paths outside the read transaction to avoid locks
+            missing_row_ids = []
+            missing_sp_ids = []
+            repaired_paths = []  # (new_path, s_id)
+
+            for r in candidates:
+                sp = r.get("s_path")
+                dp = r.get("d_path")
+                if sp and os.path.isfile(sp):
+                    continue
+                if dp and os.path.isfile(dp):
+                    repaired_paths.append((dp, r["id"]))
+                    continue
+
+                bname = os.path.basename(sp) if sp else (os.path.basename(dp) if dp else "")
+                found_path = None
+                if bname:
+                    pl_name = r.get("playlist_name") or ""
+                    from core.utils import sanitize_filename
+                    safe_pl = sanitize_filename(pl_name) if pl_name else ""
+                    for c_dir in cand_dirs:
+                        if not c_dir or not os.path.isdir(c_dir):
+                            continue
+                        if safe_pl:
+                            p_sub = os.path.join(c_dir, safe_pl, bname)
+                            if os.path.isfile(p_sub):
+                                found_path = p_sub
+                                break
+                        p_direct = os.path.join(c_dir, bname)
+                        if os.path.isfile(p_direct):
+                            found_path = p_direct
+                            break
+
+                if found_path:
+                    repaired_paths.append((found_path, r["id"]))
+                else:
+                    missing_row_ids.append(r["id"])
+                    missing_sp_ids.append(r["spotify_id"])
+
+            if repaired_paths or missing_row_ids:
+                with self.connection() as conn:
+                    with conn:
+                        for new_p, sid in repaired_paths:
+                            conn.execute("UPDATE saved_playlist_tracks SET file_path = ? WHERE id = ?", (new_p, sid))
+                        repaired = len(repaired_paths)
+
+                        if missing_row_ids:
+                            chunk_size = 500
+                            for i in range(0, len(missing_row_ids), chunk_size):
+                                chunk_ids = missing_row_ids[i:i + chunk_size]
+                                p = ",".join("?" for _ in chunk_ids)
+                                conn.execute(
+                                    f"UPDATE saved_playlist_tracks SET status = 'pending', file_path = '', quality_badge = '', source_type = '' WHERE id IN ({p})",
+                                    chunk_ids
+                                )
+                            for i in range(0, len(missing_sp_ids), chunk_size):
+                                chunk_sp = missing_sp_ids[i:i + chunk_size]
+                                p = ",".join("?" for _ in chunk_sp)
+                                conn.execute(
+                                    f"DELETE FROM downloaded_tracks WHERE spotify_id IN ({p})",
+                                    chunk_sp
+                                )
+                            reconciled = len(missing_row_ids)
+
+                        if playlist_id:
+                            conn.execute("""
+                                UPDATE saved_playlists 
+                                SET total_tracks = (SELECT COUNT(*) FROM saved_playlist_tracks WHERE playlist_id = ?) 
+                                WHERE id = ?
+                            """, (playlist_id, playlist_id))
+                        else:
+                            conn.execute("""
+                                UPDATE saved_playlists 
+                                SET total_tracks = (SELECT COUNT(*) FROM saved_playlist_tracks WHERE playlist_id = saved_playlists.id)
+                            """)
+
+            if reconciled > 0 or repaired > 0:
+                logger.info(f"Reconciled playlist files: {repaired} repaired, {reconciled} deleted tracks reset to pending.")
+            return {"reconciled": reconciled, "repaired": repaired}
+        except Exception as e:
+            logger.error(f"Failed to reconcile playlist files: {e}")
+            return {"reconciled": 0, "repaired": 0}
 
     def scan_and_index_directory(self, root_dir: str) -> int:
         """
@@ -1599,7 +1770,7 @@ class ArchiveManager:
 
                     # 3. Batch insert/update tracks
                     track_rows = []
-                    for t in tracks:
+                    for idx_t, t in enumerate(tracks, start=1):
                         dl_info = downloaded_map.get(t.id)
                         existing_fp = dl_info["file_path"] if dl_info else ""
                         q_badge = dl_info["quality_badge"] if dl_info else ""
@@ -1610,6 +1781,7 @@ class ArchiveManager:
                             q_badge = qb_inf
                             s_type = s_type or st_inf
                         status = "downloaded" if existing_fp else "pending"
+                        trk_num = idx_t if (getattr(t, "collection_type", "") == "playlist" or not getattr(t, "track_number", 0)) else t.track_number
                         track_rows.append((
                             playlist_id,
                             t.id,
@@ -1617,7 +1789,7 @@ class ArchiveManager:
                             t.artist_str,
                             t.album or "",
                             t.duration_ms,
-                            t.track_number,
+                            trk_num,
                             getattr(t, "disc_number", 1) or 1,
                             t.isrc or "",
                             t.cover_url or "",
@@ -1644,12 +1816,35 @@ class ArchiveManager:
                             disc_number = excluded.disc_number,
                             isrc = excluded.isrc,
                             cover_url = excluded.cover_url,
-                            status = CASE WHEN saved_playlist_tracks.status = 'downloaded' THEN 'downloaded' ELSE excluded.status END,
-                            file_path = CASE WHEN saved_playlist_tracks.file_path != '' THEN saved_playlist_tracks.file_path ELSE excluded.file_path END,
-                            quality_badge = CASE WHEN saved_playlist_tracks.quality_badge != '' THEN saved_playlist_tracks.quality_badge ELSE excluded.quality_badge END,
-                            source_type = CASE WHEN saved_playlist_tracks.source_type != '' THEN saved_playlist_tracks.source_type ELSE excluded.source_type END,
-                            genre = CASE WHEN saved_playlist_tracks.genre != '' THEN saved_playlist_tracks.genre ELSE excluded.genre END
+                            status = CASE 
+                                WHEN excluded.status = 'downloaded' THEN 'downloaded'
+                                WHEN saved_playlist_tracks.status = 'downloaded' THEN 'downloaded'
+                                ELSE excluded.status 
+                            END,
+                            file_path = CASE 
+                                WHEN excluded.file_path != '' THEN excluded.file_path 
+                                WHEN saved_playlist_tracks.file_path != '' THEN saved_playlist_tracks.file_path
+                                ELSE '' 
+                            END,
+                            quality_badge = CASE 
+                                WHEN excluded.quality_badge != '' THEN excluded.quality_badge 
+                                WHEN saved_playlist_tracks.quality_badge != '' THEN saved_playlist_tracks.quality_badge
+                                ELSE '' 
+                            END,
+                            source_type = CASE 
+                                WHEN excluded.source_type != '' THEN excluded.source_type 
+                                WHEN saved_playlist_tracks.source_type != '' THEN saved_playlist_tracks.source_type
+                                ELSE '' 
+                            END,
+                            genre = CASE WHEN excluded.genre != '' THEN excluded.genre ELSE saved_playlist_tracks.genre END
                     """, track_rows)
+
+                    # 4. Synchronize total_tracks with actual deduplicated count in saved_playlist_tracks
+                    conn.execute("""
+                        UPDATE saved_playlists 
+                        SET total_tracks = (SELECT COUNT(*) FROM saved_playlist_tracks WHERE playlist_id = ?) 
+                        WHERE id = ?
+                    """, (playlist_id, playlist_id))
 
                 logger.info(f"Saved playlist '{name}' ({len(tracks)} tracks) into database.")
                 return self.get_saved_playlist(playlist_id) or {}
@@ -1670,11 +1865,20 @@ class ArchiveManager:
         with self._db_lock:
             existing_tracks = self.get_saved_playlist_tracks(playlist_id)
             existing_ids = {t["spotify_id"] for t in existing_tracks}
-            new_ids = {t.id for t in new_tracks}
+            new_ids = {t.id for t in new_tracks if t.id}
 
             added_count = len(new_ids - existing_ids)
             removed_ids = existing_ids - new_ids
             removed_count = len(removed_ids)
+
+            # Safety guard: prevent accidental wiping of library on truncated/partial API responses
+            if len(new_tracks) < len(existing_tracks) * 0.5 and len(existing_tracks) > 50:
+                logger.warning(
+                    f"Sync received only {len(new_tracks)} tracks, but existing playlist has {len(existing_tracks)}. "
+                    f"Skipping track deletions to protect library from truncated API response."
+                )
+                removed_ids = set()
+                removed_count = 0
 
             if removed_ids:
                 try:
@@ -1730,9 +1934,9 @@ class ArchiveManager:
                 rows = conn.execute(query).fetchall()
                 results = []
                 for r in rows:
-                    tot = r["total_tracks"] or r["track_count"] or 0
+                    tot = r["track_count"] if (r["track_count"] and r["track_count"] > 0) else (r["total_tracks"] or 0)
                     down = r["downloaded_count"] or 0
-                    pend = r["pending_count"] or 0
+                    pend = r["pending_count"] if (tot == 0 or tot == down) else max(0, tot - down)
                     pct = round((down / tot * 100.0), 1) if tot > 0 else 0.0
 
                     local_cover = resolve_collection_cover(r["name"])
@@ -1773,9 +1977,9 @@ class ArchiveManager:
                 r = conn.execute(query, (playlist_id,)).fetchone()
                 if not r:
                     return None
-                tot = r["total_tracks"] or r["track_count"] or 0
+                tot = r["track_count"] if (r["track_count"] and r["track_count"] > 0) else (r["total_tracks"] or 0)
                 down = r["downloaded_count"] or 0
-                pend = r["pending_count"] or 0
+                pend = r["pending_count"] if (tot == 0 or tot == down) else max(0, tot - down)
                 pct = round((down / tot * 100.0), 1) if tot > 0 else 0.0
 
                 local_cover = resolve_collection_cover(r["name"])
@@ -1815,6 +2019,8 @@ class ArchiveManager:
                         s.status,
                         COALESCE(NULLIF(s.genre, ''), d.genre, '') AS genre,
                         COALESCE(NULLIF(s.file_path, ''), d.file_path, '') AS file_path,
+                        s.file_path AS s_file_path,
+                        d.file_path AS d_file_path,
                         COALESCE(NULLIF(s.quality_badge, ''), d.quality_badge, '') AS quality_badge,
                         COALESCE(NULLIF(s.source_type, ''), d.source_type, '') AS source_type,
                         s.added_at

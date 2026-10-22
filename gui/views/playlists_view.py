@@ -1,7 +1,10 @@
 import os
 import subprocess
 import threading
+import logging
 from typing import Optional, List, Dict, Any
+
+logger = logging.getLogger("gui.views.playlists")
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QModelIndex, QRectF, QUrl
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QColor, QDesktopServices
@@ -131,10 +134,18 @@ class EditPlaylistDialog(MessageBoxBase):
         self.viewLayout.addWidget(url_title)
 
         self.url_input = LineEdit(self)
-        self.url_input.setPlaceholderText("https://open.spotify.com/playlist/...")
+        self.url_input.setPlaceholderText("https://open.spotify.com/playlist/... or collection/tracks")
         self.url_input.setClearButtonEnabled(True)
         self.url_input.setText(playlist_data.get("spotify_url", ""))
         self.viewLayout.addWidget(self.url_input)
+
+        url_helper_row = QHBoxLayout()
+        url_helper_row.setSpacing(6)
+        self.liked_songs_preset_btn = PushButton(FluentIcon.HEART, "Use Spotify Liked Songs (collection/tracks)", self)
+        self.liked_songs_preset_btn.clicked.connect(self._set_liked_songs_url)
+        url_helper_row.addWidget(self.liked_songs_preset_btn)
+        url_helper_row.addStretch(1)
+        self.viewLayout.addLayout(url_helper_row)
 
         # 3. Artwork / Cover section
         cover_title = CaptionLabel("Cover Artwork (URL or local image file)", self)
@@ -186,6 +197,12 @@ class EditPlaylistDialog(MessageBoxBase):
 
     def _validate_inputs(self):
         self.yesButton.setEnabled(bool(self.name_input.text().strip()))
+
+    def _set_liked_songs_url(self):
+        self.url_input.setText("https://open.spotify.com/collection/tracks")
+        cur_name = self.name_input.text().strip().lower()
+        if not cur_name or cur_name in ("playlist", "spotify playlist"):
+            self.name_input.setText("Liked Songs")
 
     def _browse_local_cover(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -538,6 +555,7 @@ class PlaylistsView(QWidget):
     sig_auth_done = pyqtSignal(bool, str)
     sig_sync_done = pyqtSignal(str, dict)
     sig_sync_failed = pyqtSignal(str, str)
+    sig_sync_progress = pyqtSignal(str, int, int)
 
     def __init__(
         self,
@@ -945,6 +963,7 @@ class PlaylistsView(QWidget):
         self.sig_auth_done.connect(self._on_auth_done)
         self.sig_sync_done.connect(self._on_sync_done)
         self.sig_sync_failed.connect(self._on_sync_failed)
+        self.sig_sync_progress.connect(self._on_sync_progress)
 
         # Live bridging from download queue
         self.bridge.sig_completed.connect(self._handle_bridge_completed)
@@ -1108,10 +1127,10 @@ class PlaylistsView(QWidget):
             return
 
         entity_type, entity_id = parsed
-        if entity_type not in ("playlist", "album"):
+        if entity_type not in ("playlist", "album", "collection"):
             InfoBar.warning(
                 title="Not a Playlist",
-                content="Please provide a Spotify Playlist or Album link to save tracks to offline storage.",
+                content="Please provide a Spotify Playlist, Album, or Liked Songs link to save tracks to offline storage.",
                 orient=Qt.Orientation.Horizontal,
                 position=InfoBarPosition.TOP,
                 duration=3500,
@@ -1141,15 +1160,16 @@ class PlaylistsView(QWidget):
                     self.sig_save_failed.emit("No tracks could be found in the provided Spotify link.")
                     return
 
-                pl_name = tracks[0].collection_name or "Spotify Playlist"
-                pl_cover = tracks[0].collection_cover_url or tracks[0].cover_url or ""
+                pl_name = (tracks[0].collection_name if tracks else "") or ("Liked Songs" if entity_type == "collection" else "Spotify Playlist")
+                pl_cover = (tracks[0].collection_cover_url if tracks else "") or (tracks[0].cover_url if tracks else "")
+                pl_id = entity_id if entity_type != "collection" else "collection_tracks"
 
                 saved_info = self.archive.save_playlist(
                     name=pl_name,
                     spotify_url=url,
                     cover_url=pl_cover,
                     tracks=tracks,
-                    playlist_id=entity_id
+                    playlist_id=pl_id
                 )
                 is_guest = getattr(self.spotify_client, "last_resolution_mode", "api") == "guest"
                 was_truncated = getattr(self.spotify_client, "last_was_truncated", False) or (is_guest and len(tracks) == 100)
@@ -1245,6 +1265,11 @@ class PlaylistsView(QWidget):
 
     def reload_playlists(self, search_query: str = ""):
         """Refreshes the playlists grid and top metrics."""
+        try:
+            self.archive.reconcile_playlist_files()
+        except Exception as e_rec:
+            logger.debug(f"File reconciliation on reload_playlists skipped: {e_rec}")
+
         # Clear existing cards
         while self.playlists_layout.count() > 1:
             child = self.playlists_layout.takeAt(0)
@@ -1381,6 +1406,10 @@ class PlaylistsView(QWidget):
             )
             return
 
+        if hasattr(self, "detail_sync_btn") and self.detail_sync_btn:
+            self.detail_sync_btn.setEnabled(False)
+            self.detail_sync_btn.setText("Syncing...")
+
         pl_name = target_pl.get("name", "Playlist")
         InfoBar.info(
             title="Syncing Playlist",
@@ -1391,6 +1420,9 @@ class PlaylistsView(QWidget):
             parent=self
         )
 
+        def on_progress(cur: int, tot: int):
+            safe_emit(self.sig_sync_progress, playlist_id, cur, tot)
+
         def sync_worker():
             try:
                 if SpotifyClient.parse_url(pl_url):
@@ -1398,7 +1430,7 @@ class PlaylistsView(QWidget):
                         client_id=config.get("spotify.client_id", ""),
                         client_secret=config.get("spotify.client_secret", "")
                     )
-                    tracks = self.spotify_client.resolve(pl_url)
+                    tracks = self.spotify_client.resolve(pl_url, progress_callback=on_progress)
                 else:
                     ytdlp_engine = getattr(self.qm.engine, "ytdlp", None)
                     if not ytdlp_engine:
@@ -1417,40 +1449,70 @@ class PlaylistsView(QWidget):
 
         threading.Thread(target=sync_worker, daemon=True, name=f"SyncPlaylist_{playlist_id}").start()
 
+    def _on_sync_progress(self, playlist_id: str, current: int, total: int):
+        if hasattr(self, "detail_sync_btn") and self.detail_sync_btn and str(self.current_playlist_id) == str(playlist_id):
+            self.detail_sync_btn.setText(f"Syncing ({current}/{total})...")
+
     def _on_sync_done(self, playlist_id: str, summary: Dict[str, Any]):
+        if hasattr(self, "detail_sync_btn") and self.detail_sync_btn:
+            self.detail_sync_btn.setEnabled(True)
+            self.detail_sync_btn.setText("Sync Playlist")
+
         added = summary.get("added", 0)
         removed = summary.get("removed", 0)
         total = summary.get("total", 0)
         delta_tracks = summary.get("delta_tracks", [])
+        target_pl = self.archive.get_saved_playlist(playlist_id)
+        pl_name = target_pl.get("name", "Playlist") if target_pl else "Playlist"
+
         if delta_tracks:
+            # Mark newly discovered tracks as queued in DB, enqueue to queue manager, and start download
+            self.archive.mark_saved_tracks_queued(playlist_id, [t.id for t in delta_tracks])
             self.qm.enqueue(delta_tracks)
-            msg = f"Sync complete: {added} new track(s) added & enqueued to download, {removed} removed. Total tracks: {total}."
+            self.qm.start_all()
+            msg = f"Sync complete for '{pl_name}': {added} new track(s) added & enqueued to download, {removed} removed. Total tracks: {total}."
         else:
-            msg = f"Sync complete: Up to date ({removed} removed). Total tracks: {total}."
+            msg = f"Sync complete for '{pl_name}': Up to date with Spotify ({removed} removed). Total tracks: {total}."
+            if target_pl and "liked" in pl_name.lower() and "collection" not in (target_pl.get("spotify_url") or "").lower():
+                msg += " (Tip: To sync with your personal Liked Songs library, click 'Edit Playlist' and set link to: https://open.spotify.com/collection/tracks)"
 
         InfoBar.success(
             title="Playlist Synced",
             content=msg,
             orient=Qt.Orientation.Horizontal,
             position=InfoBarPosition.TOP,
-            duration=5000,
+            duration=6000,
             parent=self
         )
         self.reload_playlists()
         if str(self.current_playlist_id) == str(playlist_id):
-            updated_pl = next((p for p in self.archive.get_saved_playlists() if str(p.get("id")) == str(playlist_id)), None)
+            updated_pl = self.archive.get_saved_playlist(playlist_id)
             if updated_pl:
                 self._open_playlist_detail(updated_pl)
 
     def _on_sync_failed(self, playlist_id: str, err_msg: str):
-        InfoBar.error(
-            title="Sync Failed",
-            content=f"Error syncing playlist tracks: {err_msg}",
-            orient=Qt.Orientation.Horizontal,
-            position=InfoBarPosition.TOP,
-            duration=5000,
-            parent=self
-        )
+        if hasattr(self, "detail_sync_btn") and self.detail_sync_btn:
+            self.detail_sync_btn.setEnabled(True)
+            self.detail_sync_btn.setText("Sync Playlist")
+
+        if "scope" in err_msg.lower() or "authorization" in err_msg.lower():
+            InfoBar.warning(
+                title="Authorization Required",
+                content=err_msg,
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=7000,
+                parent=self
+            )
+        else:
+            InfoBar.error(
+                title="Sync Failed",
+                content=f"Error syncing playlist tracks: {err_msg}",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+                parent=self
+            )
 
     def _sync_all_playlists(self):
         playlists = self.archive.get_saved_playlists()
@@ -1509,6 +1571,13 @@ class PlaylistsView(QWidget):
     # -------------------------------------------------------------
     def _open_playlist_detail(self, playlist_data: Dict[str, Any]):
         self.current_playlist_id = playlist_data["id"]
+        try:
+            self.archive.reconcile_playlist_files(self.current_playlist_id)
+        except Exception as e_rec:
+            logger.debug(f"File reconciliation on _open_playlist_detail skipped: {e_rec}")
+        fresh_data = self.archive.get_saved_playlist(self.current_playlist_id)
+        if fresh_data:
+            playlist_data = fresh_data
         self.current_playlist_data = playlist_data
 
         # Update Header Banner
@@ -1977,7 +2046,7 @@ class PlaylistsView(QWidget):
             return
 
         menu = QMenu(self)
-        menu.setStyleSheet("""
+        menu_style = """
             QMenu {
                 background-color: #242424;
                 color: #FFFFFF;
@@ -1992,13 +2061,44 @@ class PlaylistsView(QWidget):
             QMenu::item:selected {
                 background-color: #383838;
             }
-        """)
+        """
+        menu.setStyleSheet(menu_style)
 
         act_play = None
         if item.status == "Completed" and item.output_path and os.path.isfile(item.output_path):
             act_play = menu.addAction("Play Track")
 
-        act_download = menu.addAction("Download This Track")
+        is_downloaded = (item.status == "Completed" or (item.output_path and os.path.isfile(item.output_path)))
+
+        act_download = None
+        act_dl_melo = None
+        act_dl_musi = None
+        act_dl_yt = None
+
+        act_redl_auto = None
+        act_redl_melo = None
+        act_redl_musi = None
+        act_redl_yt = None
+        act_delete_file = None
+
+        if is_downloaded:
+            redl_menu = menu.addMenu("Delete & Re-download")
+            redl_menu.setStyleSheet(menu_style)
+            act_redl_auto = redl_menu.addAction("Auto (Best Available)")
+            act_redl_melo = redl_menu.addAction("From Telegram Bot (MeloBot)")
+            act_redl_musi = redl_menu.addAction("From Musilon (320k MP3)")
+            act_redl_yt = redl_menu.addAction("From YouTube Music")
+
+            act_delete_file = menu.addAction("Delete Downloaded File")
+        else:
+            act_download = menu.addAction("Download This Track")
+            dl_sub = menu.addMenu("Download via Specific Engine")
+            dl_sub.setStyleSheet(menu_style)
+            act_dl_melo = dl_sub.addAction("Telegram Bot (MeloBot)")
+            act_dl_musi = dl_sub.addAction("Musilon")
+            act_dl_yt = dl_sub.addAction("YouTube Music")
+
+        menu.addSeparator()
         act_copy_title = menu.addAction("Copy Title & Artist")
         act_copy_url = menu.addAction("Copy Spotify URL")
 
@@ -2041,8 +2141,100 @@ class PlaylistsView(QWidget):
                     os.startfile(item.output_path)
             else:
                 InfoBar.warning(title="File Missing", content="The audio file was not found on disk.", parent=self)
-        elif action == act_download:
+        elif act_delete_file and action == act_delete_file:
             t = item.track
+            file_to_del = item.output_path
+            if not file_to_del:
+                row = self.archive.find_track(spotify_id=t.id)
+                if row:
+                    file_to_del = row.get("file_path", "")
+            if file_to_del and os.path.exists(file_to_del):
+                try:
+                    os.remove(file_to_del)
+                except Exception as e_del:
+                    logger.warning(f"Failed to delete file {file_to_del}: {e_del}")
+            self.archive.remove_downloaded_track(t.id, playlist_id=self.current_playlist_id)
+            item.status = "Pending"
+            item.output_path = ""
+            item.quality_badge = ""
+            item.source_type = ""
+            item.progress_percent = 0.0
+            self.model.update_status(t.id, "Pending")
+            self._refresh_detail_header()
+            InfoBar.success(
+                title="File Deleted",
+                content=f"Deleted '{t.title}' from disk and marked as Pending.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=3500,
+                parent=self
+            )
+        elif action in (act_redl_auto, act_redl_melo, act_redl_musi, act_redl_yt):
+            t = item.track
+            file_to_del = item.output_path
+            if not file_to_del:
+                row = self.archive.find_track(spotify_id=t.id)
+                if row:
+                    file_to_del = row.get("file_path", "")
+            if file_to_del and os.path.exists(file_to_del):
+                try:
+                    os.remove(file_to_del)
+                except Exception as e_del:
+                    logger.warning(f"Failed to delete old file {file_to_del}: {e_del}")
+            self.archive.remove_downloaded_track(t.id, playlist_id=self.current_playlist_id)
+
+            engine_choice = "auto"
+            engine_label = "Auto (Best Available)"
+            if action == act_redl_melo:
+                engine_choice = "melobot"
+                engine_label = "Telegram Bot (MeloBot)"
+            elif action == act_redl_musi:
+                engine_choice = "musilon"
+                engine_label = "Musilon"
+            elif action == act_redl_yt:
+                engine_choice = "youtube"
+                engine_label = "YouTube Music"
+
+            t.preferred_engine = engine_choice
+            if self.current_playlist_data:
+                t.collection_name = self.current_playlist_data.get("name", "Playlist")
+                t.collection_type = "playlist"
+                t.collection_cover_url = self.current_playlist_data.get("cover_url", "") or ""
+
+            self.archive.mark_saved_tracks_queued(self.current_playlist_id, [t.id])
+            self.qm.enqueue([t])
+            self.qm.start_all()
+
+            item.status = "Queued"
+            item.output_path = ""
+            item.quality_badge = ""
+            item.source_type = ""
+            item.progress_percent = 0.0
+            self.model.update_status(t.id, "Queued")
+            self._refresh_detail_header()
+            InfoBar.info(
+                title="Re-downloading",
+                content=f"Re-downloading '{t.title}' via {engine_label}...",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+                parent=self
+            )
+        elif action in (act_download, act_dl_melo, act_dl_musi, act_dl_yt):
+            t = item.track
+            engine_choice = None
+            engine_label = "Auto"
+            if action == act_dl_melo:
+                engine_choice = "melobot"
+                engine_label = "Telegram Bot"
+            elif action == act_dl_musi:
+                engine_choice = "musilon"
+                engine_label = "Musilon"
+            elif action == act_dl_yt:
+                engine_choice = "youtube"
+                engine_label = "YouTube Music"
+
+            t.preferred_engine = engine_choice
             if self.current_playlist_data:
                 t.collection_name = self.current_playlist_data.get("name", "Playlist")
                 t.collection_type = "playlist"
@@ -2052,6 +2244,15 @@ class PlaylistsView(QWidget):
             self.qm.start_all()
             item.status = "Queued"
             self.model.update_status(t.id, "Queued")
+            if engine_choice:
+                InfoBar.info(
+                    title="Downloading",
+                    content=f"Downloading '{t.title}' via {engine_label}...",
+                    orient=Qt.Orientation.Horizontal,
+                    position=InfoBarPosition.TOP,
+                    duration=3500,
+                    parent=self
+                )
         elif act_cancel and action == act_cancel:
             self.qm.cancel_track(item.track.id)
             self.archive.update_saved_track_status(self.current_playlist_id, item.track.id, "pending")

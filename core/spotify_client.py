@@ -40,6 +40,7 @@ class TrackMetadata:
     collection_name: str = "Singles" # Playlist title, album title, or "Singles"
     collection_cover_url: str = ""   # Playlist or album cover art URL
     genres: List[str] = field(default_factory=list)
+    preferred_engine: Optional[str] = None
 
     @property
     def genre_str(self) -> str:
@@ -173,7 +174,7 @@ class SpotifyClient:
                 logger.warning(f"Could not remove token cache: {e}")
         self._init_api()
 
-    def _ensure_user_auth(self) -> bool:
+    def _ensure_user_auth(self, require_library_read: bool = False) -> bool:
         """Ensures self._sp is using SpotifyOAuth with valid or refreshed tokens."""
         if not self._oauth:
             self._init_api()
@@ -181,13 +182,20 @@ class SpotifyClient:
             return False
 
         if self.has_user_auth():
+            if require_library_read:
+                cached = self._oauth.cache_handler.get_cached_token() if hasattr(self._oauth, "cache_handler") and self._oauth.cache_handler else self._oauth.get_cached_token()
+                scope = (cached or {}).get("scope", "")
+                if "user-library-read" not in scope:
+                    logger.info("Cached token lacks 'user-library-read' scope. Re-authorizing...")
+                    return self.authorize_user(force_new=True)
+
             if not isinstance(getattr(self._sp, 'auth_manager', None), SpotifyOAuth):
                 self._sp = spotipy.Spotify(auth_manager=self._oauth)
                 logger.info("Switched Spotify API client to active user authorization session.")
             return True
 
         try:
-            logger.info("Playlist resolution requires user authorization. Starting Spotify OAuth login...")
+            logger.info("Resolution requires user authorization. Starting Spotify OAuth login...")
             return self.authorize_user()
         except Exception as e:
             logger.warning(f"Spotify OAuth authorization attempt failed: {e}")
@@ -260,7 +268,7 @@ class SpotifyClient:
                     "client_id": self.client_id,
                     "client_secret": self.client_secret,
                     "redirect_uri": redirect_uri,
-                    "scope": "playlist-read-private playlist-read-collaborative",
+                    "scope": "playlist-read-private playlist-read-collaborative user-library-read",
                     "show_dialog": True,
                     "open_browser": True
                 }
@@ -305,19 +313,32 @@ class SpotifyClient:
         self.client_secret = client_secret.strip()
         self._init_api()
 
+    COLLECTION_URL_PATTERN = re.compile(
+        r'(?:https?://open\.spotify\.com/|spotify:)(?:user[/:][^/:]+[/:])?collection(?:[/:]tracks|[/:]liked)?/?$',
+        re.IGNORECASE
+    )
+
     @classmethod
     def parse_url(cls, url_or_uri: str) -> Optional[Tuple[str, str]]:
         """
         Parses Spotify link/URI into (entity_type, entity_id).
+        Supports tracks, albums, playlists, artists, and personal collections (Liked Songs).
         Returns None if invalid.
         """
         clean = url_or_uri.strip().split('?')[0]
+        if cls.COLLECTION_URL_PATTERN.search(clean) or clean.rstrip('/') in ("https://open.spotify.com/collection/tracks", "spotify:collection:tracks"):
+            return "collection", "tracks"
+
         match = cls.SPOTIFY_URL_PATTERN.search(clean)
         if match:
             return match.group("type"), match.group("id")
         return None
 
-    def resolve(self, url_or_uri: str) -> List[TrackMetadata]:
+    def resolve(
+        self,
+        url_or_uri: str,
+        progress_callback: Optional[Any] = None
+    ) -> List[TrackMetadata]:
         """
         Main entry point to resolve a Spotify URL/URI to a list of TrackMetadata.
         """
@@ -333,18 +354,26 @@ class SpotifyClient:
         self.last_api_error = ""
         self.last_owner_name = ""
 
-        # For playlists, Spotify requires user authentication since late 2024.
-        # Ensure self._sp is using valid or refreshed user OAuth tokens.
-        if entity_type == "playlist" and self.has_credentials():
-            self._ensure_user_auth()
+        # For playlists and user collections (Liked Songs), Spotify requires user authentication.
+        if entity_type in ("playlist", "collection") and self.has_credentials():
+            self._ensure_user_auth(require_library_read=(entity_type == "collection"))
 
         if self._sp:
             try:
-                tracks = self._resolve_with_api(entity_type, entity_id)
+                tracks = self._resolve_with_api(entity_type, entity_id, progress_callback=progress_callback)
                 self.last_resolution_mode = "api"
                 return tracks
             except Exception as e:
+                if entity_type == "collection":
+                    # Guest mode cannot scrape a private user library
+                    raise e
                 logger.warning(f"Web API resolution failed: {e}. Attempting guest scrape fallback.")
+
+        if entity_type == "collection":
+            raise RuntimeError(
+                "Spotify Liked Songs is a private collection and requires an authorized Spotify account. "
+                "Please configure Spotify API keys and click 'Authorize Spotify Account'."
+            )
 
         self.last_resolution_mode = "guest"
         return self._resolve_with_guest(entity_type, entity_id)
@@ -352,7 +381,12 @@ class SpotifyClient:
     # -------------------------------------------------------------------------
     # Official Spotify Web API Resolver
     # -------------------------------------------------------------------------
-    def _resolve_with_api(self, entity_type: str, entity_id: str) -> List[TrackMetadata]:
+    def _resolve_with_api(
+        self,
+        entity_type: str,
+        entity_id: str,
+        progress_callback: Optional[Any] = None
+    ) -> List[TrackMetadata]:
         if not self._sp:
             raise RuntimeError("Spotipy client not initialized.")
 
@@ -450,22 +484,98 @@ class SpotifyClient:
                 if not total_expected and results.get("total"):
                     total_expected = results.get("total", 0)
 
-                for item_wrapper in results["items"]:
+                for idx_in_batch, item_wrapper in enumerate(results["items"]):
                     track_item = item_wrapper.get("item") or item_wrapper.get("track")
                     if track_item and track_item.get("id"):
-                        tracks.append(self._format_track_item(
+                        formatted_track = self._format_track_item(
                             track_item,
                             collection_type="playlist",
                             collection_name=pl_title,
                             collection_cover_url=pl_cover
-                        ))
+                        )
+                        formatted_track.track_number = offset + idx_in_batch + 1
+                        tracks.append(formatted_track)
 
                 logger.info(f"Resolved {len(tracks)}/{total_expected or '?'} tracks from playlist '{pl_title}'...")
+
+                if progress_callback and total_expected:
+                    try:
+                        progress_callback(len(tracks), total_expected)
+                    except Exception:
+                        pass
 
                 if results.get("next"):
                     offset += limit
                 else:
                     break
+            self.last_total_tracks = len(tracks)
+            return tracks
+
+        elif entity_type == "collection":
+            pl_title = "Liked Songs"
+            pl_cover = ""
+            tracks: List[TrackMetadata] = []
+            offset = 0
+            limit = 50
+            total_expected = 0
+            while True:
+                retries = 3
+                results = None
+                while retries > 0:
+                    try:
+                        results = self._sp.current_user_saved_tracks(offset=offset, limit=limit)
+                        break
+                    except Exception as e:
+                        err_str = str(e)
+                        if "403" in err_str and ("scope" in err_str.lower() or "insufficient" in err_str.lower()):
+                            logger.warning("Spotify API 403: Insufficient client scope. Re-authorizing for Liked Songs...")
+                            try:
+                                if self.authorize_user(force_new=True):
+                                    results = self._sp.current_user_saved_tracks(offset=offset, limit=limit)
+                                    break
+                            except Exception as reauth_err:
+                                logger.error(f"Automatic re-authorization failed: {reauth_err}")
+                            self.last_api_error = "insufficient_scope"
+                            raise RuntimeError(
+                                "Spotify Liked Songs requires account authorization with 'user-library-read' permission. "
+                                "Please click 'Switch Account' / 'Authorize Spotify Account' in the banner to grant access."
+                            ) from e
+                        retries -= 1
+                        time.sleep(2.0)
+                        if retries == 0:
+                            raise e
+
+                if not results or not results.get("items"):
+                    break
+
+                if not total_expected and results.get("total"):
+                    total_expected = results.get("total", 0)
+
+                for idx_in_batch, item_wrapper in enumerate(results["items"]):
+                    track_item = item_wrapper.get("track")
+                    if track_item and track_item.get("id"):
+                        formatted_track = self._format_track_item(
+                            track_item,
+                            collection_type="playlist",
+                            collection_name=pl_title,
+                            collection_cover_url=pl_cover
+                        )
+                        formatted_track.track_number = offset + idx_in_batch + 1
+                        tracks.append(formatted_track)
+
+                logger.info(f"Resolved {len(tracks)}/{total_expected or '?'} tracks from collection 'Liked Songs'...")
+
+                if progress_callback and total_expected:
+                    try:
+                        progress_callback(len(tracks), total_expected)
+                    except Exception:
+                        pass
+
+                if results.get("next"):
+                    offset += limit
+                else:
+                    break
+
             self.last_total_tracks = len(tracks)
             return tracks
 

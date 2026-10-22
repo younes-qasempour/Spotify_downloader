@@ -52,7 +52,8 @@ class CascadingAudioEngine:
         track: TrackMetadata,
         musilon_only: bool = False,
         skip_musilon: bool = False,
-        cancel_check: Optional[Callable[[], bool]] = None
+        cancel_check: Optional[Callable[[], bool]] = None,
+        preferred_engine: Optional[str] = None
     ) -> Optional[ResolvedTrackSource]:
         """
         Executes cascading resolution ladder for a track.
@@ -142,6 +143,34 @@ class CascadingAudioEngine:
                     return None
                 logger.warning(f"Musilon resolution failed for {track.title}: {e}")
             return None
+
+        # Check if caller specified an explicit engine preference (e.g. user selected Re-download via ...)
+        target_engine = (preferred_engine or getattr(track, "preferred_engine", None) or "").strip().lower()
+        if target_engine:
+            if target_engine == "melobot":
+                res = _try_melobot()
+                if res:
+                    return res
+                logger.info(f"Preferred engine MeloBot yielded no match for '{track.title}'. Falling back.")
+            elif target_engine == "musilon":
+                res = _try_musilon()
+                if res:
+                    return res
+                logger.info(f"Preferred engine Musilon yielded no match for '{track.title}'. Falling back.")
+            elif target_engine in ("youtube", "ytdlp"):
+                try:
+                    yt_src = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
+                    if yt_src:
+                        act_ext = yt_src.audio_format or "opus"
+                        badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
+                        return ResolvedTrackSource(
+                            source_type="YouTube Music",
+                            quality_badge=badge,
+                            source_obj=yt_src,
+                            file_extension=act_ext
+                        )
+                except Exception as e:
+                    logger.warning(f"Preferred engine YouTube failed for {track.title}: {e}")
 
         # 1. Primary Engine Attempt
         primary_res = _try_melobot() if use_melobot_primary else _try_musilon()

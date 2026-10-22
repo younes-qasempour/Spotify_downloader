@@ -114,7 +114,7 @@ class MainWindow(FluentWindow):
         )
         self.playlists_view.setObjectName("playlists_view")
 
-        self.completed_view = CompletedView(self.bridge, archive_manager=self.archive_manager, parent=self)
+        self.completed_view = CompletedView(self.bridge, archive_manager=self.archive_manager, queue_manager=self.queue_manager, parent=self)
         self.completed_view.setObjectName("completed_view")
 
         self.settings_view = SettingsView(

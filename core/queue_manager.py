@@ -35,6 +35,7 @@ class QueueItem:
     error_message: str = ""
     output_path: str = ""
     cancelled: bool = False
+    preferred_engine: Optional[str] = None
 
 
 class DownloadQueueManager:
@@ -291,13 +292,14 @@ class DownloadQueueManager:
                     existing.error_message = ""
                     existing.speed_str = ""
                     existing.eta_str = ""
+                    existing.preferred_engine = getattr(t, "preferred_engine", None)
                     self._queue.put(existing)
                     enqueued_items.append(existing)
                     if self.on_track_status_changed:
                         self.on_track_status_changed(t.id, "Queued")
                     continue
 
-                item = QueueItem(track=t, status="Queued")
+                item = QueueItem(track=t, status="Queued", preferred_engine=getattr(t, "preferred_engine", None))
                 self._items[t.id] = item
                 self._queue.put(item)
                 enqueued_items.append(item)
@@ -432,12 +434,16 @@ class DownloadQueueManager:
                     logger.debug(f"Could not save collection cover art to cache: {e_cov}")
 
             # 1. Archive Deduplication Check (Instant Local Reuse)
-            archived = self.archive.find_track(
-                spotify_id=track.id,
-                isrc=track.isrc,
-                title=track.title,
-                artist=track.primary_artist
-            )
+            # If the user explicitly requested a specific engine or a re-download, bypass archive reuse
+            skip_archive = bool(getattr(track, "preferred_engine", None) or getattr(item, "preferred_engine", None))
+            archived = None
+            if not skip_archive:
+                archived = self.archive.find_track(
+                    spotify_id=track.id,
+                    isrc=track.isrc,
+                    title=track.title,
+                    artist=track.primary_artist
+                )
 
             # Ensure archived file is a genuine playable audio file before reusing
             if archived and os.path.isfile(archived.get("file_path", "")):
@@ -568,13 +574,14 @@ class DownloadQueueManager:
                 self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
                 return
 
+            pref_eng = getattr(track, "preferred_engine", None) or getattr(item, "preferred_engine", None)
             source_engine = str(config.get("source_engine", "musilon")).strip().lower()
             is_melobot_mode = (source_engine == "melobot" or (config.get("telegram.enabled", False) and not config.get("musilon.enabled", True)))
-            if is_melobot_mode:
+            if pref_eng == "melobot" or (not pref_eng and is_melobot_mode):
                 with self._telegram_stream_lock:
-                    resolved = self.engine.resolve_source(track, skip_musilon=skip_mus, cancel_check=cancel_check)
+                    resolved = self.engine.resolve_source(track, skip_musilon=skip_mus, cancel_check=cancel_check, preferred_engine=pref_eng)
             else:
-                resolved = self.engine.resolve_source(track, skip_musilon=skip_mus, cancel_check=cancel_check)
+                resolved = self.engine.resolve_source(track, skip_musilon=skip_mus, cancel_check=cancel_check, preferred_engine=pref_eng)
 
             if cancel_check():
                 self._update_status(item, "Stopped")

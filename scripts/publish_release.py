@@ -22,30 +22,31 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.5.3'
-    release_name = 'Flacify v1.5.3 — Persian Resolution, Anime Theme Precision & Offline DB Hardening'
+    tag = 'v1.5.4'
+    release_name = 'Flacify v1.5.4 — Liked Songs Live Sync, Context Menu Actions & Disk Reconciliation'
 
     release_body = (
-        "# 🚀 Flacify v1.5.3 Release Notes\n\n"
-        "### 🎼 High-Precision Persian Audio Resolution\n"
-        "- **Non-Destructive Unicode Normalization**: Replaced ASCII stripping with Unicode NFKD non-spacing mark removal (`Mn`), preserving Persian, Arabic, and multilingual characters.\n"
-        "- **Persian Consonant-Skeleton & Verse Matching**: Added consonant-skeleton matching for Persian titles (e.g. `Bad-i Saba` matching `باد صبا`) and excluded Persian poetic phrases from `sig_extra` word penalties.\n"
-        "- **Artist Alias Expansion**: Added aliases for Iman Heydari / Moslem Fattahi (`مسلم فتاحی`) and Ghazal Shakeri (`غزل شاکری`), with official topic channel delivery duration tolerance expanded to 36s.\n"
-        "- **Live Track Delimiter Cleaning**: Stripped `(Live)` and `- Live` from core search queries for studio master accuracy while retaining version verification.\n\n"
-        "### ⚡ Anime Theme & Anti-Cover Precision\n"
-        "- **Anime Opening & Ending Detection**: Automatically parses `<Series> Opening - <Theme>` and expands artists to authentic original anime vocalists (e.g. `SawanoHiroyuki[nZk]`, `TOMORROW X TOGETHER` for Solo Leveling `LEveL`).\n"
-        "- **Indie Instrumental Cover Penalty**: Added -60.0 score penalty for guitar cover and amateur instrumental accounts (`guitar cover`, `piano cover`, `igyman`) to prioritize genuine studio vocal master releases.\n\n"
-        "### 🗄️ Database Persistence & Portability Hardening\n"
-        "- **Absolute Output Path Migration**: Prevented relative path desynchronization across working directories by automatically migrating empty or relative download directories to absolute `~/Music/Spotify Downloads`.\n"
-        "- **Multi-Folder Recovery & Path Normalization**: Database path lookup checks alternative and default download directories before cleaning records, protecting downloaded songs on other PCs.\n"
-        "- **SQLite WAL Checkpointing**: Automated `PRAGMA wal_checkpoint(TRUNCATE)` on application startup and graceful shutdown.\n"
-        "- **Inno Setup Working Directory Guard**: Explicit `WorkingDir: \"{app}\"` added to Desktop and Start Menu launcher shortcuts.\n\n"
-        "### ⚡ External yt-dlp Plugin Isolation\n"
-        "- **Subprocess Hang Elimination**: Explicitly added `compat_opts: {'no-plugins'}` across all yt-dlp invocations, preventing external Deno/POT script plugin timeouts.\n\n"
+        "# 🚀 Flacify v1.5.4 Release Notes\n\n"
+        "### 💜 Spotify Liked Songs Live Library Sync\n"
+        "- **Native `collection/tracks` Support**: Added full support for resolving, saving, and syncing Spotify's personal Liked Songs library (`https://open.spotify.com/collection/tracks`).\n"
+        "- **Direct Library Pagination**: Integrates Spotify's `/v1/me/tracks` (`current_user_saved_tracks`) with `user-library-read` OAuth scope and automatic re-authorization.\n"
+        "- **1-Click Library Migration**: Added a helper button in the *Edit Playlist* dialog to instantly connect any saved playlist to your live Spotify Liked Songs library.\n"
+        "- **Live Sync Progress Counter**: The Sync button now provides active visual feedback (e.g., `Syncing (1200/5530)...`) during large library scans.\n\n"
+        "### 🎛️ Context Menu Actions & Multi-Engine Re-download\n"
+        "- **Delete Downloaded File**: Right-click context option in Playlists and Completed views to delete physical files and revert status back to pending.\n"
+        "- **Delete & Re-download**: Force re-download individual songs using your preferred provider:\n"
+        "  - ⚡ **Auto (Best Quality)**\n"
+        "  - 🤖 **MeloBot Telegram (FLAC / 320k)**\n"
+        "  - 💎 **Musilon VIP (320k MP3)**\n"
+        "  - 📺 **YouTube Music (Opus)**\n"
+        "- **Archive Cache Bypass**: Re-downloads explicitly bypass archive file caching (`skip_archive=True`) to fetch freshly requested audio.\n\n"
+        "### 🗄️ Disk Reconciliation & Database Deduplication\n"
+        "- **Disk Reconciliation**: Automated scan (`reconcile_playlist_files`) checks physical files on disk, repairing paths or demoting missing tracks to pending.\n"
+        "- **Exact Count Alignment**: Total tracks strictly mirror deduplicated rows in `saved_playlist_tracks`.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.5.3.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.5.3.exe`\n"
+        "Download and run **`Flacify_Setup_v1.5.4.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.5.4.exe`\n"
     )
 
     token = get_github_token()
@@ -93,7 +94,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.3.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.4.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")
