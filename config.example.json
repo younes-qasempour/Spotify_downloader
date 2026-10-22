@@ -15,7 +15,7 @@
     "client_secret": ""
   },
   "download": {
-    "output_dir": "downloads",
+    "output_dir": "",
     "naming_template": "{artist} - {title}",
     "album_naming_template": "{track_num}. {artist} - {title}",
     "lyrics_mode": "embedded_only",

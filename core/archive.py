@@ -22,6 +22,9 @@ def normalize_path(path: str) -> str:
     """Normalizes path and ensures uppercase Windows drive letter for consistent deduplication."""
     if not path:
         return ""
+    if not os.path.isabs(path):
+        base_dir = config.get("download.output_dir") or str(get_default_download_dir())
+        path = os.path.join(base_dir, path)
     p = os.path.normpath(os.path.abspath(path))
     if os.name == 'nt' and len(p) > 1 and p[1] == ':':
         p = p[0].upper() + p[1:]
@@ -497,6 +500,38 @@ class ArchiveManager:
 
                 data = dict(row)
                 file_path = data.get("file_path", "")
+                if not (file_path and os.path.isfile(file_path)):
+                    # Check alternative locations (output_dir or default download dir)
+                    bname = os.path.basename(file_path) if file_path else ""
+                    if bname:
+                        for cand_dir in [
+                            config.get("download.output_dir", ""),
+                            str(get_default_download_dir()),
+                            str(Path.home() / "Music" / "Spotify Downloads"),
+                        ]:
+                            if not cand_dir or not os.path.isdir(cand_dir):
+                                continue
+                            # Search direct and subdirectories for the basename
+                            cand_p = os.path.join(cand_dir, bname)
+                            if os.path.isfile(cand_p):
+                                file_path = cand_p
+                                norm_cand = normalize_path(cand_p)
+                                data["file_path"] = norm_cand
+                                with conn:
+                                    conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE spotify_id = ?", (norm_cand, data["spotify_id"]))
+                                break
+                            # Also check collection subfolders
+                            coll_name = data.get("collection_name") or ""
+                            if coll_name:
+                                cand_sub = os.path.join(cand_dir, coll_name, bname)
+                                if os.path.isfile(cand_sub):
+                                    file_path = cand_sub
+                                    norm_cand = normalize_path(cand_sub)
+                                    data["file_path"] = norm_cand
+                                    with conn:
+                                        conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE spotify_id = ?", (norm_cand, data["spotify_id"]))
+                                    break
+
                 if file_path and os.path.isfile(file_path):
                     is_valid, reason = is_valid_audio_file(file_path)
                     if is_valid:

@@ -2,7 +2,7 @@
 ; Production-Grade Per-User Windows Installer
 
 #define MyAppName "Flacify"
-#define MyAppVersion "1.5.2"
+#define MyAppVersion "1.5.3"
 #define MyAppPublisher "Flacify Project"
 #define MyAppExeName "Flacify.exe"
 #define MyAppMutex "FlacifyMutex"
@@ -24,7 +24,7 @@ AllowNoIcons=yes
 
 ; Output Configuration
 OutputDir=dist\installer
-OutputBaseFilename=Flacify_Setup_v1.5.2
+OutputBaseFilename=Flacify_Setup_v1.5.3
 SetupIconFile=assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
@@ -40,12 +40,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 AppMutex={#MyAppMutex}
 
 ; Windows Add/Remove Programs Metadata
-VersionInfoVersion=1.5.2.0
+VersionInfoVersion=1.5.3.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=Flacify High-Fidelity Audio Scraper Setup
 VersionInfoCopyright=Copyright (C) 2026 {#MyAppPublisher}
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=1.5.2.0
+VersionInfoProductVersion=1.5.3.0
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -58,11 +58,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "dist\Flacify\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent; WorkingDir: "{app}"
 
 [UninstallDelete]
 ; Clean up runtime log and temporary cache files left in install dir (if any)

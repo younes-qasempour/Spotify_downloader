@@ -34,7 +34,11 @@ from telethon.errors import (
 
 from core.exceptions import FlacifyError
 from core.spotify_client import TrackMetadata
-from core.utils import sanitize_filename, is_valid_audio_file, format_bytes
+from core.utils import (
+    sanitize_filename, is_valid_audio_file, format_bytes,
+    PERSIAN_ARTIST_ALIASES, is_persian_or_arabic, transliterate_persian,
+    consonant_skeleton, normalize_special_unicode
+)
 from core.paths import get_cache_dir
 from core.config import config
 
@@ -476,13 +480,23 @@ class MeloBotEngine:
             clean_artists = [sanitize_filename(a, max_length=80).strip() for a in (track.artists or [track.primary_artist])]
             clean_artists = [a for a in clean_artists if a]
             clean_title = sanitize_filename(track.title, max_length=150).strip()
+            # Extract parenthetical alternate title/subtitle (e.g. "As One Together (Yeki Shodan)" -> "Yeki Shodan")
+            sub_title = ""
+            m_sub = re.search(r'[\(\[]\s*([^\)\]]{3,40})\s*[\)\]]', clean_title)
+            if m_sub:
+                s_cand = m_sub.group(1).strip()
+                if not any(k in s_cand.lower() for k in ("feat", "ft", "remaster", "version", "edition", "live", "mix", "op", "ed")):
+                    sub_title = s_cand
+
             # Strip common extra tags like '(Remastered)', '[Explicit]', '(feat. ...)', '(2nd version, 1877)', etc.
             clean_title_no_parentheses = re.sub(
-                r'[\(\[]\s*(?:\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{4})?|\d{4}\s+version|version\s*,\s*\d{4}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*|die\s+verurteilten|shawshank|soundtrack|ost|[^\)\]]*)\s*[\)\]]',
+                r'[\(\[]\s*(?:\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{4})?|\d{4}\s+version|version\s*,\s*\d{4}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*|die\s+verurteilten|shawshank|soundtrack|ost|第?\s*\d+\s*[-–—~〜]\s*\d+\s*話?\s*(?:OP|ED)?)\s*[\)\]]',
                 '',
                 clean_title,
                 flags=re.IGNORECASE
             ).strip()
+            if sub_title:
+                clean_title_no_parentheses = re.sub(r'[\(\[]\s*' + re.escape(sub_title) + r'\s*[\)\]]', '', clean_title_no_parentheses).strip()
             clean_title_no_parentheses = re.sub(r'\s+', ' ', clean_title_no_parentheses).strip()
 
             all_artist_text = (track.title + " " + " ".join(track.artists or [track.primary_artist])).lower()
@@ -525,14 +539,30 @@ class MeloBotEngine:
                 if clean_artists and primary_clean:
                     search_vectors.append(("Primary Artist - Clean Title", f"{clean_artists[0]} - {primary_clean}"))
 
+                # Vector 1b: Primary Artist - Subtitle (e.g. Ahmadreza Nabizadeh - Yeki Shodan)
+                if clean_artists and sub_title:
+                    search_vectors.append(("Primary Artist - Subtitle", f"{clean_artists[0]} - {sub_title}"))
+
                 # Vector 2: Additional Co-Artists - Clean Title
                 for additional_artist in clean_artists[1:3]:
                     if primary_clean:
                         search_vectors.append((f"Co-Artist ({additional_artist}) - Clean Title", f"{additional_artist} - {primary_clean}"))
 
+                # Vector 2b: Persian Script Aliases (e.g. جلال همتی - عمو سبزی فروش)
+                primary_norm = re.sub(r'[^\w\s]', ' ', clean_artists[0].lower()).strip() if clean_artists else ""
+                if primary_norm in PERSIAN_ARTIST_ALIASES:
+                    for p_alias in PERSIAN_ARTIST_ALIASES[primary_norm]:
+                        if is_persian_or_arabic(p_alias):
+                            search_vectors.append(("Persian Artist & Clean Title", f"{p_alias} - {sub_title or primary_clean}"))
+                            break
+
                 # Vector 3: Clean Title Alone (Wide candidate pool from MeloBot)
                 if primary_clean:
                     search_vectors.append(("Clean Title Query", primary_clean))
+
+                # Vector 3b: Subtitle Alone (e.g. Yeki Shodan)
+                if sub_title and sub_title.lower() != primary_clean.lower():
+                    search_vectors.append(("Subtitle Query", sub_title))
 
                 # Vector 4: Full Title with Parentheses & Tags (if distinct from clean title)
                 if clean_title_no_parentheses and clean_title_no_parentheses != clean_title and clean_artists:
@@ -837,11 +867,8 @@ class MeloBotEngine:
                         await self._client.send_message(bot_entity, txt)
                     return True
 
-            # 3. Standard Quality (128 kbps) - only if explicitly allowed or user preferred 128k
-            pref_q = str(config.get("telegram.preferred_quality", config.get("download.preferred_quality", "320"))).strip().lower()
-            allow_128k = config.get("download.allow_128k", False) or pref_q in ("128", "standard", "low")
-
-            if allow_128k:
+            # 3. Standard Quality (128 kbps) - only if allow_128k is enabled in configuration
+            if config.get("download.allow_128k", False):
                 for r, c, txt, btn in buttons:
                     if _get_quality_tier(txt) == "128":
                         logger.info(f"MeloBot clicking Standard Quality (128k) button: '{txt}'")
@@ -850,9 +877,6 @@ class MeloBotEngine:
                         except Exception:
                             await self._client.send_message(bot_entity, txt)
                         return True
-            else:
-                logger.info(f"MeloBot only offered 128k standard quality ('کیفیت معمولی'). Rejecting to satisfy FLAC/320k priority.")
-                return False
 
             return False
 
@@ -913,13 +937,25 @@ class MeloBotEngine:
                 return True
             if abs(len(w) - len(bw)) <= 1 and SequenceMatcher(None, w, bw).ratio() >= 0.82:
                 return True
+            w_skel = consonant_skeleton(transliterate_persian(w))
+            bw_skel = consonant_skeleton(transliterate_persian(bw))
+            if w_skel and bw_skel and len(w_skel) >= 3 and w_skel == bw_skel:
+                return True
             return False
 
         # 1. Artist Verification:
         # In album tracklists, buttons contain only track titles because artist is in album header.
         best_artist_ratio = 1.0 if is_album_menu else 0.0
         if not is_album_menu:
-            all_artists = track.artists if getattr(track, "artists", None) else [track.primary_artist]
+            raw_artists = list(track.artists if getattr(track, "artists", None) else [track.primary_artist])
+            all_artists = list(raw_artists)
+            for a in raw_artists:
+                norm_a = re.sub(r'[^\w\s]', ' ', a.lower()).strip()
+                if norm_a in PERSIAN_ARTIST_ALIASES:
+                    for alias in PERSIAN_ARTIST_ALIASES[norm_a]:
+                        if alias not in all_artists:
+                            all_artists.append(alias)
+
             matched_any_artist = False
 
             for artist_name in all_artists:
@@ -928,10 +964,18 @@ class MeloBotEngine:
                 if not a_words:
                     continue
 
-                # Check direct concatenation (e.g. mohammad + reza -> mohammadreza)
+                # Check direct concatenation or containment
                 a_concat = "".join(a_words)
-                if a_concat in btn_words or a_concat in btn_clean.replace(" ", ""):
+                if a_concat in btn_words or a_concat in btn_clean.replace(" ", "") or a_clean in btn_clean:
                     best_artist_ratio = 1.0
+                    matched_any_artist = True
+                    break
+
+                # Check consonant skeleton & transliteration match
+                a_skel = consonant_skeleton(transliterate_persian(a_clean))
+                btn_skel = consonant_skeleton(transliterate_persian(btn_clean))
+                if len(a_skel) >= 3 and (a_skel in btn_skel or btn_skel in a_skel):
+                    best_artist_ratio = max(best_artist_ratio, 1.0)
                     matched_any_artist = True
                     break
 
@@ -990,13 +1034,22 @@ class MeloBotEngine:
             if in_track and not in_btn:
                 return -1.0  # Track requested this version, but button does not have it
 
-        # 3. Title Word Match Ratio (Calculated against full title and core title without parentheses)
+        # 3. Title Word Match Ratio (Calculated against full title, subtitle, and core title without parentheses)
+        sub_title = ""
+        m_sub = re.search(r'[\(\[]\s*([^\)\]]{3,40})\s*[\)\]]', track.title)
+        if m_sub:
+            s_cand = m_sub.group(1).strip()
+            if not any(k in s_cand.lower() for k in ("feat", "ft", "remaster", "version", "edition", "live", "mix", "op", "ed")):
+                sub_title = s_cand
+
         clean_core_title = re.sub(
-            r'[\(\[]\s*(?:\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{4})?|\d{4}\s+version|version\s*,\s*\d{4}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*|die\s+verurteilten|shawshank|soundtrack|ost|[^\)\]]*)\s*[\)\]]',
+            r'[\(\[]\s*(?:\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{4})?|\d{4}\s+version|version\s*,\s*\d{4}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*|die\s+verurteilten|shawshank|soundtrack|ost|第?\s*\d+\s*[-–—~〜]\s*\d+\s*話?\s*(?:OP|ED)?)\s*[\)\]]',
             '',
             track.title,
             flags=re.IGNORECASE
         ).strip()
+        if sub_title:
+            clean_core_title = re.sub(r'[\(\[]\s*' + re.escape(sub_title) + r'\s*[\)\]]', '', clean_core_title).strip()
         core_clean = self._clean_track_str(clean_core_title)
         core_words = [w for w in core_clean.split() if len(w) > 1]
 
@@ -1007,7 +1060,35 @@ class MeloBotEngine:
         core_ratio = matched_core / len(core_words) if core_words else 0.0
 
         title_ratio = max(full_ratio, core_ratio)
+
+        # Transliteration & consonant skeleton title matching (e.g. "Amo Sabzi Froosh" vs "عمو سبزی فروش")
+        t_skel = consonant_skeleton(transliterate_persian(t_clean))
+        core_skel = consonant_skeleton(transliterate_persian(core_clean)) if core_clean else ""
+        btn_skel = consonant_skeleton(transliterate_persian(btn_clean))
+        skel_match = False
+        if len(t_skel) >= 3 and (t_skel in btn_skel or btn_skel in t_skel or SequenceMatcher(None, t_skel, btn_skel).ratio() >= 0.75):
+            title_ratio = max(title_ratio, 0.90)
+            skel_match = True
+        elif core_skel and len(core_skel) >= 3 and (core_skel in btn_skel or btn_skel in core_skel or SequenceMatcher(None, core_skel, btn_skel).ratio() >= 0.75):
+            title_ratio = max(title_ratio, 0.90)
+            skel_match = True
+
+        # Check subtitle matching (e.g. "Yeki Shodan" in "As One Together (Yeki Shodan)")
+        if sub_title:
+            sub_clean = self._clean_track_str(sub_title)
+            sub_words = [w for w in sub_clean.split() if len(w) > 1]
+            if sub_words:
+                m_sub_cnt = sum(1 for w in sub_words if any(_match_token(w, bw) for bw in btn_words))
+                if m_sub_cnt / len(sub_words) >= 0.70 or sub_clean in btn_clean:
+                    title_ratio = max(title_ratio, 0.95)
+            sub_skel = consonant_skeleton(transliterate_persian(sub_clean))
+            if len(sub_skel) >= 3 and (sub_skel in btn_skel or btn_skel in sub_skel):
+                title_ratio = max(title_ratio, 0.95)
+                skel_match = True
+
         min_title_threshold = 0.5 if len(core_words or t_words) >= 3 else 0.8
+        if skel_match:
+            min_title_threshold = 0.40
 
         # Check segmented matching for classical, soundtrack, or multi-part titles (e.g. Work: Aria)
         best_segment_ratio = 0.0
@@ -1032,6 +1113,13 @@ class MeloBotEngine:
             SequenceMatcher(None, t_clean, btn_clean).ratio(),
             SequenceMatcher(None, core_clean, btn_clean).ratio() if core_clean else 0.0
         )
+        if is_persian_or_arabic(button_text) or is_persian_or_arabic(track.title):
+            trans_btn = transliterate_persian(btn_clean)
+            sim_trans = SequenceMatcher(None, t_clean, trans_btn).ratio()
+            sim_title = max(sim_title, sim_trans)
+            if skel_match:
+                sim_title = max(sim_title, 0.85)
+
         base_score = max(sim_title * 100.0, best_segment_ratio * 60.0)
 
         # 5. Icon/Release Priority: Single track (🎵) or Album title track (📀)

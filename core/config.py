@@ -295,6 +295,12 @@ class ConfigManager:
         current_version = self.data.get("version", 1)
         self.data["version"] = max(current_version, DEFAULT_CONFIG.get("version", 1))
 
+        # Ensure output_dir is never empty or relative (e.g. 'downloads')
+        download_cfg = self.data.setdefault("download", {})
+        out_dir = str(download_cfg.get("output_dir", "")).strip()
+        if not out_dir or out_dir.lower() == "downloads" or not os.path.isabs(out_dir):
+            download_cfg["output_dir"] = os.path.normpath(str(get_default_download_dir()))
+
     def _deep_merge(self, base: dict, override: dict) -> dict:
         result = copy.deepcopy(base)
         if not isinstance(override, dict):

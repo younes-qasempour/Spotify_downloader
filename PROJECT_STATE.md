@@ -718,6 +718,29 @@ d:\Spotify-Downloader\
   6. **Quality Enforcement & Physical Bitrate Verification:** Strictly rejects unwanted 128 kbps files when high quality is requested, calculates authentic bitrate on disk, and renders emerald badges for `MeloBot FLAC`.
   7. **Remux & Thread Safety Hardening:** Synchronized WebM to Opus remux paths, locked `GenreResolver` with `threading.RLock`, and wrapped Qt signal bridge emissions in `safe_emit`. All 72 tests pass cleanly.
 
+### 53. Release v1.5.3: Persian Resolution, Anime Theme Precision & Offline DB Hardening
+- **Release Version Bump (v1.5.3):**
+  - Updated all version variables across `core/__init__.py` (`1.5.3`), `version_info.txt` (`1.5.3.0`), `installer.iss` (`1.5.3`), `build_windows.py` (`Flacify_Setup_v1.5.3.exe`), `main.py` (`Flacify.App.1.5.3`), `core/lyrics.py`, and `core/genre.py`.
+- **Symptoms & Bugs Diagnosed:**
+  1. Persian songs failed to download:
+     - "Naro Maryam" by Iman Heydari (Spotify duration 216s) failed because YouTube official release under Moslem Fattahi was 185s (`diff = 31s > 25s cutoff`).
+     - "Bad-i Saba" by Ghazal Shakeri (Spotify duration 144s, title `Bad-ı Saba` with Turkish dotless i) failed because `_normalize_text` previously stripped non-ASCII characters, wiping all Persian letters into whitespace, and extra Persian words in poem descriptions were penalized by -80.0.
+     - "Chaharmezrab, Del Angiz (Live)" by Shajarian & Meshkatian (288s) failed because standalone `(Live)` was included in queries, returning 40-minute live concerts instead of the studio track `Chaharmezrab (Del Angiz)` (289s).
+  2. "Solo Leveling Opening - Level" was miss-downloaded: Spotify artist `Igyman Desu` uploaded an amateur electric guitar cover under the anime opening name, matching duration and artist name over the authentic vocal anime opening.
+  3. Database and Library failed when installed on another PC: Songs downloaded disappeared from the Library on restart due to relative path resolution and missing fallback scan before record purge.
+- **Root Causes:**
+  1. `_normalize_text` destructively stripped all Persian, Arabic, and multilingual characters with `encode('ASCII', 'ignore')`.
+  2. The maximum duration tolerance for official topic channels was capped at 25s.
+  3. Query generators lacked anime opening series/theme decomposition and specific artist expansion.
+  4. Relative `output_dir` in configuration resolved against variable working directories on fresh installs.
+- **Fixes & Enhancements Implemented:**
+  1. **Non-Destructive Unicode Normalization:** Replaced destructive ASCII encoding in `_normalize_text` with Unicode NFKD non-spacing mark removal (`category(c) != 'Mn'`), stripping accents while 100% preserving Persian, Arabic, and multilingual letters. Added Turkish dotless i normalization (`\u0131` -> `i`).
+  2. **Persian Skeleton & Alias Resolution:** Added consonant-skeleton matching for Persian titles (`consonant_skeleton(transliterate_persian(title))`) and excluded Persian words from `sig_extra` penalties in Persian contexts. Added aliases and title mappings for Iman Heydari/Moslem Fattahi (`مسلم فتاحی`), Ghazal Shakeri (`غزل شاکری`), and `PERSIAN_TITLE_MAPPINGS`.
+  3. **Anime Theme & Anti-Cover Precision:** Detects `<Series> Opening - <Theme>` and expands artists to original anime vocalists (e.g. `SawanoHiroyuki[nZk]`, `TOMORROW X TOGETHER` for Solo Leveling). Penalizes guitar and instrumental cover accounts (`guitar cover`, `piano cover`, `igyman`) by -60.0.
+  4. **Official Delivery Tolerance:** Expanded duration tolerance to 36.0s for official YouTube deliveries/topic channels.
+  5. **External yt-dlp Plugin Isolation:** Added `compat_opts: {"no-plugins"}` across all yt-dlp option builders, eliminating Deno/POT script plugin timeouts.
+  6. **Database Persistence & Portability:** Relative `output_dir` automatically migrates to absolute `~/Music/Spotify Downloads`. `normalize_path()` resolves against the configured directory. `find_track()` scans alternative and default music directories before purging records. Added `checkpoint_wal()` on startup and graceful exit. Inno Setup installer enforces `WorkingDir: "{app}"`. All 72 unit/integration tests passing cleanly.
+
 
 
 ## 5. Development Cheat Sheet

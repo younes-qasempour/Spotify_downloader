@@ -78,21 +78,24 @@ class CascadingAudioEngine:
                 )
             return None
 
-        # Determine active high-quality engine
+        # Determine active engines and user preferences
         source_engine = str(config.get("source_engine", "musilon")).strip().lower()
-        use_melobot = (source_engine == "melobot" or (config.get("telegram.enabled", False) and not self.musilon.enabled))
+        use_melobot_primary = (source_engine == "melobot" or (config.get("telegram.enabled", False) and not self.musilon.enabled))
+        pref_q = str(config.get("telegram.preferred_quality", config.get("download.preferred_quality", "320"))).strip().lower()
+        allow_128k = config.get("download.allow_128k", False) or pref_q in ("128", "standard", "low")
 
-        # 1. Option A: Try MeloBot if chosen as active source
-        if use_melobot and self.melobot.enabled and not skip_musilon:
+        melo_128k_candidate: Optional[MeloBotSource] = None
+
+        def _try_melobot() -> Optional[ResolvedTrackSource]:
+            nonlocal melo_128k_candidate
+            if not self.melobot.enabled or skip_musilon:
+                return None
             try:
                 melo_src = self.melobot.resolve_track(track, cancel_check=cancel_check)
                 if cancel_check and cancel_check():
                     return None
                 if melo_src:
-                    pref_q = str(config.get("telegram.preferred_quality", config.get("download.preferred_quality", "320"))).strip().lower()
-                    allow_128k = config.get("download.allow_128k", False) or pref_q in ("128", "standard", "low")
                     valid_tier = any(q in melo_src.quality_tier.lower() for q in ("flac", "320", "hires", "lossless"))
-
                     if valid_tier or allow_128k:
                         logger.info(f"Resolved via MeloBot ({melo_src.quality_tier}): {track.title}")
                         return ResolvedTrackSource(
@@ -102,14 +105,17 @@ class CascadingAudioEngine:
                             file_extension=melo_src.file_extension
                         )
                     else:
-                        logger.info(f"MeloBot tier '{melo_src.quality_tier}' rejected to satisfy FLAC/320k priority.")
+                        logger.info(f"MeloBot returned standard tier '{melo_src.quality_tier}'; holding as safety-net candidate for '{track.title}'.")
+                        melo_128k_candidate = melo_src
             except Exception as e_melo:
                 if cancel_check and cancel_check():
                     return None
                 logger.warning(f"MeloBot resolution failed for {track.title}: {e_melo}")
+            return None
 
-        # 1. Option B: Try Musilon Tiers 1-3 across all multi-vector search stages
-        elif self.musilon.enabled and not skip_musilon:
+        def _try_musilon() -> Optional[ResolvedTrackSource]:
+            if not self.musilon.enabled or skip_musilon:
+                return None
             try:
                 m_src = self.musilon.resolve_track(track, cancel_check=cancel_check)
                 if cancel_check and cancel_check():
@@ -135,40 +141,59 @@ class CascadingAudioEngine:
                 if cancel_check and cancel_check():
                     return None
                 logger.warning(f"Musilon resolution failed for {track.title}: {e}")
+            return None
+
+        # 1. Primary Engine Attempt
+        primary_res = _try_melobot() if use_melobot_primary else _try_musilon()
+        if primary_res:
+            return primary_res
 
         if cancel_check and cancel_check():
             return None
 
-        # Check if fallback is disabled globally or explicitly requested
-        allow_fallback = config.get("download.allow_fallback", True) and not musilon_only
-        if not allow_fallback:
-            logger.info(f"Strict high-quality mode / Fallback disabled: skipping YouTube Music for '{track.title}'")
+        # 2. Secondary Engine Attempt (Cascade between Musilon and MeloBot)
+        secondary_res = _try_musilon() if use_melobot_primary else _try_melobot()
+        if secondary_res:
+            return secondary_res
+
+        if cancel_check and cancel_check():
             return None
 
-        # 2. Safety-Net Fallback to Tier 4: YouTube Music
-        active_source_name = "MeloBot" if use_melobot else "Musilon"
-        if skip_musilon:
-            logger.info(f"{active_source_name} skipped; resolving directly via YouTube Music for '{track.title}'...")
-        else:
-            logger.info(f"Song not found in {active_source_name} catalog for '{track.title}'; activating YouTube Music fallback...")
-        try:
-            yt_src = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
-            if cancel_check and cancel_check():
-                return None
-            if yt_src:
-                logger.info(f"Resolved via YouTube Music fallback: {track.title}")
-                act_ext = yt_src.audio_format or "opus"
-                badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
-                return ResolvedTrackSource(
-                    source_type="YouTube Music",
-                    quality_badge=badge,
-                    source_obj=yt_src,
-                    file_extension=act_ext
-                )
-        except Exception as e:
-            if cancel_check and cancel_check():
-                return None
-            logger.error(f"YouTube Music fallback failed for {track.title}: {e}")
+        # 3. Safety-Net Fallback: YouTube Music
+        allow_fallback = config.get("download.allow_fallback", True) and not musilon_only
+        if allow_fallback:
+            logger.info(f"High-quality catalog exhausted for '{track.title}'; activating YouTube Music fallback...")
+            try:
+                yt_src = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
+                if cancel_check and cancel_check():
+                    return None
+                if yt_src:
+                    logger.info(f"Resolved via YouTube Music fallback: {track.title}")
+                    act_ext = yt_src.audio_format or "opus"
+                    badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
+                    return ResolvedTrackSource(
+                        source_type="YouTube Music",
+                        quality_badge=badge,
+                        source_obj=yt_src,
+                        file_extension=act_ext
+                    )
+            except Exception as e:
+                if cancel_check and cancel_check():
+                    return None
+                logger.error(f"YouTube Music fallback failed for {track.title}: {e}")
+
+        # 4. Ultimate Safety Net: If YouTube Music failed or fallback disabled, use 128k MeloBot candidate if available
+        if melo_128k_candidate:
+            logger.info(f"Utilizing MeloBot 128k safety net as ultimate fallback for '{track.title}'")
+            return ResolvedTrackSource(
+                source_type="MeloBot",
+                quality_badge=melo_128k_candidate.quality_tier,
+                source_obj=melo_128k_candidate,
+                file_extension=melo_128k_candidate.file_extension
+            )
+
+        if not allow_fallback:
+            logger.info(f"Strict high-quality mode / Fallback disabled: skipping YouTube Music for '{track.title}'")
 
         return None
 

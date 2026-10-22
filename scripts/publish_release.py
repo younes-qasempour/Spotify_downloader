@@ -22,31 +22,30 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.5.2'
-    release_name = 'Flacify v1.5.2 — FastTelethon 10x Acceleration, MTProto Push Engine & Audio Hardening'
+    tag = 'v1.5.3'
+    release_name = 'Flacify v1.5.3 — Persian Resolution, Anime Theme Precision & Offline DB Hardening'
 
     release_body = (
-        "# 🚀 Flacify v1.5.2 Release Notes\n\n"
-        "### ⚡ 10x Faster MeloBot Downloads & Smart Title Matching\n"
-        "- **Accelerated Telegram Transfers**: Upgraded download pipeline with optimized MTProto routines and native crypto acceleration (`cryptg`), speeding up candidate search and audio downloads by up to 10x.\n"
-        "- **Smart Title Normalization**: Enhanced Persian/English candidate scoring with multi-word artist and title matching, ensuring top-ranked candidates are accurately chosen on the first pass.\n\n"
-        "### 🛡️ FloodWait Elimination & MTProto Push Event Navigation\n"
-        "- **Push-Event Message Pipeline**: Replaced high-frequency polling with native Telethon push updates (`events.NewMessage` and `events.MessageEdited`), completely eliminating Telegram `FloodWaitError` bans.\n"
-        "- **Deduplicated Button Clicks & Adaptive Retries**: Prevents duplicate keyboard clicks with message ID tracking and retries unacknowledged clicks up to 3 times at 5s intervals within an adaptive 45s delivery window.\n"
-        "- **Zombie Coroutine Termination**: Safely cancels background asyncio futures on timeouts or exceptions, preventing leaked background coroutines from colliding with subsequent downloads.\n\n"
-        "### 🎼 Quality Priority & True Bitrate Attribution\n"
-        "- **Strict 128k Fallback Rejection**: Strictly rejects 128 kbps audio when High (320k) or Lossless (FLAC) quality is requested, safely stepping down to YouTube Music Opus.\n"
-        "- **Dynamic Physical Bitrate Calculation**: Accurately computes on-disk audio bitrates from file size and duration before assigning badges, preventing false 320k labeling.\n"
-        "- **Emerald FLAC Badge Styling**: Added dedicated vibrant emerald badges for genuine `MeloBot FLAC` lossless downloads.\n\n"
-        "### 🔧 Engine Hardening & Thread Safety\n"
-        "- **WebM to Opus Remux Synchronization**: Fixes file path desynchronization in `CascadingAudioEngine` when remuxing YouTube WebM containers to Opus via FFmpeg.\n"
-        "- **Genre Cache Thread Locking**: Added `threading.RLock` to `GenreResolver`, eliminating Windows `PermissionError` [WinError 32] during multi-worker concurrent downloads.\n"
-        "- **Safe Qt Signal Bridge**: Wrapped all background worker thread signal emissions with `safe_emit` and `safe_invoke` to prevent `RuntimeError: wrapped C/C++ object has been deleted` crashes.\n"
-        "- **Clean Partial File Purge**: Incomplete `.part` files are automatically removed upon connection drops or timeouts.\n\n"
+        "# 🚀 Flacify v1.5.3 Release Notes\n\n"
+        "### 🎼 High-Precision Persian Audio Resolution\n"
+        "- **Non-Destructive Unicode Normalization**: Replaced ASCII stripping with Unicode NFKD non-spacing mark removal (`Mn`), preserving Persian, Arabic, and multilingual characters.\n"
+        "- **Persian Consonant-Skeleton & Verse Matching**: Added consonant-skeleton matching for Persian titles (e.g. `Bad-i Saba` matching `باد صبا`) and excluded Persian poetic phrases from `sig_extra` word penalties.\n"
+        "- **Artist Alias Expansion**: Added aliases for Iman Heydari / Moslem Fattahi (`مسلم فتاحی`) and Ghazal Shakeri (`غزل شاکری`), with official topic channel delivery duration tolerance expanded to 36s.\n"
+        "- **Live Track Delimiter Cleaning**: Stripped `(Live)` and `- Live` from core search queries for studio master accuracy while retaining version verification.\n\n"
+        "### ⚡ Anime Theme & Anti-Cover Precision\n"
+        "- **Anime Opening & Ending Detection**: Automatically parses `<Series> Opening - <Theme>` and expands artists to authentic original anime vocalists (e.g. `SawanoHiroyuki[nZk]`, `TOMORROW X TOGETHER` for Solo Leveling `LEveL`).\n"
+        "- **Indie Instrumental Cover Penalty**: Added -60.0 score penalty for guitar cover and amateur instrumental accounts (`guitar cover`, `piano cover`, `igyman`) to prioritize genuine studio vocal master releases.\n\n"
+        "### 🗄️ Database Persistence & Portability Hardening\n"
+        "- **Absolute Output Path Migration**: Prevented relative path desynchronization across working directories by automatically migrating empty or relative download directories to absolute `~/Music/Spotify Downloads`.\n"
+        "- **Multi-Folder Recovery & Path Normalization**: Database path lookup checks alternative and default download directories before cleaning records, protecting downloaded songs on other PCs.\n"
+        "- **SQLite WAL Checkpointing**: Automated `PRAGMA wal_checkpoint(TRUNCATE)` on application startup and graceful shutdown.\n"
+        "- **Inno Setup Working Directory Guard**: Explicit `WorkingDir: \"{app}\"` added to Desktop and Start Menu launcher shortcuts.\n\n"
+        "### ⚡ External yt-dlp Plugin Isolation\n"
+        "- **Subprocess Hang Elimination**: Explicitly added `compat_opts: {'no-plugins'}` across all yt-dlp invocations, preventing external Deno/POT script plugin timeouts.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.5.2.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.5.2.exe`\n"
+        "Download and run **`Flacify_Setup_v1.5.3.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.5.3.exe`\n"
     )
 
     token = get_github_token()
@@ -94,7 +93,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.2.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.3.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")

@@ -486,4 +486,111 @@ def calculate_replaygain(audio_file_path: str) -> Optional[Tuple[str, str]]:
         return None
 
 
+# -------------------------------------------------------------------------
+# Persian / Multilingual Transliteration & Normalization Utilities
+# -------------------------------------------------------------------------
 
+PERSIAN_TO_LATIN = {
+    'آ': 'a', 'ا': 'a', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ث': 's', 'ج': 'j', 'چ': 'ch',
+    'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'z', 'ر': 'r', 'ز': 'z', 'ژ': 'zh', 'س': 's',
+    'ش': 'sh', 'ص': 's', 'ض': 'z', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f',
+    'ق': 'gh', 'ک': 'k', 'گ': 'g', 'ل': 'l', 'م': 'm', 'ن': 'n', 'و': 'o', 'ه': 'h',
+    'ی': 'y', 'ي': 'y', 'ك': 'k', 'ئ': 'e', 'ء': '', '‌': ' ',
+    '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4', '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9'
+}
+
+PERSIAN_ARTIST_ALIASES = {
+    "mohammad reza shajarian": ["shajarian", "محمدرضا شجریان", "شجریان", "استاد شجریان"],
+    "mohammad-reza shajarian": ["shajarian", "محمدرضا شجریان", "شجریان", "استاد شجریان"],
+    "homayoun shajarian": ["همایون شجریان", "شجریان"],
+    "parviz meshkatian": ["پرویز مشکاتیان", "مشکاتیان"],
+    "aref band": ["گروه عارف", "عارف", "گروه شیدا و عارف"],
+    "jalal hemmati": ["جلال همتی", "همتی", "jalal hemati", "jalal hemmati"],
+    "jalal hemati": ["جلال همتی", "همتی", "jalal hemati", "jalal hemmati"],
+    "fereydoon foroughi": ["فریدون فروغی", "فروغی", "foroughi", "fereidoon foroughi"],
+    "fereidoon foroughi": ["فریدون فروغی", "فروغی", "foroughi", "fereidoon foroughi"],
+    "ahmadreza nabizadeh": ["احمدرضا نبی زاده", "احمد رضا نبی زاده", "احمد نبی زاده", "نبی زاده", "nabizadeh"],
+    "ahmad reza nabizadeh": ["احمدرضا نبی زاده", "احمد رضا نبی زاده", "احمد نبی زاده", "نبی زاده", "nabizadeh"],
+    "ghazal shakeri": ["غزل شاکری", "شاکری", "ghazal shakeri", "غزل"],
+    "iman heydari": ["ایمان حیدری", "حیدری", "iman heydari", "moslem fattahi", "مسلم فتاحی"],
+    "moslem fattahi": ["مسلم فتاحی", "فتاحی", "moslem fattahi", "moslem fatahi"],
+    "moslem fatahi": ["مسلم فتاحی", "فتاحی", "moslem fattahi", "moslem fatahi"],
+    "hayedeh": ["هایده", "بانو هایده", "haydeh"],
+    "mahasti": ["مهستی", "بانو مهستی"],
+    "moein": ["معین", "استاد معین"],
+    "mohsen chavoshi": ["چاوشی", "محسن چاوشی", "chavoshi"],
+    "siavash ghomayshi": ["قمیشی", "سیاوش قمیشی", "ghomayshi"],
+    "dariush": ["داریوش", "داریوش اقبالی", "eghbali"],
+    "ebi": ["ابی", "ابراهیم حامدی"],
+    "googoosh": ["گوگوش", "فائقه آتشین"],
+    "banan": ["بنان", "غلامحسین بنان", "gholam hossein banan"],
+    "gholam hossein banan": ["بنان", "غلامحسین بنان"],
+    "shahram nazeri": ["ناظری", "شهرام ناظری", "nazeri"],
+    "alireza ghorbani": ["علیرضا قربانی", "ghorbani"],
+    "kayhan kalhor": ["کیهان کلهر", "kalhor"],
+    "hossein alizadeh": ["حسین علیزاده", "alizadeh"],
+    "farhad": ["فرهاد", "فرهاد مهراد", "farhad mehrad"],
+    "reza sadeghi": ["رضا صادقی", "sadeghi"],
+    "shadmehr aghili": ["شادمهر عقیلی", "شادمهر", "shadmehr"],
+    "hassan shamaizadeh": ["شماعی زاده", "حسن شماعی زاده", "shamaizadeh"],
+    "morteza pashaei": ["مرتضی پاشایی", "pashaei"],
+    "salar aghili": ["سالار عقیلی", "aghili"],
+    "mohammad esfahani": ["محمد اصفهانی", "esfahani"],
+    "delkash": ["دلکش"],
+    "marzieh": ["مرضیه"],
+    "kourosh yaghmaei": ["کوروش یغمایی", "yaghmaei"],
+    "vigen": ["ویگن", "viguen"],
+    "aref": ["عارف"],
+    "simin ghanem": ["سیمین غانم"],
+    "mansour": ["منصور"],
+    "shakila": ["شکیلا"],
+    "pouya": ["پویا"],
+    "omid": ["امید"],
+    "bijan mortazavi": ["بیژن مرتضوی"],
+    "leila forouhar": ["لیلا فروهر"],
+    "habib": ["حبیب"],
+    "andy": ["اندی"],
+    "kouros": ["کورس"],
+    "nooshafarin": ["نوش آفرین"],
+    "sattar": ["ستار"],
+    "shahram shabpareh": ["شهرام شب پره"],
+}
+
+PERSIAN_TITLE_MAPPINGS = {
+    "bad-i saba": "باد صبا",
+    "bad-ı saba": "باد صبا",
+    "bade saba": "باد صبا",
+    "bad e saba": "باد صبا",
+    "naro maryam": "نرو مریم",
+    "chaharmezrab": "چهارمضراب",
+    "del angiz": "دل انگیز",
+    "chahar mezrab": "چهارمضراب",
+}
+
+
+def is_persian_or_arabic(text: str) -> bool:
+    return bool(re.search(r'[\u0600-\u06ff\u0750-\u077f\ufb50-\ufdff\ufe70-\ufeff]', text))
+
+
+def transliterate_persian(text: str) -> str:
+    return "".join(PERSIAN_TO_LATIN.get(c, c) for c in text)
+
+
+def consonant_skeleton(text: str) -> str:
+    return re.sub(r'[^bcdfghjklmnpqrstvwxz0-9]', '', text.lower())
+
+
+def normalize_special_unicode(text: str) -> str:
+    """Normalizes unusual unicode characters that break search engines (e.g. Turkish dotless i, smart quotes, dashes)."""
+    if not text:
+        return ""
+    t = text
+    # Turkish dotless i and dotted capital I
+    t = t.replace('\u0131', 'i').replace('\u0130', 'I')
+    # Smart quotes & apostrophes
+    t = t.replace('’', "'").replace('‘', "'").replace('“', '"').replace('”', '"')
+    # Various dashes
+    t = t.replace('–', '-').replace('—', '-').replace('―', '-')
+    # Non-breaking space
+    t = t.replace('\u00a0', ' ').replace('\u200b', '')
+    return t

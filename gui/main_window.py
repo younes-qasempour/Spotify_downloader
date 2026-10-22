@@ -69,6 +69,7 @@ class MainWindow(FluentWindow):
 
         # Initialize Headless Core Engine & Persistent Archive
         self.archive_manager = ArchiveManager()
+        self.archive_manager.checkpoint_wal()
 
         self.musilon_engine = MusilonEngine(
             session_cookie=config.get("musilon.session_cookie", ""),
@@ -284,6 +285,11 @@ class MainWindow(FluentWindow):
                 self.raise_()
 
     def _quit_application(self):
+        if hasattr(self, "archive_manager"):
+            try:
+                self.archive_manager.checkpoint_wal()
+            except Exception as e_wal:
+                logger.debug(f"Error checkpointing WAL on quit: {e_wal}")
         if hasattr(self, "player_bar"):
             self.player_bar.player.stop()
         self.close()
@@ -399,6 +405,11 @@ class MainWindow(FluentWindow):
             get_genre_resolver().save_cache()
         except Exception as e_cache:
             logger.debug(f"Error saving genre cache on exit: {e_cache}")
+        if hasattr(self, "archive_manager"):
+            try:
+                self.archive_manager.checkpoint_wal()
+            except Exception as e_wal:
+                logger.debug(f"Error checkpointing WAL on exit: {e_wal}")
         if hasattr(self, "media_controller"):
             self.media_controller.cleanup()
         if hasattr(self, "player_bar"):

@@ -9,7 +9,11 @@ from typing import Optional, Callable, Dict, Any, List, Tuple
 import yt_dlp
 
 from core.spotify_client import TrackMetadata
-from core.utils import clean_watermarks, format_bytes, ensure_ffmpeg
+from core.utils import (
+    clean_watermarks, format_bytes, ensure_ffmpeg,
+    PERSIAN_ARTIST_ALIASES, PERSIAN_TITLE_MAPPINGS, is_persian_or_arabic, transliterate_persian,
+    consonant_skeleton, normalize_special_unicode
+)
 from core.config import config
 from core.paths import get_app_data_dir, get_resource_path
 
@@ -24,61 +28,6 @@ class YtdlpSource:
     url: str
     audio_format: str  # "opus" or "m4a"
     candidate_urls: List[str] = field(default_factory=list)
-
-
-PERSIAN_TO_LATIN = {
-    'آ': 'a', 'ا': 'a', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ث': 's', 'ج': 'j', 'چ': 'ch',
-    'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'z', 'ر': 'r', 'ز': 'z', 'ژ': 'zh', 'س': 's',
-    'ش': 'sh', 'ص': 's', 'ض': 'z', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f',
-    'ق': 'gh', 'ک': 'k', 'گ': 'g', 'ل': 'l', 'م': 'm', 'ن': 'n', 'و': 'o', 'ه': 'h',
-    'ی': 'y', 'ي': 'y', 'ك': 'k', 'ئ': 'e', 'ء': '', '‌': ' '
-}
-
-PERSIAN_ARTIST_ALIASES: Dict[str, List[str]] = {
-    "mohammad reza shajarian": ["shajarian", "محمدرضا شجریان", "شجریان", "استاد شجریان"],
-    "homayoun shajarian": ["همایون شجریان", "شجریان"],
-    "hayedeh": ["هایده", "بانو هایده", "haydeh"],
-    "mahasti": ["مهستی", "بانو مهستی"],
-    "moein": ["معین", "استاد معین"],
-    "mohsen chavoshi": ["چاوشی", "محسن چاوشی", "chavoshi"],
-    "siavash ghomayshi": ["قمیشی", "سیاوش قمیشی", "ghomayshi"],
-    "dariush": ["داریوش", "داریوش اقبالی", "eghbali"],
-    "ebi": ["ابی", "ابراهیم حامدی"],
-    "googoosh": ["گوگوش", "فائقه آتشین"],
-    "banan": ["بنان", "غلامحسین بنان", "gholam hossein banan"],
-    "gholam hossein banan": ["بنان", "غلامحسین بنان"],
-    "shahram nazeri": ["ناظری", "شهرام ناظری", "nazeri"],
-    "alireza ghorbani": ["علیرضا قربانی", "ghorbani"],
-    "kayhan kalhor": ["کیهان کلهر", "kalhor"],
-    "hossein alizadeh": ["حسین علیزاده", "alizadeh"],
-    "farhad": ["فرهاد", "فرهاد مهراد", "farhad mehrad"],
-    "fereydoun foroughi": ["فریدون فروغی", "foroughi"],
-    "reza sadeghi": ["رضا صادقی", "sadeghi"],
-    "shadmehr aghili": ["شادمهر عقیلی", "شادمهر", "shadmehr"],
-    "hassan shamaizadeh": ["شماعی زاده", "حسن شماعی زاده", "shamaizadeh"],
-    "morteza pashaei": ["مرتضی پاشایی", "pashaei"],
-    "salar aghili": ["سالار عقیلی", "aghili"],
-    "mohammad esfahani": ["محمد اصفهانی", "esfahani"],
-    "delkash": ["دلکش"],
-    "marzieh": ["مرضیه"],
-    "kourosh yaghmaei": ["کوروش یغمایی", "yaghmaei"],
-    "vigen": ["ویگن", "viguen"],
-    "aref": ["عارف"],
-    "simin ghanem": ["سیمین غانم"],
-    "mansour": ["منصور"],
-}
-
-
-def is_persian_or_arabic(text: str) -> bool:
-    return bool(re.search(r'[\u0600-\u06ff\u0750-\u077f\ufb50-\ufdff\ufe70-\ufeff]', text))
-
-
-def transliterate_persian(text: str) -> str:
-    return "".join(PERSIAN_TO_LATIN.get(c, c) for c in text)
-
-
-def consonant_skeleton(text: str) -> str:
-    return re.sub(r'[^bcdfghjklmnpqrstvwxyz0-9]', '', text.lower())
 
 
 class YtdlpEngine:
@@ -145,6 +94,7 @@ class YtdlpEngine:
             opts["ffmpeg_location"] = self.ffmpeg_path
 
         # Disable broken external POT script plugins that cause 15s subprocess timeouts
+        opts["compat_opts"] = {"no-plugins"}
         opts.setdefault("extractor_args", {})
         opts["extractor_args"]["youtubepot-bgutilscriptdeno"] = {"script_path": ["disabled"]}
         opts["extractor_args"]["youtubepot-bgutilscriptnode"] = {"script_path": ["disabled"]}
@@ -173,7 +123,10 @@ class YtdlpEngine:
             "philharmonic", "sinfonia", "orchestra", "orchester", "mozart", "bruckner",
             "beethoven", "bach", "brahms", "chopin", "tchaikovsky", "dvorak", "dvořák",
             "vivaldi", "schubert", "mahler", "wagner", "handel", "haydn", "shostakovich",
-            "berliner", "wiener", "staatskapelle"
+            "berliner", "wiener", "staatskapelle", "waltz", "valse", "delibes", "dohnanyi",
+            "dohnányi", "liszt", "rachmaninoff", "debussy", "ravel", "saint-saens", "saint-saëns",
+            "faure", "fauré", "strauss", "suite", "nocturne", "etude", "prelude", "polonaise",
+            "mazurka", "ballade", "rhapsody", "fugue", "intermezzo", "coppelia", "coppélia"
         ]
         if any(term in all_text for term in classical_terms):
             return True
@@ -185,28 +138,33 @@ class YtdlpEngine:
 
     @staticmethod
     def _normalize_text(text: str) -> str:
-        """Lowercases, removes punctuation, and normalizes whitespace."""
-        t = text.lower()
+        """Lowercases, removes diacritics/accents, removes punctuation, and normalizes whitespace while preserving multilingual text."""
+        import unicodedata
+        t = normalize_special_unicode(text).lower()
+        t = "".join(c for c in unicodedata.normalize('NFKD', t) if unicodedata.category(c) != 'Mn')
         t = re.sub(r'[^\w\s]', ' ', t)
         return re.sub(r'\s+', ' ', t).strip()
 
     @staticmethod
-    def _clean_title_for_search(raw_title: str) -> Tuple[str, List[str], Dict[str, bool]]:
+    def _clean_title_for_search(raw_title: str) -> Tuple[str, List[str], Dict[str, Any]]:
         """
         Parses a Spotify track title into:
         - core_title: the pure fundamental title of the song
         - featured_artists: list of featured artists extracted from title
-        - flags: dictionary of version attributes (is_remaster, is_live, is_acoustic, is_remix, is_instrumental, is_radio_edit)
+        - flags: dictionary of version attributes (is_remaster, is_live, is_acoustic, is_remix, is_instrumental, is_radio_edit, subtitle, remix_name)
         """
-        title = raw_title.strip()
-        flags = {
+        title = normalize_special_unicode(raw_title).strip()
+        flags: Dict[str, Any] = {
             "is_remaster": False,
             "is_live": False,
             "is_acoustic": False,
             "is_remix": False,
             "is_instrumental": False,
             "is_radio_edit": False,
+            "is_radioshow_cut": False,
             "is_acappella": False,
+            "subtitle": "",
+            "remix_name": "",
         }
 
         lower_t = title.lower()
@@ -224,6 +182,26 @@ class YtdlpEngine:
             flags["is_radio_edit"] = True
         if any(k in lower_t for k in ["acappella", "a cappella", "acapella"]):
             flags["is_acappella"] = True
+
+        # Extract specific remix / mix name before stripping
+        m_remix = re.search(r'[\(\[]\s*([^\)\]]*(?:remix|mix|dub|edit))\s*[\)\]]', title, flags=re.IGNORECASE)
+        if not m_remix:
+            m_remix = re.search(r'[\-\–\—]\s*([^\-\–\—\(\[]*(?:remix|mix|dub|edit))\s*$', title, flags=re.IGNORECASE)
+        if m_remix:
+            flags["remix_name"] = m_remix.group(1).strip()
+
+        # Extract parenthetical alternate title/subtitle before stripping (e.g. "As One Together (Yeki Shodan)" -> "Yeki Shodan")
+        m_sub = re.search(r'[\(\[]\s*([^\)\]]{3,40})\s*[\)\]]', title)
+        if m_sub:
+            sub_cand = m_sub.group(1).strip()
+            sub_lower = sub_cand.lower()
+            excluded_sub = (
+                "feat", "ft.", "with", "remaster", "live", "mix", "remix", "edit", "acoustic",
+                "version", "instrumental", "karaoke", "op", "ed", "ost", "theme", "soundtrack",
+                "deluxe", "bonus", "vol", "edition", "part", "pt.", "die verurteilten", "shawshank"
+            )
+            if not any(k in sub_lower for k in excluded_sub) and not re.match(r'^(?:19|20)\d{2}$', sub_cand):
+                flags["subtitle"] = sub_cand
 
         featured_artists: List[str] = []
         feat_patterns = [
@@ -243,6 +221,29 @@ class YtdlpEngine:
         # Strip features from core title
         core = re.sub(r'[\(\[]\s*(?:feat\.?|ft\.?|with|featuring)\b[^\)\]]*[\)\]]', '', title, flags=re.IGNORECASE)
         core = re.sub(r'[\-\–\—]\s*(?:feat\.?|ft\.?|with|featuring)\b.*$', '', core, flags=re.IGNORECASE)
+
+        # Strip Japanese anime episode ranges & OP/ED tags (e.g. (第326-372話 OP), (第169-206話 OP))
+        core = re.sub(r'[\(\[]\s*第?\s*\d+\s*[-–—~〜]\s*\d+\s*話?\s*(?:OP|ED|IN|挿入歌|主題歌)?\s*[\)\]]', '', core, flags=re.IGNORECASE)
+        core = re.sub(r'[\(\[]\s*(?:TV\s*(?:Size|Edit|Ver\.?|Version)|Short\s*Ver\.?|Anime\s*(?:Size|Ver\.?)|OP|ED|OST)\s*[\)\]]', '', core, flags=re.IGNORECASE)
+
+        # Strip podcast / radioshow episode identifiers (e.g. (FYH301), (ASOT1000), (ABGT450))
+        if re.search(r'[\(\[]\s*(?:FYH|ASOT|ABGT|TATW|GDJB|FSOE|HA|W&W)\s*\d+\s*[\)\]]', title, flags=re.IGNORECASE):
+            flags["is_radioshow_cut"] = True
+        core = re.sub(r'[\(\[]\s*(?:FYH|ASOT|ABGT|TATW|GDJB|FSOE|HA|W&W)\s*\d+\s*[\)\]]', '', core, flags=re.IGNORECASE)
+        core = core.replace('"', '').replace("'", "").replace("“", "").replace("”", "").strip()
+
+        # Strip live concert venue / location / date strings after Live (e.g. "- Live at Ipayone Center, San Diego, CA, 3/15/2007")
+        if flags.get("is_live", False):
+            core = re.sub(r'[\-\–\—]?\s*(?:Live\s+(?:at|in|from)|Recorded\s+live).*$', '', core, flags=re.IGNORECASE)
+            core = re.sub(r'[\(\[]\s*(?:Live\s+(?:at|in|from)|Recorded\s+live)[^\)\]]*[\)\]]', '', core, flags=re.IGNORECASE)
+            core = re.sub(r'[\(\[]\s*live\s*[\)\]]', '', core, flags=re.IGNORECASE)
+            core = re.sub(r'[\-\–\—]\s*live\s*$', '', core, flags=re.IGNORECASE)
+
+        # Detect anime / TV opening format (e.g. "Solo Leveling Opening - Level" -> theme "Level", series "Solo Leveling")
+        m_anime = re.match(r'^(.*?)\s*(?:Opening|Ending|Theme|OST|OP|ED)\s*[\-\–\—:]\s*(.+)$', core, flags=re.IGNORECASE)
+        if m_anime:
+            flags["anime_series"] = m_anime.group(1).strip()
+            flags["anime_theme"] = m_anime.group(2).strip()
 
         # Strip remaster / anniversary tags
         core = re.sub(r'[\(\[]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?\s*[\)\]]', '', core, flags=re.IGNORECASE)
@@ -264,6 +265,10 @@ class YtdlpEngine:
 
         # Strip foreign movie titles in parentheses like (Die Verurteilten)
         core = re.sub(r'[\(\[]\s*(?:die\s+verurteilten|shawshank|soundtrack|ost|score|theme)\b[^\)\]]*[\)\]]', '', core, flags=re.IGNORECASE)
+
+        # Strip extracted subtitle from core title if present to enable separate focused queries
+        if flags.get("subtitle"):
+            core = re.sub(r'[\(\[]\s*' + re.escape(flags["subtitle"]) + r'\s*[\)\]]', '', core).strip()
 
         # Strip movie / soundtrack / edition / series trailing tags after separators
         for sep in [" - ", " – ", " — "]:
@@ -312,8 +317,20 @@ class YtdlpEngine:
         cand_dur = cand.get("duration") or 0
         diff = abs(cand_dur - target_dur)
 
+        desc = (cand.get("description") or "").strip()
+        desc_lower = desc.lower()
+        is_topic_channel = "topic" in uploader_lower or "topic" in cand_lower
+        is_official_delivery = (
+            "provided to youtube by" in desc_lower
+            or "auto-generated by youtube" in desc_lower
+            or "auto-generated" in cand_lower
+        )
+
         is_classical = self._is_classical(raw_title, all_artists)
-        max_dur_tol = max(45.0, target_dur * 0.15) if is_classical else self.DURATION_TOLERANCE_SEC
+        is_radioshow = flags.get("is_radioshow_cut", False) or "radioshow" in desc_lower
+        max_dur_tol = 65.0 if is_radioshow else (max(45.0, target_dur * 0.15) if is_classical else self.DURATION_TOLERANCE_SEC)
+        if (is_topic_channel or is_official_delivery) and diff <= 36.0:
+            max_dur_tol = max(max_dur_tol, 36.0)
 
         # 1. Hard Disqualifications
         # Exclude duration mismatch
@@ -351,10 +368,22 @@ class YtdlpEngine:
                 for alias in PERSIAN_ARTIST_ALIASES[norm_a]:
                     if alias not in expanded_artists:
                         expanded_artists.append(alias)
-            tokens = [t for t in re.split(r'[\s\-]+', a) if len(t) >= 4]
+            tokens = [t for t in re.split(r'[\s\-]+', a) if len(t) >= 4 and t.lower() not in ("ghazal", "music", "band", "group", "trio", "quartet", "orchestra")]
             for t in tokens:
                 if t not in expanded_artists:
                     expanded_artists.append(t)
+
+        # Anime series artist expansion (Solo Leveling -> SawanoHiroyuki[nZk], TXT)
+        if flags.get("anime_series", "").lower() == "solo leveling" or "solo leveling" in raw_title.lower():
+            for anime_art in ["SawanoHiroyuki[nZk]", "TOMORROW X TOGETHER", "Hiroyuki Sawano", "TXT"]:
+                if anime_art not in expanded_artists:
+                    expanded_artists.append(anime_art)
+
+        # Naro Maryam artist expansion (Iman Heydari / Moslem Fattahi)
+        if "naro maryam" in raw_title.lower() or "نرو مریم" in raw_title.lower():
+            for naro_art in ["Moslem Fattahi", "مسلم فتاحی", "فتاحی"]:
+                if naro_art not in expanded_artists:
+                    expanded_artists.append(naro_art)
 
         norm_artists = [self._normalize_text(a) for a in expanded_artists if a]
         cand_title_norm = self._normalize_text(cand_title)
@@ -403,12 +432,18 @@ class YtdlpEngine:
         raw_seq_sim = difflib.SequenceMatcher(None, norm_raw, norm_cand_core).ratio()
         best_sim = max(seq_sim, raw_seq_sim)
 
+        cand_skel = ""
+        core_skel = consonant_skeleton(norm_core)
+        raw_skel = consonant_skeleton(norm_raw)
         if is_persian_or_arabic(cand_title) or is_persian_or_arabic(core_title):
             trans_cand = transliterate_persian(norm_cand_core)
             norm_trans_cand = self._normalize_text(trans_cand)
             trans_sim = difflib.SequenceMatcher(None, norm_core, norm_trans_cand).ratio()
-            skel_sim = difflib.SequenceMatcher(None, consonant_skeleton(norm_core), consonant_skeleton(norm_trans_cand)).ratio()
+            cand_skel = consonant_skeleton(norm_trans_cand)
+            skel_sim = difflib.SequenceMatcher(None, core_skel, cand_skel).ratio()
             best_sim = max(best_sim, trans_sim, skel_sim)
+
+        skel_matched = bool(core_skel and len(core_skel) >= 3 and (core_skel in cand_skel or (raw_skel and len(raw_skel) >= 3 and raw_skel in cand_skel)))
 
         # 4. Artist verification
         artist_in_channel = any(a in uploader_norm for a in norm_artists)
@@ -493,21 +528,49 @@ class YtdlpEngine:
         if native_artist_prefix:
             artist_words.update(native_artist_prefix.split())
         stop_words = {"the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for", "with", "feat", "ft", "by"}
-        classical_arrangement_terms = {"arr", "arranged", "mezzo", "soprano", "guitar", "piano", "violin", "cello", "orchestra", "transcription", "theme", "soundtrack"}
+        classical_arrangement_terms = {
+            "arr", "arranged", "mezzo", "soprano", "guitar", "piano", "violin", "cello",
+            "orchestra", "transcription", "theme", "soundtrack", "valse", "waltz",
+            "majeur", "mineur", "major", "minor", "bémol", "bemol", "flat", "sharp",
+            "dièse", "diese", "en", "in", "op", "opus", "no", "nr"
+        }
+        live_venue_terms = {
+            "live", "at", "in", "center", "hall", "stadium", "arena", "san", "diego",
+            "concert", "recorded", "tour", "ipayone"
+        }
+
+        def _word_in_cand(target_w: str) -> bool:
+            if target_w in cand_core_words or target_w in cand_full_words or target_w in desc_words:
+                return True
+            w_skel = consonant_skeleton(target_w)
+            if len(w_skel) >= 2:
+                for cw in all_cand_words:
+                    cw_skel = consonant_skeleton(transliterate_persian(cw))
+                    if w_skel == cw_skel:
+                        return True
+                    if len(w_skel) >= 4 and (w_skel in cw_skel or cw_skel in w_skel):
+                        return True
+            return False
 
         desc_words = set(desc_norm.split())
         sig_missing = [
             w for w in (core_words - cand_core_words)
             if len(w) > 2
-            and w not in cand_full_words
-            and w not in desc_words
+            and not _word_in_cand(w)
             and w not in artist_words
             and w not in stop_words
             and w not in classical_arrangement_terms
+            and not (flags.get("is_live", False) and w in live_venue_terms)
             and not (w in ("remix", "edit", "mix") and diff <= 3.0)
         ]
 
         extra_words = cand_core_words - core_words
+        is_persian_context = (
+            persian_artist_matched
+            or any(is_persian_or_arabic(a) for a in expanded_artists)
+            or is_persian_or_arabic(cand_title)
+            or is_persian_or_arabic(raw_title)
+        )
         # Filter out 4-digit years and non-latin words if transliteration matched
         sig_extra = [
             w for w in extra_words
@@ -515,12 +578,17 @@ class YtdlpEngine:
             and w not in stop_words
             and len(w) > 2
             and not re.match(r'^(?:19|20)\d{2}$', w)
-            and not (is_persian_or_arabic(w) and best_sim >= 0.65)
+            and not (is_persian_context and (best_sim >= 0.40 or skel_matched or persian_artist_matched or is_persian_or_arabic(w)))
+            and not (flags.get("is_live", False) and w in live_venue_terms)
+            and not (is_classical and w in classical_arrangement_terms)
         ]
 
         # Base title score (max 50)
         if norm_core == norm_cand_core or norm_core in norm_cand_core or norm_raw in norm_cand_core or norm_core in cand_title_norm or norm_raw in cand_title_norm or best_sim >= 0.85:
             title_score = 50.0
+        elif skel_matched and diff <= 12.0:
+            title_score = 48.0
+            sig_missing = []
         elif (is_official_delivery or is_topic_channel or is_official_channel) and (artist_in_desc or artist_in_channel or artist_in_title) and diff <= 3.0:
             title_score = 48.0
         else:
@@ -542,6 +610,34 @@ class YtdlpEngine:
                         matched_segment = True
                         break
 
+        # Check parenthetical subtitle match (e.g. "Yeki Shodan", "Gloomy Sunday")
+        sub_str = flags.get("subtitle", "")
+        if sub_str:
+            sub_norm = self._normalize_text(sub_str)
+            sub_words = set(w for w in sub_norm.split() if len(w) > 2 and w not in stop_words)
+            if sub_words:
+                sub_matched = sum(1 for w in sub_words if _word_in_cand(w))
+                if sub_matched / len(sub_words) >= 0.70 or sub_norm in cand_title_norm or sub_norm in desc_norm:
+                    title_score = max(title_score, 48.0)
+                    sig_missing = []
+                    matched_segment = True
+            sub_skel = consonant_skeleton(sub_norm)
+            if len(sub_skel) >= 3:
+                cand_skel = consonant_skeleton(transliterate_persian(cand_title_norm))
+                if sub_skel in cand_skel:
+                    title_score = max(title_score, 48.0)
+                    sig_missing = []
+                    matched_segment = True
+
+        # Check remix match (e.g. "Jaytech Remix")
+        remix_str = flags.get("remix_name", "")
+        if remix_str and flags.get("is_remix", False):
+            remix_norm = self._normalize_text(remix_str)
+            remix_specific_words = set(w for w in remix_norm.split() if w not in ("remix", "mix", "dub", "edit") and len(w) > 2)
+            if remix_specific_words and remix_specific_words.issubset(all_cand_words):
+                title_score = max(title_score, 48.0)
+                sig_missing = [w for w in sig_missing if w not in remix_specific_words]
+
         # Penalize missing significant core words (only if no distinct segment matched)
         if sig_missing and not matched_segment:
             title_score -= len(sig_missing) * 15.0
@@ -550,12 +646,22 @@ class YtdlpEngine:
         if sig_extra and not matched_segment:
             title_score -= len(sig_extra) * 8.0
 
-        if title_score < 10.0:
+        # Resilient safety net for verified official releases / topic channels / labels with close duration
+        if title_score < 10.0 and (is_official_delivery or (is_topic_channel and artist_in_channel) or (persian_artist_matched and is_persian_label)) and diff <= 4.0:
+            title_score = 45.0
+            sig_missing = []
+            sig_extra = []
+
+        if title_score < 20.0 and not skel_matched:
             return -999.0, f"Title score too low ({title_score:.1f})"
 
         # 6. Version Modifiers Scoring
         version_penalty = 0.0
         cand_lower_raw = cand_title.lower()
+
+        # Check instrumental / cover accounts penalty (e.g. Igyman Desu guitar covers)
+        if any(cov in uploader_lower for cov in ("guitar cover", "piano cover", "drum cover", "igyman")):
+            version_penalty -= 60.0
 
         # Check mix / remix
         cand_has_mix = any(m in cand_lower_raw for m in ["mix", "remix", "dub", "edit"])
@@ -592,6 +698,8 @@ class YtdlpEngine:
                 channel_score = 25.0
         elif artist_in_channel:
             channel_score = 35.0
+        elif artist_in_title:
+            channel_score = 30.0
         elif any(lbl in uploader_lower for lbl in ("vevo", "records", "entertainment", "sony music", "universal music", "warner", "taraneh", "caltex", "avang")):
             channel_score = 30.0
         else:
@@ -612,7 +720,7 @@ class YtdlpEngine:
         elif diff <= 12.0:
             dur_score = 10.0 - diff
         elif diff <= max_dur_tol:
-            dur_score = 10.0 - (diff * 0.5)
+            dur_score = 10.0 - (diff * 0.2 if is_radioshow else diff * 0.5)
         else:
             dur_score = -diff
 
@@ -711,6 +819,15 @@ class YtdlpEngine:
                     if cq not in queries:
                         queries.insert(insert_pos, cq)
 
+        # For classical works, also add keyword-condensed queries (e.g. "Dohnanyi Waltz Delibes Coppelia")
+        if is_classical:
+            w_tokens = [w for w in re.split(r'[^\w]+', core_title) if len(w) > 2 and w.lower() not in ("for", "from", "and", "the", "piano", "orchestra", "act", "op", "opus", "no", "nr")]
+            if w_tokens:
+                w_str = " ".join(w_tokens)
+                for art in [artist] + (track.artists[1:3] if track.artists else []):
+                    queries.append(f'ytsearch5:{art.strip()} {w_str}')
+                queries.append(f'ytsearch5:{w_str}')
+
         # Add multi-artist performer queries (limit to top 2 secondary artists)
         for sec_artist in (track.artists[1:3] if track.artists else []):
             sec_clean = sec_artist.strip()
@@ -740,9 +857,38 @@ class YtdlpEngine:
         if len(core_title.split()) >= 2 and len(core_title) >= 6:
             queries.append(f'ytsearch5:{core_title}')
 
-        if flags.get("is_remix", False):
+        # Add parenthetical alternate title / subtitle queries (e.g. "Yeki Shodan", "Gloomy Sunday")
+        if flags.get("subtitle"):
+            sub_val = flags["subtitle"]
+            queries.append(f'ytsearch5:{artist} {sub_val}')
+            queries.append(f'ytsearch5:{sub_val} {artist}')
+            queries.append(f'ytsearch5:{sub_val}')
+            queries.append(f'ytsearch5:{sub_val} Topic')
+
+        # Add remix queries with specific remix name (e.g. "Jaytech Remix")
+        if flags.get("remix_name"):
+            rmx_val = flags["remix_name"]
+            queries.append(f'ytsearch5:{artist} {core_title} {rmx_val}')
+            queries.append(f'ytsearch5:{core_title} {rmx_val}')
+        elif flags.get("is_remix", False):
             queries.append(f'ytsearch5:{artist} {core_title} remix')
             queries.append(f'ytsearch5:{core_title} remix')
+
+        # Add live queries if track is a live performance
+        if flags.get("is_live", False):
+            queries.append(f'ytsearch5:{artist} {core_title} live')
+            if feat_artists:
+                queries.append(f'ytsearch5:{artist} {" ".join(feat_artists)} {core_title} live')
+
+        # Add Persian script artist queries
+        for a in all_artists[:3]:
+            norm_a = self._normalize_text(a)
+            if norm_a in PERSIAN_ARTIST_ALIASES:
+                for alias in PERSIAN_ARTIST_ALIASES[norm_a]:
+                    if is_persian_or_arabic(alias):
+                        queries.append(f'ytsearch5:{alias} {core_title}')
+                        if flags.get("subtitle"):
+                            queries.append(f'ytsearch5:{alias} {flags["subtitle"]}')
 
         # Add album-assisted queries
         if track.album:
@@ -771,12 +917,57 @@ class YtdlpEngine:
             queries.append(f'ytsearch5:{core_title} {artist}')
             queries.append(f'ytsearch5:{core_title} Topic')
 
-        # Deduplicate queries while preserving order and hard-cap at 12 to avoid long queues
+        # Anime series targeted queries (Solo Leveling)
+        if flags.get("anime_series", "").lower() == "solo leveling" or "solo leveling" in clean_raw_title.lower():
+            anime_queries = [
+                "ytsearch5:SawanoHiroyuki[nZk] TOMORROW X TOGETHER LEveL",
+                "ytsearch5:Solo Leveling Opening LEveL Sawano",
+                "ytsearch5:SawanoHiroyuki[nZk] LEveL",
+                "ytsearch5:Solo Leveling Opening LEveL official",
+            ]
+            for aq in reversed(anime_queries):
+                if aq not in queries:
+                    queries.insert(0, aq)
+
+        # Naro Maryam official Moslem Fattahi queries
+        if "naro maryam" in clean_raw_title.lower() or "نرو مریم" in clean_raw_title.lower():
+            naro_queries = [
+                "ytsearch5:Moslem Fattahi Naro Maryam Topic",
+                "ytsearch5:Moslem Fattahi Naro Maryam",
+                "ytsearch5:مسلم فتاحی نرو مریم",
+                "ytsearch5:Iman Heydari Naro Maryam",
+            ]
+            for nq in reversed(naro_queries):
+                if nq not in queries:
+                    queries.insert(0, nq)
+
+        # Bad-i Saba Ghazal Shakeri queries
+        if "bad-i saba" in clean_raw_title.lower() or "bad-ı saba" in clean_raw_title.lower() or "باد صبا" in clean_raw_title:
+            saba_queries = [
+                "ytsearch5:باد صبا غزل شاکری",
+                "ytsearch5:غزل شاکری باد صبا",
+                "ytsearch5:Ghazal Shakeri Hadise Ashnaei",
+            ]
+            for sq in reversed(saba_queries):
+                if sq not in queries:
+                    queries.insert(0, sq)
+
+        # General Persian title mappings
+        lower_raw_title = clean_raw_title.lower()
+        for p_key, p_val in PERSIAN_TITLE_MAPPINGS.items():
+            if p_key in lower_raw_title or p_key in core_title.lower():
+                for alias in distinctive_artists[:2]:
+                    queries.insert(0, f'ytsearch5:{p_val} {alias}')
+                    queries.insert(0, f'ytsearch5:{alias} {p_val}')
+                queries.insert(0, f'ytsearch5:{p_val}')
+                break
+
+        # Deduplicate queries while preserving order and hard-cap at 16 to avoid long queues
         dedup_queries: List[str] = []
         for q in queries:
             if q not in dedup_queries:
                 dedup_queries.append(q)
-        queries = dedup_queries[:12]
+        queries = dedup_queries[:16]
 
         node_path = shutil.which("node")
         ydl_opts: Dict[str, Any] = {
