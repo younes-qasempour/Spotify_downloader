@@ -372,7 +372,7 @@ class GenreResolver:
         except Exception:
             pass
         self._session.headers.update({
-            "User-Agent": "SpotifyDownloader/1.5.4 (Windows NT 10.0; Win64; x64)"
+            "User-Agent": "SpotifyDownloader/1.6.0 (Windows NT 10.0; Win64; x64)"
         })
         self._artist_cache: Dict[str, List[str]] = {}
         self._track_cache: Dict[str, List[str]] = {}

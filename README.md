@@ -3,7 +3,7 @@
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
   <strong>Next-Generation High-Fidelity Spotify Audio Downloader & Library Manager for Windows 11</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.5.4-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.5.4"></a>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.6.0-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.6.0"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Fluent">
   <img src="https://img.shields.io/badge/Audio-24bit%20Hi--Res%20%7C%2016bit%20FLAC-00C853?style=for-the-badge&logo=flac&logoColor=white" alt="Lossless FLAC">
@@ -26,6 +26,17 @@ Built on a completely **decoupled two-layer architecture**:
 ---
 
 ## 🌟 Key Features
+
+### 🏛️ Centralized Master Library & Zero Duplication (v1.6.0)
+- **Central Master Directory:** All downloads route into a consolidated repository (`downloads/`).
+- **Zero-Duplication Virtual Playlists:** Songs shared across multiple Spotify playlists are downloaded exactly once and shared virtually.
+- **Smart Remaster & Punctuation Deduplication:** Automatically consolidates alternative album issues (e.g. *Remastered*, *Deluxe Edition*, *2011 Mix*) to save gigabytes of disk space while keeping all playlists linked.
+
+### 📦 Multi-Device Track & Playlist Exporter (v1.6.0)
+- **Portable Song Exporter:** Easily export any playlist or selection to external USB drives, car stereos, or portable DAPs with optional on-the-fly transcoding to MP3 (320 kbps CBR via FFmpeg), FLAC, or Opus.
+- **Multi-Platform `.m3u8` Playlist Exporter:** Generates lightweight playlist files preserving exact original Spotify track sequence:
+  - **Android Universal:** Filename-only matching (`Song.flac`) recognized automatically by Poweramp, Musicolet, GoneMAD, and VLC Android.
+  - **Windows PC:** Absolute paths for VLC, PotPlayer, KMPlayer, and Foobar2000 with instant *"Play in Default Player"* launch.
 
 ### 🤖 MeloBot Telegram Integration & FastTelethon Acceleration (v1.5.2)
 - **10x Faster Downloads & Direct MTProto Streaming:** Upgraded download pipeline with optimized MTProto routines and native crypto acceleration (`cryptg`), speeding up candidate search and media transfers by up to 10x via `@melobot`.
@@ -300,7 +311,7 @@ python build_windows.py
 This automated pipeline:
 1. Validates and generates multi-resolution Windows icons (`assets/icon.ico`).
 2. Invokes **PyInstaller** using `app.spec` to create a slim, windowed `dist/Flacify` application bundle.
-3. Invokes **Inno Setup 6** (`ISCC.exe`) to generate `dist/installer/Flacify_Setup_v1.5.4.exe` with a complete uninstaller and mutex process guard.
+3. Invokes **Inno Setup 6** (`ISCC.exe`) to generate `dist/installer/Flacify_Setup_v1.6.0.exe` with a complete uninstaller and mutex process guard.
 
 ---
 

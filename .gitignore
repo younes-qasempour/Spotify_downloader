@@ -40,6 +40,8 @@ scratch/
 scripts/upload_release_asset.py
 *.log
 *.tmp
+*.bak
+*.corrupted*
 
 # PyInstaller Build & Dist
 build/

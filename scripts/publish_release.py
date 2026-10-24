@@ -22,31 +22,30 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.5.4'
-    release_name = 'Flacify v1.5.4 — Liked Songs Live Sync, Context Menu Actions & Disk Reconciliation'
+    tag = 'v1.6.0'
+    release_name = 'Flacify v1.6.0 — Centralized Master Library, Multi-Device Playlist Exporter & Clean Deduplication'
 
     release_body = (
-        "# 🚀 Flacify v1.5.4 Release Notes\n\n"
-        "### 💜 Spotify Liked Songs Live Library Sync\n"
-        "- **Native `collection/tracks` Support**: Added full support for resolving, saving, and syncing Spotify's personal Liked Songs library (`https://open.spotify.com/collection/tracks`).\n"
-        "- **Direct Library Pagination**: Integrates Spotify's `/v1/me/tracks` (`current_user_saved_tracks`) with `user-library-read` OAuth scope and automatic re-authorization.\n"
-        "- **1-Click Library Migration**: Added a helper button in the *Edit Playlist* dialog to instantly connect any saved playlist to your live Spotify Liked Songs library.\n"
-        "- **Live Sync Progress Counter**: The Sync button now provides active visual feedback (e.g., `Syncing (1200/5530)...`) during large library scans.\n\n"
-        "### 🎛️ Context Menu Actions & Multi-Engine Re-download\n"
-        "- **Delete Downloaded File**: Right-click context option in Playlists and Completed views to delete physical files and revert status back to pending.\n"
-        "- **Delete & Re-download**: Force re-download individual songs using your preferred provider:\n"
-        "  - ⚡ **Auto (Best Quality)**\n"
-        "  - 🤖 **MeloBot Telegram (FLAC / 320k)**\n"
-        "  - 💎 **Musilon VIP (320k MP3)**\n"
-        "  - 📺 **YouTube Music (Opus)**\n"
-        "- **Archive Cache Bypass**: Re-downloads explicitly bypass archive file caching (`skip_archive=True`) to fetch freshly requested audio.\n\n"
-        "### 🗄️ Disk Reconciliation & Database Deduplication\n"
-        "- **Disk Reconciliation**: Automated scan (`reconcile_playlist_files`) checks physical files on disk, repairing paths or demoting missing tracks to pending.\n"
-        "- **Exact Count Alignment**: Total tracks strictly mirror deduplicated rows in `saved_playlist_tracks`.\n\n"
+        "# 🚀 Flacify v1.6.0 Release Notes\n\n"
+        "### 🏛️ Centralized Master Library (Zero Duplication)\n"
+        "- **Single Master Storage**: All downloaded tracks reside in a single central repository (`downloads/`).\n"
+        "- **Virtual Playlist References**: Multiple playlists reference the same local tracks without duplicate downloads or wasted disk space.\n"
+        "- **Automatic Remaster Deduplication**: Intelligently detects and merges duplicate tracks across album versions (e.g. Remastered, Deluxe, Anniversary Editions) while keeping all playlists linked.\n\n"
+        "### 📦 Multi-Device Track & Playlist Exporter\n"
+        "- **Portable Song Exporter**: One-click export of any playlist or selection to external USB drives, car stereos, or portable DAPs.\n"
+        "- **On-the-Fly Transcoding**: Convert on export to MP3 (320 kbps CBR via FFmpeg), FLAC, or Opus without touching the original lossless files.\n"
+        "- **Incremental & Non-Destructive**: Skip already exported files and preview live percentage and progress.\n\n"
+        "### 🎵 Multi-Platform `.m3u8` Playlist Exporter\n"
+        "- **Exact Spotify Track Order**: Preserves the 100% exact track sequence from Spotify (`ORDER BY track_number ASC`).\n"
+        "- **Android Universal Preset**: Generates filename-only playlists (`Song.flac`) that Poweramp, Musicolet, GoneMAD, and VLC Android index automatically regardless of folder structure.\n"
+        "- **Windows PC Preset**: Generates absolute paths for VLC, PotPlayer, KMPlayer, and Foobar2000, with a one-click *Play in Default Player* action.\n\n"
+        "### ⚡ MeloBot Engine Isolation & Context Menu Fixes\n"
+        "- **Musilon Limit Suppression**: MeloBot download sessions are strictly isolated; Musilon quota or VIP expiration popups are suppressed.\n"
+        "- **Context Menu Overhaul**: Fixed right-click triggering re-downloads inadvertently; added direct *Play Track* and *Reveal in File Explorer*.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.5.4.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.5.4.exe`\n"
+        "Download and run **`Flacify_Setup_v1.6.0.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.6.0.exe`\n"
     )
 
     token = get_github_token()
@@ -94,7 +93,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.5.4.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.6.0.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")
