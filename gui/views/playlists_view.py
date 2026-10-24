@@ -2000,14 +2000,16 @@ class PlaylistsView(QWidget):
             from core.utils import sanitize_filename
             safe_name = sanitize_filename(self.current_playlist_data.get("name", ""))
             specific_folder = os.path.join(out_dir, safe_name)
+            playlist_m3u8 = os.path.join(out_dir, "playlists", f"{safe_name}.m3u8")
             if save_in_subfolders and os.path.isdir(specific_folder):
                 out_dir = specific_folder
-            elif not save_in_subfolders and os.path.isdir(specific_folder):
+            elif not save_in_subfolders and os.path.isfile(playlist_m3u8):
                 try:
-                    if os.listdir(specific_folder):
-                        out_dir = specific_folder
+                    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+                    subprocess.Popen(["explorer", f"/select,{os.path.normpath(playlist_m3u8)}"], creationflags=flags)
+                    return
                 except Exception:
-                    pass
+                    out_dir = os.path.dirname(playlist_m3u8)
 
         if os.path.exists(out_dir):
             try:

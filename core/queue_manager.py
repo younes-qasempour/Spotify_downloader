@@ -480,7 +480,8 @@ class DownloadQueueManager:
                 base_name = sanitize_filename(base_name, max_length=120)
                 target_dest = os.path.normpath(os.path.join(output_dir, f"{base_name}{file_ext}"))
 
-                if os.path.abspath(src_file) == os.path.abspath(target_dest):
+                save_in_subfolders = config.get("download.save_in_subfolders", False)
+                if not save_in_subfolders or os.path.abspath(src_file) == os.path.abspath(target_dest):
                     # Same exact file in the destination folder
                     item.output_path = src_file
                     item.quality_badge = archived.get("quality_badge") or self.archive.infer_badge_from_file(src_file)[0] or "FLAC 16"
@@ -734,15 +735,16 @@ class DownloadQueueManager:
             if file_path and os.path.isfile(file_path):
                 self.archive.add_track(track, file_path, item.quality_badge, item.source_type, genre=track.genre_str)
                 self.archive.mark_saved_track_downloaded(track.id, file_path, item.quality_badge, item.source_type)
-                if config.get("download.generate_m3u8", True) and config.get("download.save_in_subfolders", False) and getattr(track, "collection_type", "track") in ("playlist", "album"):
+                if config.get("download.generate_m3u8", True) and getattr(track, "collection_type", "track") in ("playlist", "album"):
                     try:
-                        from core.utils import generate_m3u8_file
-                        threading.Thread(
-                            target=generate_m3u8_file,
-                            args=(os.path.dirname(file_path), getattr(track, "collection_name", "")),
-                            daemon=True,
-                            name="M3U8Generator"
-                        ).start()
+                        coll_name = getattr(track, "collection_name", "")
+                        if coll_name:
+                            threading.Thread(
+                                target=self.archive.export_collection_m3u8,
+                                args=(coll_name,),
+                                daemon=True,
+                                name="M3U8Generator"
+                            ).start()
                     except Exception as e_m3u8:
                         logger.debug(f"m3u8 playlist file generation note: {e_m3u8}")
 

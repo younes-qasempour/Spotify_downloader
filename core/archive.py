@@ -1669,11 +1669,13 @@ class ArchiveManager:
 
         if not dest_path:
             output_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
-            pl_folder = os.path.join(output_dir, safe_name)
-            if os.path.isdir(pl_folder):
+            save_in_subfolders = config.get("download.save_in_subfolders", False)
+            if save_in_subfolders:
+                pl_folder = os.path.join(output_dir, safe_name)
                 dest_path = os.path.join(pl_folder, f"{safe_name}.m3u8")
             else:
-                dest_path = os.path.join(output_dir, f"{safe_name}.m3u8")
+                playlists_folder = os.path.join(output_dir, "playlists")
+                dest_path = os.path.join(playlists_folder, f"{safe_name}.m3u8")
 
         try:
             os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
@@ -1687,7 +1689,8 @@ class ArchiveManager:
                     f.write(f"#EXTINF:{dur_sec},{t.get('artist', 'Unknown')} - {t.get('title', 'Unknown')}\n")
                     try:
                         rel_p = os.path.relpath(fp, dest_dir)
-                        f.write(f"{rel_p}\n")
+                        # Normalize to forward slashes for universal player compatibility
+                        f.write(f"{rel_p.replace(os.sep, '/')}\n")
                     except Exception:
                         f.write(f"{fp}\n")
             logger.info(f"Exported M3U8 playlist '{name}' to {dest_path}")
@@ -1695,6 +1698,37 @@ class ArchiveManager:
         except Exception as e:
             logger.error(f"Failed to export M3U8 playlist for {playlist_id}: {e}")
             return None
+
+    def export_collection_m3u8(self, collection_name: str, dest_path: Optional[str] = None) -> Optional[str]:
+        """
+        Finds a saved playlist matching collection_name and exports/updates its portable .m3u8 file.
+        """
+        if not collection_name:
+            return None
+        try:
+            with self.connection() as conn:
+                row = conn.execute("SELECT id FROM saved_playlists WHERE name = ? COLLATE NOCASE", (collection_name,)).fetchone()
+                if row:
+                    return self.export_saved_playlist_m3u8(row["id"], dest_path=dest_path)
+        except Exception as e:
+            logger.debug(f"Could not export collection M3U8 for '{collection_name}': {e}")
+        return None
+
+    def sync_all_playlist_m3u8_files(self) -> List[str]:
+        """
+        Refreshes and regenerates .m3u8 playlist files for all saved playlists in the library.
+        Returns a list of exported file paths.
+        """
+        exported = []
+        try:
+            playlists = self.get_saved_playlists()
+            for pl in playlists:
+                p = self.export_saved_playlist_m3u8(pl["id"])
+                if p:
+                    exported.append(p)
+        except Exception as e:
+            logger.warning(f"Error syncing playlist M3U8 files: {e}")
+        return exported
 
 
     # -------------------------------------------------------------------------

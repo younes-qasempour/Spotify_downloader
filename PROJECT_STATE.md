@@ -784,6 +784,24 @@ d:\Spotify-Downloader\
      - Added UI toggle switch **"Organize Downloads into Subfolders"** in Settings View under Download Output Directory.
   3. **Unit Tests:** Added `tests/test_subfolder_settings.py`. All 76 tests passing.
 
+### 56. Feature Branch `feature/central-library-no-duplicates`: Centralized Master Music Library & Database-Linked Playlists
+- **Objective:** Eliminate duplicate audio files on disk completely. Mirror Spotify's storage model where all actual songs live once in a single central master folder (`downloads/`), while playlists act purely as database pointers and standard zero-overhead `.m3u8` playlist files in `downloads/playlists/`.
+- **Implementation & Accomplishments:**
+  1. **Consolidation of 5,519 Master Audio Files:**
+     - Relocated 5,519 unique master audio tracks directly into the root download folder `D:\Spotify-Downloader\downloads\`.
+     - Deduplicated 57 redundant duplicate audio files across 25 old subfolders.
+     - Pruned all 25 empty subfolders.
+  2. **Dedicated `downloads/playlists/` Directory & Portable M3U8 Generator:**
+     - Created `D:\Spotify-Downloader\downloads\playlists\` housing standard UTF-8 relative `.m3u8` files for every playlist (`Liked Songs.m3u8`, `Rock.m3u8`, `Rap.m3u8`, `J-Pop.m3u8`, `J-Pop Mix.m3u8`, `Clair Obscur.m3u8`).
+     - Tracks are linked using portable relative references (`../<Artist - Title.ext>`) and forward-slash normalization, making them 100% plug-and-play across VLC, foobar2000, AIMP, and mobile DAPs without taking any additional disk space.
+  3. **Zero-Copy Queue Manager (`core/queue_manager.py`):**
+     - Updated `DownloadQueueManager._process_item()`: when a track already exists in the central library/archive, `shutil.copy2` is completely bypassed. The existing audio file is linked directly to the playlist track in SQLite (`saved_playlist_tracks`), achieving 0-byte disk overhead and instant completion.
+     - Added automatic background collection M3U8 updater on track completions via `self.archive.export_collection_m3u8()`.
+  4. **Explorer Integration (`gui/views/playlists_view.py`):**
+     - Clicking "Open Folder" from within a playlist view now automatically highlights the playlist's portable `.m3u8` file in Windows Explorer (`explorer /select,playlists/<Name>.m3u8`).
+  5. **Unit Tests:** Updated `tests/test_subfolder_settings.py` covering relative M3U8 path resolution, collection export, and single-folder routing. All 78 tests passing.
+
+
 
 
 ### Run the GUI Application:
