@@ -801,6 +801,18 @@ d:\Spotify-Downloader\
      - Clicking "Open Folder" from within a playlist view now automatically highlights the playlist's portable `.m3u8` file in Windows Explorer (`explorer /select,playlists/<Name>.m3u8`).
   5. **Unit Tests:** Updated `tests/test_subfolder_settings.py` covering relative M3U8 path resolution, collection export, and single-folder routing. All 78 tests passing.
 
+### 34. Central Remaster Deduplication & Distinct Playlist Artwork Resolution (October 2026)
+- **Remaster & Edition Multiples Eliminated:**
+  - Diagnosed duplicate track files on disk differing only by remaster years, anniversaries, or version tags (e.g. `Black Sabbath - Iron Man - 2009 Remaster.opus` vs `Black Sabbath - Iron Man - 2012 - Remaster.opus`, `Children of the Sea`, `Heaven and Hell`, `Paranoid`, `Snowblind`, `Enter Sandman`, `Smells Like Teen Spirit`, `Zombie`, etc.).
+  - Executed safe multi-tier deduplication keeping the highest-quality / cleaner master copy (preferring FLAC lossless where available, or clean unnumbered titles).
+  - Remapped all references in SQLite (`saved_playlist_tracks` and `downloaded_tracks`) to point to the canonical kept files.
+  - Updated all portable `.m3u8` playlist files in `downloads/playlists/` to reference the retained files.
+  - Safely pruned 44 duplicate remaster files from `D:\Spotify-Downloader\downloads\`, freeing 311.92 MB of disk space.
+- **Playlist Artwork Resolution Fixed:**
+  - **Bug:** `get_playlists()` and `get_albums()` passed `folder_path = os.path.dirname(sample_file)` (evaluating to `D:\Spotify-Downloader\downloads`) to `resolve_collection_cover()`. Because `cache/covers/downloads.jpg` existed, every single playlist received `downloads.jpg` as its cover art.
+  - **Fix:** In [core/archive.py](file:///d:/Spotify-Downloader/core/archive.py#L34), updated `resolve_collection_cover(collection_name_or_folder, sample_file)` to strictly ignore generic folder names (`downloads`, `music`). Added case-insensitive and prefix matching against `cache/covers/` as well as dynamic fallback to `saved_playlists.cover_url`. Passed `pl_name` in `get_playlists()` and `alb_name` in `get_albums()`. Removed rogue `downloads.jpg`. All 18 playlists now correctly render their distinct artwork.
+
+
 
 
 
