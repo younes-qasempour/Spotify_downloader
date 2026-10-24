@@ -1995,12 +1995,19 @@ class PlaylistsView(QWidget):
 
     def _open_download_folder(self):
         out_dir = config.get("download.output_dir", "downloads")
+        save_in_subfolders = config.get("download.save_in_subfolders", False)
         if self.current_playlist_data:
             from core.utils import sanitize_filename
             safe_name = sanitize_filename(self.current_playlist_data.get("name", ""))
             specific_folder = os.path.join(out_dir, safe_name)
-            if os.path.isdir(specific_folder):
+            if save_in_subfolders and os.path.isdir(specific_folder):
                 out_dir = specific_folder
+            elif not save_in_subfolders and os.path.isdir(specific_folder):
+                try:
+                    if os.listdir(specific_folder):
+                        out_dir = specific_folder
+                except Exception:
+                    pass
 
         if os.path.exists(out_dir):
             try:

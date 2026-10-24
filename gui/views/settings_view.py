@@ -760,6 +760,29 @@ class SettingsView(QScrollArea):
         an_row.addWidget(an_desc)
         d_layout.addLayout(an_row)
 
+        # Organize into Subfolders Switch Row
+        subfolder_row = QHBoxLayout()
+        subfolder_info = QVBoxLayout()
+        subfolder_title = BodyLabel("Organize Downloads into Subfolders", down_card)
+        subfolder_title.setStyleSheet("font-weight: bold;")
+        subfolder_desc = CaptionLabel(
+            "When enabled, saves songs into subfolders named after their playlist or album. "
+            "When disabled (Default), saves all downloaded songs directly into your main output folder.",
+            down_card
+        )
+        subfolder_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        subfolder_desc.setWordWrap(True)
+        subfolder_info.addWidget(subfolder_title)
+        subfolder_info.addWidget(subfolder_desc)
+
+        self.subfolder_switch = SwitchButton(down_card)
+        self.subfolder_switch.setChecked(config.get("download.save_in_subfolders", False))
+        self.subfolder_switch.checkedChanged.connect(self._on_subfolder_switch_changed)
+
+        subfolder_row.addLayout(subfolder_info, 1)
+        subfolder_row.addWidget(self.subfolder_switch)
+        d_layout.addLayout(subfolder_row)
+
         # Concurrent Downloads & Searches Row
         concurrency_row = QHBoxLayout()
         concurrency_info = QVBoxLayout()
@@ -1355,6 +1378,13 @@ class SettingsView(QScrollArea):
             val = cur_min
             self.cooldown_max_spin.setValue(val)
         config.set("musilon.cooldown_max_sec", val)
+
+    def _on_subfolder_switch_changed(self, enabled: bool):
+        config.set("download.save_in_subfolders", enabled)
+        if enabled:
+            InfoBar.info("Folder Organization", "Songs will be sorted into playlist and album subfolders.", duration=3000, parent=self)
+        else:
+            InfoBar.info("Single Folder Mode", "All songs will be saved directly into your download output folder.", duration=3000, parent=self)
 
     def _on_fallback_switch_changed(self, enabled: bool):
         config.set("download.allow_fallback", enabled)

@@ -400,7 +400,8 @@ class DownloadQueueManager:
 
             # Compute target destination folder
             base_output_dir = config.get("download.output_dir", os.path.expanduser("~/Music/Spotify Downloads"))
-            subfolder = getattr(track, "target_folder", "")
+            save_in_subfolders = config.get("download.save_in_subfolders", False)
+            subfolder = getattr(track, "target_folder", "") if save_in_subfolders else ""
             norm_base = os.path.normpath(base_output_dir)
             if subfolder and os.path.basename(norm_base).lower() != subfolder.lower():
                 output_dir = os.path.join(base_output_dir, subfolder)
@@ -733,7 +734,7 @@ class DownloadQueueManager:
             if file_path and os.path.isfile(file_path):
                 self.archive.add_track(track, file_path, item.quality_badge, item.source_type, genre=track.genre_str)
                 self.archive.mark_saved_track_downloaded(track.id, file_path, item.quality_badge, item.source_type)
-                if config.get("download.generate_m3u8", True) and getattr(track, "collection_type", "track") in ("playlist", "album"):
+                if config.get("download.generate_m3u8", True) and config.get("download.save_in_subfolders", False) and getattr(track, "collection_type", "track") in ("playlist", "album"):
                     try:
                         from core.utils import generate_m3u8_file
                         threading.Thread(

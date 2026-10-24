@@ -57,6 +57,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "cache_dir": os.path.normpath(str(get_cache_dir())),
         "naming_template": "{artist} - {title}",
         "album_naming_template": "{track_num}. {artist} - {title}",
+        "save_in_subfolders": False,
         "save_lrc": False,
         "lyrics_mode": "embedded_only",
         "embed_lyrics": True,

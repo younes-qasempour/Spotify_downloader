@@ -248,11 +248,12 @@ class CascadingAudioEngine:
         if cancel_check and cancel_check():
             return None
 
-        # Automatically organize into subfolder based on collection type:
+        # Automatically organize into subfolder based on collection type if enabled:
         # - Playlists: folder named after the playlist
         # - Albums: folder named after the album
         # - Singles/Tracks: folder named "Singles"
-        subfolder = getattr(track, "target_folder", "")
+        save_in_subfolders = config.get("download.save_in_subfolders", False)
+        subfolder = getattr(track, "target_folder", "") if save_in_subfolders else ""
         if subfolder:
             norm_output = os.path.normpath(output_dir)
             if os.path.basename(norm_output).lower() != subfolder.lower():

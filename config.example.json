@@ -19,6 +19,7 @@
     "naming_template": "{artist} - {title}",
     "album_naming_template": "{track_num}. {artist} - {title}",
     "lyrics_mode": "embedded_only",
+    "save_in_subfolders": false,
     "save_lrc": false,
     "embed_lyrics": true,
     "embed_cover_art": true,

@@ -764,6 +764,26 @@ d:\Spotify-Downloader\
      - Implemented `reconcile_playlist_files(playlist_id)` to verify physical disk files and revert deleted files back to `pending`.
   5. **Unit Tests:** Added `tests/test_liked_songs_sync.py` covering URL parsing, API pagination, and delta sync. All tests passing.
 
+### 55. Release v1.5.5: Single Output Folder Storage & Liked Songs File Consolidation
+- **Symptoms & Issues Diagnosed:**
+  1. **Missing Tracks in Folder Explorer:** Windows Explorer showed only 4,774 items in `D:\Spotify-Downloader\downloads\Liked Songs`, while Flacify reported 5,530 / 5,530 tracks downloaded (100%).
+  2. **Root Cause:**
+     - 435 tracks in the Liked Songs playlist are duplicate or remastered releases sharing identical audio filenames on disk (e.g. single vs album releases). 5,530 tracks cleanly correspond to 5,023 unique audio files.
+     - 252 unique files belonging to Liked Songs were scattered across 21 other playlist/album subfolders (e.g. `Clair Obscur`, `On Repeat`, `Calm Relaxing Night`, `Hip Hop Mix`, etc.) because the engine automatically created subfolders based on collection names.
+     - Flacify's deduplication system correctly detected these tracks as downloaded and skipped re-downloading them, leaving them in the other folders.
+- **Fixes & Enhancements Implemented:**
+  1. **Consolidation Migration:**
+     - Migrated 221 files directly into `D:\Spotify-Downloader\downloads\Liked Songs`.
+     - Deduplicated 31 redundant files already present in `Liked Songs`.
+     - Updated all SQLite references in `saved_playlist_tracks` (469 rows) and `downloaded_tracks` (254 rows).
+     - Result: 100% of the 5,530 tracks (4,994 unique audio files + 1 `.m3u8` playlist) now reside directly in `D:\Spotify-Downloader\downloads\Liked Songs` with 0 missing files on disk.
+  2. **Configurable Single-Folder Storage (`download.save_in_subfolders`):**
+     - Added `save_in_subfolders: false` in `DEFAULT_CONFIG["download"]` and `config.example.json`.
+     - Updated `DownloadQueueManager._process_item()` and `CascadingAudioEngine.download_and_tag()`: when `save_in_subfolders` is `False`, all downloads are saved directly into the main `download.output_dir` (`D:\Spotify-Downloader\downloads`) without creating subfolders per playlist/album.
+     - Updated `PlaylistsView._open_download_folder()` to intelligently open the specific playlist folder if one exists with files, or fall back to `output_dir`.
+     - Added UI toggle switch **"Organize Downloads into Subfolders"** in Settings View under Download Output Directory.
+  3. **Unit Tests:** Added `tests/test_subfolder_settings.py`. All 76 tests passing.
+
 
 
 ### Run the GUI Application:
