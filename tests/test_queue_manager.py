@@ -1,9 +1,13 @@
 import unittest
 import tempfile
 import os
+from unittest.mock import MagicMock
 from core.spotify_client import TrackMetadata
 from core.queue_manager import DownloadQueueManager, QueueItem
+from core.resolver import ResolvedTrackSource
 from core.archive import ArchiveManager
+from core.musilon import MusilonVipError
+from core.config import config
 
 
 class MockAudioEngine:
@@ -137,7 +141,48 @@ class TestQueueManager(unittest.TestCase):
         self.assertIn("VIP", prompt_called[0][1])
         self.assertEqual(item.status, "Stopped")
 
+    def test_melobot_mode_suppresses_musilon_limit_prompt(self):
+        self.qm._running = True
+        track = TrackMetadata(
+            id="melo_vip_suppress",
+            title="Melo Song",
+            artists=["Artist"],
+            album="Album",
+            duration_ms=180000,
+            preferred_engine="melobot"
+        )
+        resolved = ResolvedTrackSource(
+            source_type="MeloBot",
+            quality_badge="MeloBot 320k",
+            source_obj=MagicMock(),
+            file_extension="mp3"
+        )
+        self.engine.resolve_source = lambda trk, **kw: resolved
+        def raise_vip(**kw):
+            raise MusilonVipError("HTTP 401 Session Expired")
+        self.engine.download_and_tag = raise_vip
+
+        prompt_called = []
+        def on_limit(trk, itm, rsn, cb):
+            prompt_called.append((trk.title, rsn))
+            cb("stop")
+
+        self.qm.on_musilon_limit_reached = on_limit
+        item = QueueItem(track=track, preferred_engine="melobot")
+
+        # Mock fallback to prevent actual network call
+        fallback_called = []
+        self.qm._fallback_to_youtube = lambda **kw: fallback_called.append(True)
+
+        config.set("source_engine", "melobot")
+        self.qm._process_item(item)
+
+        # Must NEVER invoke Musilon limit popup callback
+        self.assertEqual(len(prompt_called), 0, "Musilon limit prompt must NOT be called in MeloBot mode")
+        self.assertEqual(len(fallback_called), 1, "Must directly fallback to YouTube Music")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

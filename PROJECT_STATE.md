@@ -875,6 +875,29 @@ d:\Spotify-Downloader\
      - **Playlists View:** Detail banner button `.m3u8`, playlist card context menu `"Export Playlist File (.m3u8)..."`.
      - **Completed Library View:** Collection card context menu (Playlists and Albums), collection breadcrumb banner `ToolButton(FluentIcon.SAVE)`, and track table context menu.
 
+### 38. Musilon Popup Suppression During MeloBot Downloads (October 2026)
+- **Problem & Root Cause:**
+  - Users reported that while downloading using MeloBot (Telegram bot), the app would unexpectedly show the modal dialog: *"Musilon Download Limit Reached / VIP Account Issue: Would you like to continue downloading from YouTube Music, or stop the downloading process?"*
+  - **Root Cause Analysis:**
+    1. In [core/resolver.py](file:///d:/Spotify-Downloader/core/resolver.py), when MeloBot was the primary engine, if a track was not found on MeloBot (or bot returned standard quality), the engine cascaded to `_try_musilon()`.
+    2. Because the user's Musilon subscription had expired or reached its rate limit, Musilon raised `MusilonRateLimitExceededError` or `MusilonVipError` (`HTTP 401 Session Expired`).
+    3. `_try_musilon()` re-raised this error, causing [core/queue_manager.py](file:///d:/Spotify-Downloader/core/queue_manager.py) to pause the queue and invoke `on_musilon_limit_reached`, displaying the Musilon modal dialog despite the user having selected MeloBot.
+    4. An erroneous `or skip_musilon` check in `_try_melobot()` also prevented MeloBot from executing when `skip_musilon` was enabled.
+- **Architectural Solution & Fixes:**
+  1. **Strict Engine Isolation in Resolver ([core/resolver.py](file:///d:/Spotify-Downloader/core/resolver.py)):**
+     - Defined `is_melobot_mode = (target_engine == "melobot" or source_engine == "melobot" or (telegram.enabled and not musilon.enabled))`.
+     - In `_try_musilon()`: Added `if is_melobot_mode: return None` to prevent Musilon from being called when MeloBot is active.
+     - In `_try_musilon()` exception handler: If `is_melobot_mode` is True, any Musilon VIP or quota error is silently caught and ignored (`return None`), safely proceeding to YouTube Music fallback.
+     - Fixed `_try_melobot()`: Removed `or skip_musilon` check so MeloBot is never blocked by Musilon skip flags.
+     - Explicit preference handling: When `target_engine == "melobot"`, the resolver checks MeloBot and falls back directly to YouTube Music without ever querying Musilon.
+  2. **Queue Manager Guard ([core/queue_manager.py](file:///d:/Spotify-Downloader/core/queue_manager.py)):**
+     - Automatically sets `skip_mus = True` whenever `is_melobot_mode` is True.
+     - In the Musilon exception handler (`except (MusilonRateLimitExceededError, ...)`): Added `is_melobot_user` check. If True, the queue does not pause and does not show the dialog; it logs the issue and cleanly routes to `_fallback_to_youtube()`.
+  3. **Main Window Defense-in-Depth ([gui/main_window.py](file:///d:/Spotify-Downloader/gui/main_window.py)):**
+     - `_show_musilon_limit_dialog()` now checks if MeloBot is the active engine (`source_engine == "melobot"`, `pref_eng == "melobot"`, or `item.source_type == "MeloBot"`). If so, it suppresses the modal dialog and immediately signals `decision_callback("continue_youtube")`.
+  4. **Verified via Unit Tests ([tests/test_queue_manager.py](file:///d:/Spotify-Downloader/tests/test_queue_manager.py)):**
+     - Added `test_melobot_mode_suppresses_musilon_limit_prompt`, verifying that `on_musilon_limit_reached` is never invoked and downloads proceed to YouTube Music fallback without UI disruption. All 87 unit tests passing.
+
 ### Run the GUI Application:
 ```powershell
 python main.py

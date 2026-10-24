@@ -80,8 +80,10 @@ class CascadingAudioEngine:
             return None
 
         # Determine active engines and user preferences
+        target_engine = (preferred_engine or getattr(track, "preferred_engine", None) or "").strip().lower()
         source_engine = str(config.get("source_engine", "musilon")).strip().lower()
-        use_melobot_primary = (source_engine == "melobot" or (config.get("telegram.enabled", False) and not self.musilon.enabled))
+        is_melobot_mode = (target_engine == "melobot" or source_engine == "melobot" or (config.get("telegram.enabled", False) and not self.musilon.enabled))
+        use_melobot_primary = is_melobot_mode
         pref_q = str(config.get("telegram.preferred_quality", config.get("download.preferred_quality", "320"))).strip().lower()
         allow_128k = config.get("download.allow_128k", False) or pref_q in ("128", "standard", "low")
 
@@ -89,7 +91,7 @@ class CascadingAudioEngine:
 
         def _try_melobot() -> Optional[ResolvedTrackSource]:
             nonlocal melo_128k_candidate
-            if not self.melobot.enabled or skip_musilon:
+            if not self.melobot.enabled:
                 return None
             try:
                 melo_src = self.melobot.resolve_track(track, cancel_check=cancel_check)
@@ -115,7 +117,7 @@ class CascadingAudioEngine:
             return None
 
         def _try_musilon() -> Optional[ResolvedTrackSource]:
-            if not self.musilon.enabled or skip_musilon:
+            if not self.musilon.enabled or skip_musilon or is_melobot_mode:
                 return None
             try:
                 m_src = self.musilon.resolve_track(track, cancel_check=cancel_check)
@@ -136,6 +138,9 @@ class CascadingAudioEngine:
             except (MusilonRateLimitExceededError, MusilonVipError) as e_mus:
                 if cancel_check and cancel_check():
                     return None
+                if is_melobot_mode or skip_musilon:
+                    logger.info(f"Ignoring Musilon VIP/quota error '{e_mus}' during MeloBot session.")
+                    return None
                 logger.warning(f"Musilon resolution encountered account/rate issue for '{track.title}': {e_mus}")
                 raise e_mus
             except Exception as e:
@@ -145,13 +150,36 @@ class CascadingAudioEngine:
             return None
 
         # Check if caller specified an explicit engine preference (e.g. user selected Re-download via ...)
-        target_engine = (preferred_engine or getattr(track, "preferred_engine", None) or "").strip().lower()
         if target_engine:
             if target_engine == "melobot":
                 res = _try_melobot()
                 if res:
                     return res
-                logger.info(f"Preferred engine MeloBot yielded no match for '{track.title}'. Falling back.")
+                logger.info(f"Preferred engine MeloBot yielded no match for '{track.title}'. Checking safety-net / fallback.")
+                if melo_128k_candidate:
+                    return ResolvedTrackSource(
+                        source_type="MeloBot",
+                        quality_badge=melo_128k_candidate.quality_tier,
+                        source_obj=melo_128k_candidate,
+                        file_extension=melo_128k_candidate.file_extension
+                    )
+                # Fall back directly to YouTube Music if allowed; NEVER try Musilon
+                allow_fallback = config.get("download.allow_fallback", True) and not musilon_only
+                if allow_fallback:
+                    try:
+                        yt_src = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
+                        if yt_src:
+                            act_ext = yt_src.audio_format or "opus"
+                            badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
+                            return ResolvedTrackSource(
+                                source_type="YouTube Music",
+                                quality_badge=badge,
+                                source_obj=yt_src,
+                                file_extension=act_ext
+                            )
+                    except Exception as e:
+                        logger.warning(f"YouTube fallback failed for {track.title}: {e}")
+                return None
             elif target_engine == "musilon":
                 res = _try_musilon()
                 if res:
@@ -171,6 +199,7 @@ class CascadingAudioEngine:
                         )
                 except Exception as e:
                     logger.warning(f"Preferred engine YouTube failed for {track.title}: {e}")
+                return None
 
         # 1. Primary Engine Attempt
         primary_res = _try_melobot() if use_melobot_primary else _try_musilon()
@@ -180,10 +209,11 @@ class CascadingAudioEngine:
         if cancel_check and cancel_check():
             return None
 
-        # 2. Secondary Engine Attempt (Cascade between Musilon and MeloBot)
-        secondary_res = _try_musilon() if use_melobot_primary else _try_melobot()
-        if secondary_res:
-            return secondary_res
+        # 2. Secondary Engine Attempt (Cascade between Musilon and MeloBot, but NEVER call Musilon if is_melobot_mode)
+        if not is_melobot_mode:
+            secondary_res = _try_musilon() if use_melobot_primary else _try_melobot()
+            if secondary_res:
+                return secondary_res
 
         if cancel_check and cancel_check():
             return None

@@ -578,7 +578,10 @@ class DownloadQueueManager:
 
             pref_eng = getattr(track, "preferred_engine", None) or getattr(item, "preferred_engine", None)
             source_engine = str(config.get("source_engine", "musilon")).strip().lower()
-            is_melobot_mode = (source_engine == "melobot" or (config.get("telegram.enabled", False) and not config.get("musilon.enabled", True)))
+            is_melobot_mode = (pref_eng == "melobot" or source_engine == "melobot" or (config.get("telegram.enabled", False) and not config.get("musilon.enabled", True)))
+            if is_melobot_mode:
+                skip_mus = True
+
             if pref_eng == "melobot" or (not pref_eng and is_melobot_mode):
                 with self._telegram_stream_lock:
                     resolved = self.engine.resolve_source(track, skip_musilon=skip_mus, cancel_check=cancel_check, preferred_engine=pref_eng)
@@ -783,6 +786,35 @@ class DownloadQueueManager:
             if cancel_check():
                 self._update_status(item, "Stopped")
                 self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                return
+
+            pref_eng = getattr(track, "preferred_engine", None) or getattr(item, "preferred_engine", None)
+            source_engine = str(config.get("source_engine", "musilon")).strip().lower()
+            is_melobot_user = (pref_eng == "melobot" or source_engine == "melobot" or getattr(item, "source_type", "") == "MeloBot" or (config.get("telegram.enabled", False) and not config.get("musilon.enabled", True)))
+
+            if is_melobot_user:
+                logger.info(f"Musilon error ignored during MeloBot session for '{track.title}': {e_musilon}. Suppressing popup and falling back to YouTube Music...")
+                allow_fallback = config.get("download.allow_fallback", True)
+                if allow_fallback and not cancel_check():
+                    self._fallback_to_youtube(
+                        item=item,
+                        track=track,
+                        output_dir=output_dir,
+                        naming_tmpl=naming_tmpl,
+                        save_lrc=save_lrc,
+                        embed_lyrics=embed_lyrics,
+                        embed_art=embed_art,
+                        progress_cb=progress_cb,
+                        status_cb=status_cb,
+                        cancel_check=cancel_check,
+                        pause_wait=pause_wait
+                    )
+                else:
+                    self._update_status(item, "Failed")
+                    item.error_message = str(e_musilon)
+                    self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                    if self.on_track_failed:
+                        self.on_track_failed(track_id, str(e_musilon))
                 return
 
             logger.warning(f"Musilon issue encountered for '{track.title}': {e_musilon}. Prompting user or checking session preference...")

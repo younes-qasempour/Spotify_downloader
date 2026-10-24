@@ -330,13 +330,22 @@ class MainWindow(FluentWindow):
             )
 
     def _show_musilon_limit_dialog(self, track, item, reason_or_cb, decision_callback=None):
-        from qfluentwidgets import MessageBox
         if decision_callback is None and callable(reason_or_cb):
             decision_callback = reason_or_cb
             reason = "Musilon download rate limit or daily VIP quota reached."
         else:
             reason = str(reason_or_cb or "Musilon stream download rejected.")
 
+        source_engine = str(config.get("source_engine", "musilon")).strip().lower()
+        pref_eng = getattr(track, "preferred_engine", None) or getattr(item, "preferred_engine", None)
+        item_source = getattr(item, "source_type", "")
+        if source_engine == "melobot" or pref_eng == "melobot" or item_source == "MeloBot" or (config.get("telegram.enabled", False) and not config.get("musilon.enabled", True)):
+            logger.info("MeloBot active; suppressing Musilon limit dialog and continuing via YouTube fallback.")
+            if decision_callback:
+                decision_callback("continue_youtube")
+            return
+
+        from qfluentwidgets import MessageBox
         track_title = getattr(track, "title", "Track")
         artist_name = getattr(track, "primary_artist", "Unknown Artist")
 
