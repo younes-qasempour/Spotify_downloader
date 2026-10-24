@@ -22,6 +22,7 @@ from core.archive import ArchiveManager
 from core.spotify_client import TrackMetadata
 from core.queue_manager import QueueItem
 from core.config import config
+from gui.dialogs.export_dialog import ExportDialog
 
 
 class RenameCollectionDialog(MessageBoxBase):
@@ -66,6 +67,7 @@ class CollectionCard(CardWidget):
         cover_path: Optional[str] = None,
         on_browse=None,
         on_rename=None,
+        on_export=None,
         parent=None
     ):
         super().__init__(parent)
@@ -74,6 +76,7 @@ class CollectionCard(CardWidget):
         self.cover_path = cover_path
         self.on_browse = on_browse
         self.on_rename = on_rename
+        self.on_export = on_export
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_card_menu)
@@ -202,14 +205,22 @@ class CollectionCard(CardWidget):
         act_rename = None
         if self.on_rename:
             act_rename = menu.addAction("Rename Playlist...")
+        act_export = None
+        if self.on_export:
+            act_export = menu.addAction("Export Playlist to Device / Folder...")
         menu.addSeparator()
         act_folder = menu.addAction("Open Folder in Explorer")
 
         action = menu.exec(self.mapToGlobal(pos))
+        if not action:
+            return
+
         if action == act_browse and self.on_browse:
             self.on_browse()
         elif act_rename and action == act_rename and self.on_rename:
             self.on_rename()
+        elif act_export and action == act_export and self.on_export:
+            self.on_export()
         elif action == act_folder:
             self._open_folder()
 
@@ -376,11 +387,16 @@ class CompletedView(QWidget):
         self.banner_open_folder_btn.setToolTip("Open Folder in Explorer")
         self.banner_open_folder_btn.clicked.connect(self._open_current_collection_folder)
 
+        self.banner_export_btn = ToolButton(FluentIcon.FOLDER_ADD, self.coll_banner)
+        self.banner_export_btn.setToolTip("Export Playlist to Device / Folder...")
+        self.banner_export_btn.clicked.connect(self._export_current_collection)
+
         self.banner_rename_btn = ToolButton(FluentIcon.EDIT, self.coll_banner)
         self.banner_rename_btn.setToolTip("Rename Playlist")
         self.banner_rename_btn.clicked.connect(self._rename_current_collection)
 
         banner_layout.addWidget(self.banner_open_folder_btn)
+        banner_layout.addWidget(self.banner_export_btn)
         banner_layout.addWidget(self.banner_rename_btn)
 
         table_layout.addWidget(self.coll_banner)
@@ -722,6 +738,7 @@ class CompletedView(QWidget):
                 cover_path=cover_path,
                 on_browse=lambda *args, n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "playlist", cp, fp, sub),
                 on_rename=lambda n=name: self._rename_playlist_collection(n),
+                on_export=lambda n=name: self._export_collection(n, "playlist"),
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
@@ -802,6 +819,7 @@ class CompletedView(QWidget):
                 icon=FluentIcon.MUSIC,
                 cover_path=cover_path,
                 on_browse=lambda *args, n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "album", cp, fp, sub),
+                on_export=lambda n=name: self._export_collection(n, "album"),
                 parent=self.albums_container
             )
             self.albums_layout.insertWidget(self.albums_layout.count() - 1, card)
@@ -1080,6 +1098,11 @@ class CompletedView(QWidget):
         act_del_file = menu.addAction("Delete File from Disk")
         menu.addSeparator()
 
+        act_export_selected = None
+        selected_rows = self.table.selectionModel().selectedRows()
+        if len(selected_rows) > 0 or (item.output_path and os.path.isfile(item.output_path)):
+            act_export_selected = menu.addAction("Export Selected Tracks to Folder / Device...")
+
         m3u_act = menu.addAction("Export Playlist (.m3u8)...")
         details_act = menu.addAction("View Metadata & Genres")
         rg_act = menu.addAction("Calculate ReplayGain 2.0")
@@ -1148,6 +1171,8 @@ class CompletedView(QWidget):
             self.archive.remove_downloaded_track(t.id)
             self.reload_all()
             InfoBar.success("File Deleted", f"Deleted '{t.title}' from disk and removed from library.", duration=3500, parent=self)
+        elif act_export_selected and action == act_export_selected:
+            self._on_export_selected_clicked(fallback_item=item)
         elif action == m3u_act:
             self._export_m3u_playlist()
         elif action == details_act:
@@ -1221,6 +1246,56 @@ class CompletedView(QWidget):
             InfoBar.success("Playlist Exported", f"Exported {len(valid_items)} tracks to {os.path.basename(file_path)}", duration=4000, parent=self)
         except Exception as e:
             InfoBar.error("Export Failed", f"Could not write playlist: {e}", duration=4000, parent=self)
+
+    def _export_current_collection(self):
+        if not self._current_collection_name:
+            return
+        self._export_collection(self._current_collection_name, self._current_collection_type or "playlist")
+
+    def _export_collection(self, name: str, coll_type: str = "playlist"):
+        tracks = self.archive.get_collection_tracks(name, coll_type)
+        valid_tracks = [t for t in tracks if t.get("file_path") and os.path.isfile(t.get("file_path"))]
+        if not valid_tracks:
+            InfoBar.warning(
+                title="No Downloaded Songs",
+                content=f"No downloaded songs found on disk for '{name}'.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+                parent=self
+            )
+            return
+
+        diag = ExportDialog(name, valid_tracks, self.window() or self)
+        diag.exec()
+
+    def _on_export_selected_clicked(self, fallback_item: Optional[QueueItem] = None):
+        pl_name = self._current_collection_name or "Exported Songs"
+        selected_indexes = self.table.selectionModel().selectedRows()
+        selected_items = []
+        if selected_indexes:
+            for idx in selected_indexes:
+                it = self.model.get_item(idx.row())
+                if it and it.output_path and os.path.isfile(it.output_path):
+                    selected_items.append(it)
+
+        if not selected_items and fallback_item:
+            if fallback_item.output_path and os.path.isfile(fallback_item.output_path):
+                selected_items.append(fallback_item)
+
+        if not selected_items:
+            InfoBar.warning(
+                title="No Downloaded Tracks Selected",
+                content="Please select at least one downloaded track to export.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=3500,
+                parent=self
+            )
+            return
+
+        diag = ExportDialog(pl_name, selected_items, self.window() or self)
+        diag.exec()
 
     def _show_track_details_dialog(self, item: QueueItem):
         """Displays full metadata and embedded genre tags for the track."""

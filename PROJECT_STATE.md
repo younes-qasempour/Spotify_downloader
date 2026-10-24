@@ -824,8 +824,33 @@ d:\Spotify-Downloader\
 
 
 
-
-
+### 36. Track & Playlist Export Subsystem (October 2026)
+- **Problem & Use Case:**
+  - Users needed an easy way to export their downloaded songs to another device (e.g. USB flash drive for a car stereo, SD card, DAP/portable MP3 player, or external storage) without copying their entire multi-thousand master library or manually searching for files on disk.
+  - Devices often require specific formats (e.g., standard MP3 320 kbps) or specific folder structures with self-contained `.m3u8` playlist files.
+- **Architecture & Implementation:**
+  1. **Headless Exporter Service ([core/exporter.py](file:///d:/Spotify-Downloader/core/exporter.py)):**
+     - `PlaylistExporter.export_tracks()`: Thread-safe, non-destructive export service.
+     - Never touches or deletes master files in `downloads/`.
+     - Supports direct copy (`shutil.copy2`) or on-the-fly transcoding to MP3 (320 kbps CBR via `libmp3lame`), FLAC, or Opus via FFmpeg.
+     - Generates portable `.m3u8` playlist files containing local relative filenames (`Song.mp3`), making exported folders 100% plug-and-play for car stereos and media players.
+     - Supports incremental export (`skip_existing=True`) and interactive user cancellation via `threading.Event`.
+  2. **Transcoder Output Redirection ([core/transcoder.py](file:///d:/Spotify-Downloader/core/transcoder.py)):**
+     - Upgraded `transcode_audio()` and `AudioTranscoder.transcode()` with an optional `output_file: Optional[str] = None` argument to convert directly to a target export destination without affecting source files.
+  3. **Fluent Design Export Modal ([gui/dialogs/export_dialog.py](file:///d:/Spotify-Downloader/gui/dialogs/export_dialog.py)):**
+     - `ExportDialog(MessageBoxBase)`: Clean modal with destination folder picker, subfolder creation toggle, format selector (`Original`, `MP3 320k`, `FLAC`, `Opus`), M3U8 generation toggle, and skip-existing toggle.
+     - Background export thread with real-time `ProgressBar`, live current track label, non-blocking UI, `Cancel Export` button, and completion summary with an `Open Export Folder` button.
+  4. **GUI Integration Points:**
+     - **Playlists View ([gui/views/playlists_view.py](file:///d:/Spotify-Downloader/gui/views/playlists_view.py)):**
+       - Detail view batch action bar: Added `Export Songs` button next to `.m3u8` export.
+       - Playlist card context menu: Added `Export Playlist to Device / Folder...`.
+       - Track table context menu: Added `Export Selected Tracks to Folder / Device...` for bulk or single export.
+     - **Completed Library View ([gui/views/completed_view.py](file:///d:/Spotify-Downloader/gui/views/completed_view.py)):**
+       - Collection card context menu (Playlists and Albums): Added `Export Playlist to Device / Folder...`.
+       - Collection banner: Added dedicated export `ToolButton` in the breadcrumb header.
+       - Table context menu: Added `Export Selected Tracks to Folder / Device...`.
+  5. **Unit Tests ([tests/test_exporter.py](file:///d:/Spotify-Downloader/tests/test_exporter.py)):**
+     - Verified direct copy, on-the-fly transcoding, skip-existing incremental mode, portable M3U8 playlist structure, user cancellation, and missing-file handling. All 5 tests passing cleanly.
 
 ### Run the GUI Application:
 ```powershell

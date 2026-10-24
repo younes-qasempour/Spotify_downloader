@@ -30,8 +30,8 @@ class AudioTranscoder:
     """High-performance audio transcoder wrapping FFmpeg for lossless and lossy conversion."""
 
     @staticmethod
-    def transcode(input_file: str, target_format: str = "original", delete_source: bool = True) -> str:
-        return transcode_audio(input_file, target_format, delete_source)
+    def transcode(input_file: str, target_format: str = "original", delete_source: bool = True, output_file: Optional[str] = None) -> str:
+        return transcode_audio(input_file, target_format, delete_source, output_file=output_file)
 
     @staticmethod
     def get_extension_for_format(target_format: str) -> Optional[str]:
@@ -41,24 +41,33 @@ class AudioTranscoder:
 def transcode_audio(
     input_file: str,
     target_format: str = "original",
-    delete_source: bool = True
+    delete_source: bool = True,
+    output_file: Optional[str] = None
 ) -> str:
     """
     Transcodes a downloaded audio file to a user-specified target format
     (e.g. Apple Lossless ALAC .m4a, MP3 320k CBR, FLAC, or Opus) using FFmpeg.
+    If output_file is specified, writes directly to that destination path.
     Returns the absolute path of the converted file (or original file if format is 'original' or identical).
     """
     target = (target_format or "original").strip().lower()
-    if target in ("original", "", "native"):
-        return input_file
-
-    output_file: str = ""
     if not os.path.isfile(input_file):
         raise TranscodeError(f"Source audio file not found for transcoding: {input_file}")
+
+    if target in ("original", "", "native"):
+        if output_file and os.path.normpath(output_file) != os.path.normpath(input_file):
+            os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+            shutil.copy2(input_file, output_file)
+            return output_file
+        return input_file
 
     target_cfg = SUPPORTED_TARGET_FORMATS.get(target)
     if not target_cfg:
         logger.warning(f"Unsupported transcode target '{target_format}'. Keeping original format.")
+        if output_file and os.path.normpath(output_file) != os.path.normpath(input_file):
+            os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+            shutil.copy2(input_file, output_file)
+            return output_file
         return input_file
 
     target_ext = target_cfg["ext"]
@@ -66,17 +75,28 @@ def transcode_audio(
 
     # If the file is already in the requested target format and matches codec expectation, bypass transcoding
     if src_ext == target_ext and target != "alac":
+        if output_file and os.path.normpath(output_file) != os.path.normpath(input_file):
+            os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+            shutil.copy2(input_file, output_file)
+            return output_file
         return input_file
 
     ffmpeg_bin = ensure_ffmpeg()
     if not ffmpeg_bin:
         logger.warning("FFmpeg binary not detected; cannot transcode audio. Keeping source format.")
+        if output_file and os.path.normpath(output_file) != os.path.normpath(input_file):
+            os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+            shutil.copy2(input_file, output_file)
+            return output_file
         return input_file
 
-    base_name = os.path.splitext(input_file)[0]
-    output_file = f"{base_name}{target_ext}"
-    if os.path.normpath(output_file) == os.path.normpath(input_file):
-        output_file = f"{base_name}_transcoded{target_ext}"
+    if output_file:
+        os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+    else:
+        base_name = os.path.splitext(input_file)[0]
+        output_file = f"{base_name}{target_ext}"
+        if os.path.normpath(output_file) == os.path.normpath(input_file):
+            output_file = f"{base_name}_transcoded{target_ext}"
 
     cmd = [
         ffmpeg_bin,

@@ -58,6 +58,7 @@ class TestGUI(unittest.TestCase):
         self.assertTrue(hasattr(pv, "pause_btn"))
         self.assertTrue(hasattr(pv, "stop_btn"))
         self.assertTrue(hasattr(pv, "reset_btn"))
+        self.assertTrue(hasattr(pv, "export_songs_btn"))
         self.assertTrue(hasattr(pv, "batch_spinbox"))
 
     def test_navigation_switch(self):

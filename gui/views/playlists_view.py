@@ -28,6 +28,7 @@ from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
 from gui.bridge import EngineSignalBridge, safe_invoke, safe_emit
 from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, BG_CARD, SPOTIFY_EMERALD
+from gui.dialogs.export_dialog import ExportDialog
 
 PRESET_NORMAL_STYLE = """
     PushButton {
@@ -333,6 +334,7 @@ class SavedPlaylistCard(CardWidget):
         on_delete=None,
         on_sync=None,
         on_edit=None,
+        on_export=None,
         parent=None
     ):
         super().__init__(parent)
@@ -341,6 +343,7 @@ class SavedPlaylistCard(CardWidget):
         self.on_delete = on_delete
         self.on_sync = on_sync
         self.on_edit = on_edit
+        self.on_export = on_export
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_card_context_menu)
@@ -498,6 +501,10 @@ class SavedPlaylistCard(CardWidget):
         if url:
             QApplication.clipboard().setText(url)
 
+    def _handle_export(self):
+        if self.on_export:
+            self.on_export(self.data)
+
     def _show_card_context_menu(self, pos):
         menu = QMenu(self)
         menu.setStyleSheet("""
@@ -520,18 +527,24 @@ class SavedPlaylistCard(CardWidget):
         act_open = menu.addAction("Browse & Download Tracks")
         act_edit = menu.addAction("Rename / Edit Playlist...")
         act_sync = menu.addAction("Sync Playlist")
+        act_export = menu.addAction("Export Playlist to Device / Folder...")
         menu.addSeparator()
         act_copy = menu.addAction("Copy Spotify Link")
         menu.addSeparator()
         act_delete = menu.addAction("Remove from Saved Playlists")
 
         action = menu.exec(self.mapToGlobal(pos))
+        if not action:
+            return
+
         if action == act_open:
             self._handle_open()
         elif action == act_edit:
             self._handle_edit()
         elif action == act_sync:
             self._handle_sync()
+        elif action == act_export:
+            self._handle_export()
         elif action == act_copy:
             self._copy_link()
         elif action == act_delete:
@@ -864,6 +877,10 @@ class PlaylistsView(QWidget):
         self.export_m3u8_btn.setToolTip("Export this playlist to a portable UTF-8 .m3u8 playlist file")
         self.export_m3u8_btn.clicked.connect(self._on_export_m3u8_clicked)
 
+        self.export_songs_btn = PushButton(FluentIcon.FOLDER_ADD, "Export Songs", self)
+        self.export_songs_btn.setToolTip("Export downloaded songs from this playlist to an external device, USB drive, or folder")
+        self.export_songs_btn.clicked.connect(self._on_export_songs_clicked)
+
         # Row 1: Batch Size Selection & Quick Presets
         batch_size_layout = QHBoxLayout()
         batch_size_layout.setSpacing(8)
@@ -886,6 +903,7 @@ class PlaylistsView(QWidget):
         batch_action_layout.addWidget(self.reset_btn)
         batch_action_layout.addWidget(self.open_folder_btn)
         batch_action_layout.addWidget(self.export_m3u8_btn)
+        batch_action_layout.addWidget(self.export_songs_btn)
         batch_action_layout.addStretch(1)
 
         batch_layout.addLayout(batch_size_layout)
@@ -1323,9 +1341,34 @@ class PlaylistsView(QWidget):
                 on_delete=self._delete_playlist,
                 on_sync=self._sync_playlist,
                 on_edit=self._edit_playlist,
+                on_export=self._export_saved_playlist,
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
+
+    def _export_saved_playlist(self, playlist_data: Dict[str, Any]):
+        if not playlist_data:
+            return
+        pl_id = playlist_data.get("id")
+        pl_name = playlist_data.get("name", "Playlist")
+        if not pl_id:
+            return
+
+        tracks = self.archive.get_saved_playlist_tracks(pl_id, status="downloaded")
+        valid_tracks = [t for t in tracks if t.get("file_path") and os.path.isfile(t.get("file_path"))]
+        if not valid_tracks:
+            InfoBar.warning(
+                title="No Downloaded Songs",
+                content=f"No downloaded songs found on disk for '{pl_name}'. Please download songs first.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+                parent=self
+            )
+            return
+
+        diag = ExportDialog(pl_name, valid_tracks, self.window() or self)
+        diag.exec()
 
     def _delete_playlist(self, playlist_id: str):
         if not playlist_id:
@@ -2129,6 +2172,12 @@ class PlaylistsView(QWidget):
         menu.addSeparator()
         act_copy_title = menu.addAction("Copy Title & Artist")
         act_copy_url = menu.addAction("Copy Spotify URL")
+        
+        act_export_selected = None
+        selected_rows = self.table.selectionModel().selectedRows()
+        if is_downloaded or len(selected_rows) > 0:
+            act_export_selected = menu.addAction("Export Selected Tracks to Folder / Device...")
+
         act_m3u8 = menu.addAction("Export Playlist (.m3u8)")
 
         menu.addSeparator()
@@ -2303,6 +2352,8 @@ class PlaylistsView(QWidget):
             item.status = "Pending"
             self.model.update_status(item.track.id, "Pending")
             self._refresh_detail_header()
+        elif act_export_selected and action == act_export_selected:
+            self._on_export_selected_clicked(fallback_item=item)
         elif action == act_m3u8:
             self._on_export_m3u8_clicked()
         elif action == act_edit_track:
@@ -2352,6 +2403,57 @@ class PlaylistsView(QWidget):
             InfoBar.success("M3U8 Exported", f"Successfully exported playlist to: {os.path.basename(dest_p)}", duration=4000, parent=self)
         else:
             InfoBar.warning("No Downloaded Tracks", "Please download at least one track before exporting to M3U8.", duration=4000, parent=self)
+
+    def _on_export_songs_clicked(self):
+        if not self.current_playlist_id:
+            return
+        pl_name = self.current_playlist_data.get("name", "Playlist") if self.current_playlist_data else "Playlist"
+        tracks = self.archive.get_saved_playlist_tracks(self.current_playlist_id, status="downloaded")
+        valid_tracks = [t for t in tracks if t.get("file_path") and os.path.isfile(t.get("file_path"))]
+        if not valid_tracks:
+            InfoBar.warning(
+                title="No Downloaded Songs",
+                content=f"No downloaded songs found on disk for '{pl_name}'. Please download songs first.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+                parent=self
+            )
+            return
+
+        diag = ExportDialog(pl_name, valid_tracks, self.window() or self)
+        diag.exec()
+
+    def _on_export_selected_clicked(self, fallback_item: Optional[QueueItem] = None):
+        if not self.current_playlist_id:
+            return
+        pl_name = self.current_playlist_data.get("name", "Playlist") if self.current_playlist_data else "Exported Songs"
+
+        selected_indexes = self.table.selectionModel().selectedRows()
+        selected_items = []
+        if selected_indexes:
+            for idx in selected_indexes:
+                it = self.model.get_item(idx.row())
+                if it and it.output_path and os.path.isfile(it.output_path):
+                    selected_items.append(it)
+
+        if not selected_items and fallback_item:
+            if fallback_item.output_path and os.path.isfile(fallback_item.output_path):
+                selected_items.append(fallback_item)
+
+        if not selected_items:
+            InfoBar.warning(
+                title="No Downloaded Tracks Selected",
+                content="Please select at least one downloaded track to export.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=3500,
+                parent=self
+            )
+            return
+
+        diag = ExportDialog(pl_name, selected_items, self.window() or self)
+        diag.exec()
 
 
     # -------------------------------------------------------------
