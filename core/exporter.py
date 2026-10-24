@@ -119,13 +119,14 @@ class PlaylistExporter:
                     "duration_s": dur_s
                 })
                 if progress_callback:
-                    progress_callback(idx, result.total, f"Skipped (exists): {dest_name}")
+                    progress_callback(idx, result.total, f"Skipped (already exists): {title}")
                 continue
 
             # Perform Copy or Transcode
             try:
+                action_verb = "Copying" if fmt in ("original", "", "native") else f"Converting to {fmt.upper()}"
                 if progress_callback:
-                    progress_callback(idx, result.total, f"Exporting: {dest_name}")
+                    progress_callback(idx, result.total, f"{action_verb}: {title} - {artist}")
 
                 if fmt in ("original", "", "native"):
                     shutil.copy2(src_file, dest_path)
@@ -144,6 +145,8 @@ class PlaylistExporter:
                     "artist": artist,
                     "duration_s": dur_s
                 })
+                if progress_callback:
+                    progress_callback(idx, result.total, f"Finished ({idx}/{result.total}): {title}")
             except Exception as e_exp:
                 logger.error(f"Failed to export '{src_file}' -> '{dest_path}': {e_exp}")
                 result.failed += 1

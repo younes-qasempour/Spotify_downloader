@@ -839,7 +839,9 @@ d:\Spotify-Downloader\
      - Upgraded `transcode_audio()` and `AudioTranscoder.transcode()` with an optional `output_file: Optional[str] = None` argument to convert directly to a target export destination without affecting source files.
   3. **Fluent Design Export Modal ([gui/dialogs/export_dialog.py](file:///d:/Spotify-Downloader/gui/dialogs/export_dialog.py)):**
      - `ExportDialog(MessageBoxBase)`: Clean modal with destination folder picker, subfolder creation toggle, format selector (`Original`, `MP3 320k`, `FLAC`, `Opus`), M3U8 generation toggle, and skip-existing toggle.
-     - Background export thread with real-time `ProgressBar`, live current track label, non-blocking UI, `Cancel Export` button, and completion summary with an `Open Export Folder` button.
+     - **Auto-Close Bug Fix:** Overrode `validate(self) -> bool: return False` to prevent `MessageBoxBase`'s default slot from immediately closing the modal upon clicking "Start Export".
+     - **Live Progress Percentage & Track Status:** Dedicated bold percentage label (`14px #1ED760`), track counter (`12 of 27 tracks`), 8px high `ProgressBar`, and active status label (`Converting to MP3: <Title> - <Artist>`).
+     - **Completion Card & Toast Notification:** Shows a dedicated Fluent completion card with bulleted breakdown (tracks exported, skipped, M3U8 path, destination folder), an "Open Export Folder" button, a "Done" button, and an `InfoBar.success` toast on the main application window.
   4. **GUI Integration Points:**
      - **Playlists View ([gui/views/playlists_view.py](file:///d:/Spotify-Downloader/gui/views/playlists_view.py)):**
        - Detail view batch action bar: Added `Export Songs` button next to `.m3u8` export.
@@ -850,7 +852,7 @@ d:\Spotify-Downloader\
        - Collection banner: Added dedicated export `ToolButton` in the breadcrumb header.
        - Table context menu: Added `Export Selected Tracks to Folder / Device...`.
   5. **Unit Tests ([tests/test_exporter.py](file:///d:/Spotify-Downloader/tests/test_exporter.py)):**
-     - Verified direct copy, on-the-fly transcoding, skip-existing incremental mode, portable M3U8 playlist structure, user cancellation, and missing-file handling. All 5 tests passing cleanly.
+     - Verified direct copy, on-the-fly transcoding, skip-existing incremental mode, portable M3U8 playlist structure, user cancellation, missing-file handling, and `ExportDialog` live progress and completion updates. All 6 tests passing cleanly.
 
 ### Run the GUI Application:
 ```powershell

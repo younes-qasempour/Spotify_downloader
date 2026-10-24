@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QSta
 from qfluentwidgets import (
     MessageBoxBase, SubtitleLabel, CaptionLabel, StrongBodyLabel, BodyLabel,
     LineEdit, PushButton, PrimaryPushButton, CheckBox, ComboBox, ProgressBar,
-    FluentIcon, CardWidget
+    FluentIcon, CardWidget, InfoBar, InfoBarPosition
 )
 
 from core.config import config
@@ -24,16 +24,24 @@ class ExportDialog(MessageBoxBase):
     Fluent Design Modal Dialog for exporting downloaded songs/playlists
     to an external drive, USB stick, SD card, DAP player, or local directory.
     Supports on-the-fly MP3/FLAC/Opus transcoding, portable .m3u8 generation,
-    and fast incremental copy.
+    real-time percentage progress, and completion confirmation.
     """
 
     sig_progress = pyqtSignal(int, int, str)
     sig_finished = pyqtSignal(object)
 
     def __init__(self, playlist_name: str, tracks: List[Dict[str, Any]], parent=None):
+        self._fallback_parent = None
+        if parent is None:
+            from PyQt6.QtWidgets import QApplication, QWidget
+            app = QApplication.instance()
+            parent = (app.activeWindow() if app else None)
+            if parent is None:
+                self._fallback_parent = QWidget()
+                parent = self._fallback_parent
         super().__init__(parent)
         self.playlist_name = playlist_name or "Playlist"
-        
+
         # Filter for tracks that are actually present on disk
         self.valid_tracks = []
         for t in tracks:
@@ -47,6 +55,19 @@ class ExportDialog(MessageBoxBase):
 
         self._init_ui()
         self._connect_signals()
+
+    def validate(self) -> bool:
+        """
+        Prevent MessageBoxBase from automatically closing the dialog on yesButton click.
+        Export will progress on Page 1 and user closes when done.
+        """
+        return False
+
+    def closeEvent(self, event):
+        """Cancel worker cleanly if user closes dialog while running."""
+        if self._is_running:
+            self.cancel_event.set()
+        super().closeEvent(event)
 
     def _init_ui(self):
         self.titleLabel = SubtitleLabel("Export Songs to Device / Folder", self)
@@ -128,7 +149,7 @@ class ExportDialog(MessageBoxBase):
             "FLAC (Lossless CD Quality)",
             "Opus (Compact high-efficiency audio)"
         ])
-        
+
         last_fmt = config.get("export.last_format", "original")
         fmt_map = {"original": 0, "mp3": 1, "flac": 2, "opus": 3}
         self.format_combo.setCurrentIndex(fmt_map.get(last_fmt, 0))
@@ -148,25 +169,70 @@ class ExportDialog(MessageBoxBase):
         # --- Page 1: Progress & Complete ---
         self.page_progress = QWidget()
         progress_layout = QVBoxLayout(self.page_progress)
-        progress_layout.setContentsMargins(0, 12, 0, 0)
+        progress_layout.setContentsMargins(0, 10, 0, 0)
         progress_layout.setSpacing(10)
 
         self.progress_title = StrongBodyLabel("Exporting tracks...", self.page_progress)
-        self.progress_caption = CaptionLabel("Preparing tracks for export...", self.page_progress)
-        self.progress_caption.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.progress_title.setStyleSheet("font-size: 15px; font-weight: 600; color: #FFFFFF;")
+
+        # Counter & percentage row
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(8)
+        self.progress_counter_label = CaptionLabel("0 of 0 tracks", self.page_progress)
+        self.progress_counter_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.progress_pct_label = StrongBodyLabel("0%", self.page_progress)
+        self.progress_pct_label.setStyleSheet("color: #1ED760; font-size: 14px; font-weight: 700;")
+        stats_row.addWidget(self.progress_counter_label)
+        stats_row.addStretch(1)
+        stats_row.addWidget(self.progress_pct_label)
 
         self.progress_bar = ProgressBar(self.page_progress)
         self.progress_bar.setValue(0)
+        self.progress_bar.setFixedHeight(8)
 
+        # Current track caption
+        self.progress_caption = CaptionLabel("Preparing tracks for export...", self.page_progress)
+        self.progress_caption.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        self.progress_caption.setWordWrap(True)
+
+        # Result card (shown on completion)
+        self.result_card = CardWidget(self.page_progress)
+        self.result_card.setStyleSheet("""
+            CardWidget {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+            }
+        """)
+        result_card_layout = QVBoxLayout(self.result_card)
+        result_card_layout.setContentsMargins(14, 12, 14, 12)
+        result_card_layout.setSpacing(6)
+
+        self.result_header = StrongBodyLabel("Export Finished Successfully!", self.result_card)
+        self.result_header.setStyleSheet("color: #1ED760; font-size: 15px; font-weight: 600;")
+        self.result_body = CaptionLabel("", self.result_card)
+        self.result_body.setTextColor(TEXT_PRIMARY, TEXT_PRIMARY)
+        self.result_body.setWordWrap(True)
+
+        result_card_layout.addWidget(self.result_header)
+        result_card_layout.addWidget(self.result_body)
+        self.result_card.setVisible(False)
+
+        # Action buttons
+        action_btn_layout = QHBoxLayout()
+        action_btn_layout.setSpacing(10)
         self.open_folder_btn = PrimaryPushButton(FluentIcon.FOLDER, "Open Export Folder", self.page_progress)
         self.open_folder_btn.clicked.connect(self._open_export_folder)
         self.open_folder_btn.setVisible(False)
+        action_btn_layout.addWidget(self.open_folder_btn)
+        action_btn_layout.addStretch(1)
 
         progress_layout.addWidget(self.progress_title)
-        progress_layout.addWidget(self.progress_caption)
+        progress_layout.addLayout(stats_row)
         progress_layout.addWidget(self.progress_bar)
-        progress_layout.addSpacing(6)
-        progress_layout.addWidget(self.open_folder_btn)
+        progress_layout.addWidget(self.progress_caption)
+        progress_layout.addWidget(self.result_card)
+        progress_layout.addLayout(action_btn_layout)
         progress_layout.addStretch(1)
 
         self.pages.addWidget(self.page_progress)
@@ -236,7 +302,11 @@ class ExportDialog(MessageBoxBase):
         self.yesButton.setVisible(False)
         self.cancelButton.setText("Cancel Export")
         self.progress_bar.setValue(0)
+        self.progress_pct_label.setText("0%")
+        self.progress_counter_label.setText(f"0 of {len(self.valid_tracks)} tracks")
         self.progress_title.setText(f"Exporting '{self.playlist_name}'...")
+        self.result_card.setVisible(False)
+        self.open_folder_btn.setVisible(False)
 
         def worker():
             def cb(cur, tot, msg):
@@ -260,32 +330,69 @@ class ExportDialog(MessageBoxBase):
     def _on_progress_update(self, current: int, total: int, msg: str):
         pct = int((current / max(1, total)) * 100)
         self.progress_bar.setValue(pct)
-        self.progress_caption.setText(f"[{current}/{total}] {msg}")
+        self.progress_pct_label.setText(f"{pct}%")
+        self.progress_counter_label.setText(f"{current} of {total} tracks")
+        self.progress_caption.setText(msg)
 
     def _on_export_finished(self, result: ExportResult):
         self._is_running = False
         self.export_result = result
         self.progress_bar.setValue(100)
+        self.progress_pct_label.setText("100%")
+        self.progress_counter_label.setText(f"{result.total} of {result.total} tracks")
 
         if result.cancelled:
             self.progress_title.setText("Export Cancelled")
-            self.progress_caption.setText(f"Stopped by user. Exported {result.exported} tracks before cancellation.")
+            self.result_header.setText("Export Cancelled")
+            self.result_header.setStyleSheet("color: #FFB900; font-size: 15px; font-weight: 600;")
+            self.result_body.setText(f"Process stopped by user. Exported {result.exported} track(s) before cancellation.")
+            self.progress_caption.setText("Export stopped.")
         elif result.errors and result.exported == 0 and result.skipped == 0:
             self.progress_title.setText("Export Failed")
-            self.progress_caption.setText(f"Error: {'; '.join(result.errors[:2])}")
+            self.result_header.setText("Export Failed")
+            self.result_header.setStyleSheet("color: #E81123; font-size: 15px; font-weight: 600;")
+            self.result_body.setText(f"Error: {'; '.join(result.errors[:2])}")
+            self.progress_caption.setText("Could not export tracks.")
         else:
-            self.progress_title.setText("Export Completed Successfully!")
-            summary = f"Copied/Converted {result.exported} track(s) to destination."
-            if result.skipped > 0:
-                summary += f" ({result.skipped} existing tracks skipped)"
-            if result.m3u8_path:
-                summary += "\nCreated portable .m3u8 playlist file."
-            self.progress_caption.setText(summary)
+            self.progress_title.setText("Export Finished!")
+            self.result_header.setText("Export Completed Successfully!")
+            self.result_header.setStyleSheet("color: #1ED760; font-size: 15px; font-weight: 600;")
 
+            details = [f"✓ Successfully exported {result.exported} song(s) to destination."]
+            if result.skipped > 0:
+                details.append(f"✓ {result.skipped} song(s) already existed and were skipped.")
+            if result.m3u8_path:
+                details.append(f"✓ Created portable playlist: {os.path.basename(result.m3u8_path)}")
+            if result.export_dir:
+                details.append(f"✓ Location: {result.export_dir}")
+            if result.failed > 0:
+                details.append(f"⚠ {result.failed} song(s) failed or were missing from disk.")
+
+            self.result_body.setText("\n".join(details))
+            self.progress_caption.setText(f"Done! {result.exported} track(s) ready in export folder.")
+
+            # Trigger a toast notification on the parent window as well
+            parent_win = self.parent() or self.window()
+            if parent_win:
+                try:
+                    folder_name = os.path.basename(result.export_dir) or result.export_dir
+                    InfoBar.success(
+                        title="Export Finished",
+                        content=f"Successfully exported {result.exported} track(s) to '{folder_name}'.",
+                        orient=Qt.Orientation.Horizontal,
+                        position=InfoBarPosition.TOP,
+                        duration=6000,
+                        parent=parent_win
+                    )
+                except Exception as e_toast:
+                    logger.debug(f"Could not show InfoBar toast: {e_toast}")
+
+        self.result_card.setVisible(True)
         if result.export_dir and os.path.isdir(result.export_dir):
             self.open_folder_btn.setVisible(True)
 
-        self.cancelButton.setText("Close")
+        self.cancelButton.setText("Done")
+        self.cancelButton.setEnabled(True)
 
     def _open_export_folder(self):
         if self.export_result and self.export_result.export_dir and os.path.isdir(self.export_result.export_dir):
@@ -302,4 +409,4 @@ class ExportDialog(MessageBoxBase):
             self.cancelButton.setText("Cancelling...")
             self.progress_caption.setText("Cancelling export and cleaning up...")
         else:
-            self.reject()
+            self.accept()

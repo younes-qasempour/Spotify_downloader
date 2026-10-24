@@ -181,6 +181,36 @@ class TestPlaylistExporter(unittest.TestCase):
         self.assertEqual(len(result.errors), 1)
         self.assertIn("Ghost Song", result.errors[0])
 
+    def test_export_dialog_progress_and_completion(self):
+        import sys
+        from PyQt6.QtWidgets import QApplication
+        from gui.dialogs.export_dialog import ExportDialog
+
+        app = QApplication.instance() or QApplication(sys.argv)
+        diag = ExportDialog("Test Playlist", self.tracks)
+        self.assertFalse(diag.validate(), "validate() must return False so MessageBoxBase does not close early")
+        self.assertEqual(len(diag.valid_tracks), 2)
+        self.assertTrue(hasattr(diag, "progress_bar"))
+        self.assertTrue(hasattr(diag, "progress_pct_label"))
+
+        # Test live progress update
+        diag._on_progress_update(1, 2, "Converting: Song One - Artist Alpha")
+        self.assertEqual(diag.progress_bar.value(), 50)
+        self.assertEqual(diag.progress_pct_label.text(), "50%")
+        self.assertIn("1 of 2", diag.progress_counter_label.text())
+        self.assertIn("Converting: Song One", diag.progress_caption.text())
+
+        # Test completion display
+        dummy_result = ExportResult(total=2, exported=2, export_dir=self.dest_dir, m3u8_path=os.path.join(self.dest_dir, "test.m3u8"))
+        diag._on_export_finished(dummy_result)
+        self.assertEqual(diag.progress_bar.value(), 100)
+        self.assertEqual(diag.progress_pct_label.text(), "100%")
+        self.assertFalse(diag.result_card.isHidden())
+        self.assertFalse(diag.open_folder_btn.isHidden())
+        self.assertEqual(diag.cancelButton.text(), "Done")
+        self.assertIn("Successfully exported 2 song(s)", diag.result_body.text())
+        diag.close()
+
 
 if __name__ == "__main__":
     unittest.main()
