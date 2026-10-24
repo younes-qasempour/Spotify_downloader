@@ -812,6 +812,17 @@ d:\Spotify-Downloader\
   - **Bug:** `get_playlists()` and `get_albums()` passed `folder_path = os.path.dirname(sample_file)` (evaluating to `D:\Spotify-Downloader\downloads`) to `resolve_collection_cover()`. Because `cache/covers/downloads.jpg` existed, every single playlist received `downloads.jpg` as its cover art.
   - **Fix:** In [core/archive.py](file:///d:/Spotify-Downloader/core/archive.py#L34), updated `resolve_collection_cover(collection_name_or_folder, sample_file)` to strictly ignore generic folder names (`downloads`, `music`). Added case-insensitive and prefix matching against `cache/covers/` as well as dynamic fallback to `saved_playlists.cover_url`. Passed `pl_name` in `get_playlists()` and `alb_name` in `get_albums()`. Removed rogue `downloads.jpg`. All 18 playlists now correctly render their distinct artwork.
 
+### 35. Context Menu Auto-Download Bug Fix & Menu Cleanup (October 2026)
+- **Critical Right-Click Auto-Download Bug Fixed:**
+  - **Symptom:** Right-clicking on any track in `PlaylistsView` (or closing the context menu without choosing an action) unexpectedly triggered an automatic deletion and re-download of the track.
+  - **Root Cause:** In `PlaylistsView._show_table_context_menu()` and `CompletedView._show_context_menu()`, if the user cancelled the menu (clicked away, pressed Esc), `menu.exec()` returned `None`. Because `act_redl_auto` or `act_download` were initialized to `None`, the check `elif action in (act_redl_auto, ...)` or `elif action in (act_download, ...)` evaluated `None in (None, ...)` as `True`, triggering an immediate enqueue and download.
+  - **Fix:** Added `if not action: return` immediately after `menu.exec()` across [playlists_view.py](file:///d:/Spotify-Downloader/gui/views/playlists_view.py#L2135), [completed_view.py](file:///d:/Spotify-Downloader/gui/views/completed_view.py#L1089), and [queue_view.py](file:///d:/Spotify-Downloader/gui/views/queue_view.py#L857). Added explicit truthy guards before checking `action in (...)`.
+- **Menu Clarification:**
+  - Renamed confusing `Delete & Re-download` (which Qt stripped into `Delete Re-download` as an accelerator mnemonic) to clear, intuitive `Re-download Track >` (`Auto (Best Available)`, `Via Telegram Bot (MeloBot)`, `Via Musilon (320k MP3)`, `Via YouTube Music`).
+  - Positioned `Play Track` and `Reveal in File Explorer` at the top of the context menu whenever the local file exists.
+  - Rescued downloaded tracks from temporary test cache and updated database records.
+
+
 
 
 
