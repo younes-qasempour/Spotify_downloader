@@ -854,6 +854,27 @@ d:\Spotify-Downloader\
   5. **Unit Tests ([tests/test_exporter.py](file:///d:/Spotify-Downloader/tests/test_exporter.py)):**
      - Verified direct copy, on-the-fly transcoding, skip-existing incremental mode, portable M3U8 playlist structure, user cancellation, missing-file handling, and `ExportDialog` live progress and completion updates. All 6 tests passing cleanly.
 
+### 37. Multi-Device Playlist Export Subsystem (.m3u8 for Android & Windows) (October 2026)
+- **User Problem & Need:**
+  - Users already have their downloaded audio library on an Android device (or in a central folder on Windows) and want to export **only the playlist file** (`.m3u8`), without duplicating multi-gigabyte audio files.
+  - External players (e.g., VLC, PotPlayer, KMPlayer on PC, or Poweramp, Musicolet, VLC on Android) require specific path formats and strict track sequencing matching Spotify.
+- **Is this in the app now?**
+  - **Yes, fully implemented and enhanced.** Previously, the app only offered a raw file copy export. Now, there is a dedicated, rich **Export Playlist File (.m3u8)** option accessible from both the **Playlists** tab and the **Completed Library** tab.
+- **Architectural Implementation:**
+  1. **Exact Spotify Order Guaranteed:**
+     - In [core/archive.py](file:///d:/Spotify-Downloader/core/archive.py#L1682), playlist queries use `ORDER BY s.track_number ASC, s.id ASC`, ensuring that the generated `#EXTINF` entries and file references strictly reflect the user's Spotify playlist track order.
+  2. **Multi-Platform Path Modes:**
+     - **Android Universal (Filename Only):** e.g. `Queen - Bohemian Rhapsody.flac`. Android audio players (Poweramp, Musicolet, GoneMAD, VLC for Android) index audio files in Android's MediaStore. Using pure filenames allows the player to match and play the songs immediately regardless of whether they reside in internal storage or an SD card.
+     - **Windows Players (Absolute Paths):** e.g. `D:/Spotify-Downloader/downloads/Queen - Bohemian Rhapsody.flac`. Optimized for VLC, PotPlayer, KMPlayer, and Foobar2000. Allows the playlist file to be saved anywhere (such as Desktop) and opened directly with a double-click.
+     - **Relative Paths:** `./Song.flac` or `../Song.flac` relative to the saved `.m3u8` location.
+     - **Custom Android Storage Prefix:** e.g. `/storage/emulated/0/Music/Song.flac` for players that require full Unix filesystem paths.
+  3. **Dedicated UI Dialog ([gui/dialogs/export_m3u_dialog.py](file:///d:/Spotify-Downloader/gui/dialogs/export_m3u_dialog.py)):**
+     - Fluent Design modal with preset dropdown, destination browser (`QFileDialog.getSaveFileName`), live helper text, and a success card.
+     - **Direct Action Buttons:** After exporting, users can click **"Play in Default Player (VLC / PotPlayer)"** which invokes Windows `os.startfile(dest_path)` to immediately launch their default media player with the playlist loaded, or click **"Reveal in File Explorer"**.
+  4. **GUI Entry Points:**
+     - **Playlists View:** Detail banner button `.m3u8`, playlist card context menu `"Export Playlist File (.m3u8)..."`.
+     - **Completed Library View:** Collection card context menu (Playlists and Albums), collection breadcrumb banner `ToolButton(FluentIcon.SAVE)`, and track table context menu.
+
 ### Run the GUI Application:
 ```powershell
 python main.py
@@ -873,4 +894,5 @@ python main.py --headless "https://open.spotify.com/track/<track_id>"
 ```powershell
 python -c "from core.spotify_client import SpotifyClient; c = SpotifyClient(); print(c.resolve('https://open.spotify.com/track/3AJwUDP919kvQ9QcozQPxg'))"
 ```
+
 

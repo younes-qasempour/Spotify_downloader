@@ -1682,11 +1682,17 @@ class ArchiveManager:
     def export_saved_playlist_m3u8(
         self,
         playlist_id: str,
-        dest_path: Optional[str] = None
+        dest_path: Optional[str] = None,
+        path_mode: str = "relative",
+        android_prefix: str = "/storage/emulated/0/Music"
     ) -> Optional[str]:
         """
         Exports a saved playlist to a portable standard UTF-8 .m3u8 file.
-        Uses relative paths when audio files reside in the playlist folder, ensuring portability on DAPs and external drives.
+        Supports:
+        - 'filename': Portable filename only (universal for Android players: Poweramp, Musicolet, VLC Android).
+        - 'absolute': Full local file paths (for VLC, PotPlayer, KMPlayer on PC).
+        - 'relative': Relative paths from playlist file to audio files.
+        - 'android_prefix': Path prefixed with Android directory (e.g. /storage/emulated/0/Music/).
         """
         pl = self.get_saved_playlist(playlist_id)
         if not pl:
@@ -1710,26 +1716,82 @@ class ArchiveManager:
                 playlists_folder = os.path.join(output_dir, "playlists")
                 dest_path = os.path.join(playlists_folder, f"{safe_name}.m3u8")
 
+        return self.export_tracks_to_m3u8(
+            playlist_name=name,
+            tracks=valid_tracks,
+            dest_path=dest_path,
+            path_mode=path_mode,
+            android_prefix=android_prefix
+        )
+
+    def export_tracks_to_m3u8(
+        self,
+        playlist_name: str,
+        tracks: List[Any],
+        dest_path: str,
+        path_mode: str = "filename",
+        android_prefix: str = "/storage/emulated/0/Music"
+    ) -> Optional[str]:
+        """
+        Exports any arbitrary list of tracks (dicts or QueueItems) to a standard .m3u8 file
+        preserving exact given track order and metadata.
+        """
+        if not tracks or not dest_path:
+            return None
+
+        valid_tracks = []
+        for t in tracks:
+            fp = t.get("file_path") if isinstance(t, dict) else getattr(t, "output_path", "")
+            if fp and os.path.isfile(fp):
+                valid_tracks.append(t)
+
+        if not valid_tracks:
+            return None
+
         try:
             os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
             dest_dir = os.path.dirname(os.path.abspath(dest_path))
             with open(dest_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write("#EXTM3U\n")
-                f.write(f"#PLAYLIST:{name}\n")
+                f.write(f"#PLAYLIST:{playlist_name}\n")
                 for t in valid_tracks:
-                    fp = os.path.abspath(t["file_path"])
-                    dur_sec = int(t.get("duration_ms", 0) / 1000) if t.get("duration_ms") else -1
-                    f.write(f"#EXTINF:{dur_sec},{t.get('artist', 'Unknown')} - {t.get('title', 'Unknown')}\n")
-                    try:
-                        rel_p = os.path.relpath(fp, dest_dir)
-                        # Normalize to forward slashes for universal player compatibility
-                        f.write(f"{rel_p.replace(os.sep, '/')}\n")
-                    except Exception:
-                        f.write(f"{fp}\n")
-            logger.info(f"Exported M3U8 playlist '{name}' to {dest_path}")
+                    if isinstance(t, dict):
+                        fp = os.path.abspath(t["file_path"])
+                        title = t.get("title", "Unknown")
+                        artist = t.get("artist", "Unknown")
+                        dur_sec = int(t.get("duration_ms", 0) / 1000) if t.get("duration_ms") else -1
+                    elif hasattr(t, "track") and t.track:
+                        fp = os.path.abspath(t.output_path)
+                        title = t.track.title or "Unknown"
+                        artist = getattr(t.track, "artist_str", "") or (", ".join(t.track.artists) if hasattr(t.track, "artists") else "Unknown")
+                        dur_ms = getattr(t.track, "duration_ms", 0) or 0
+                        dur_sec = int(dur_ms / 1000) if dur_ms else -1
+                    else:
+                        fp = os.path.abspath(getattr(t, "output_path", "") or getattr(t, "file_path", ""))
+                        title = getattr(t, "title", "Unknown")
+                        artist = getattr(t, "artist", "Unknown")
+                        dur_ms = getattr(t, "duration_ms", 0) or 0
+                        dur_sec = int(dur_ms / 1000) if dur_ms else -1
+
+                    f.write(f"#EXTINF:{dur_sec},{artist} - {title}\n")
+                    if path_mode == "filename":
+                        f.write(f"{os.path.basename(fp)}\n")
+                    elif path_mode == "absolute":
+                        f.write(f"{fp.replace(os.sep, '/')}\n")
+                    elif path_mode == "android_prefix":
+                        pfx = (android_prefix or "/storage/emulated/0/Music").rstrip("/\\")
+                        f.write(f"{pfx}/{os.path.basename(fp)}\n")
+                    else:
+                        try:
+                            rel_p = os.path.relpath(fp, dest_dir)
+                            f.write(f"{rel_p.replace(os.sep, '/')}\n")
+                        except Exception:
+                            f.write(f"{os.path.basename(fp)}\n")
+
+            logger.info(f"Exported {len(valid_tracks)} tracks to M3U8 '{dest_path}' (mode={path_mode})")
             return dest_path
         except Exception as e:
-            logger.error(f"Failed to export M3U8 playlist for {playlist_id}: {e}")
+            logger.error(f"Failed to export tracks to M3U8 '{dest_path}': {e}")
             return None
 
     def export_collection_m3u8(self, collection_name: str, dest_path: Optional[str] = None) -> Optional[str]:

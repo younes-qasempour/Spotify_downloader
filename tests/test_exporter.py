@@ -3,7 +3,13 @@ import shutil
 import tempfile
 import unittest
 import threading
+import sys
 from unittest.mock import patch, MagicMock
+
+from PyQt6.QtWidgets import QApplication
+
+# Single QApplication instance for tests
+_q_app = QApplication.instance() or QApplication(sys.argv)
 
 from core.exporter import ExportConfig, ExportResult, PlaylistExporter
 
@@ -211,6 +217,74 @@ class TestPlaylistExporter(unittest.TestCase):
         self.assertIn("Successfully exported 2 song(s)", diag.result_body.text())
         diag.close()
 
+    def test_archive_export_tracks_to_m3u8_modes(self):
+        from core.archive import ArchiveManager
+        archive = ArchiveManager()
+
+        # 1. Filename mode (Android universal)
+        m3u_android = os.path.join(self.dest_dir, "android_test.m3u8")
+        res = archive.export_tracks_to_m3u8("My Playlist", self.tracks, m3u_android, path_mode="filename")
+        self.assertEqual(res, m3u_android)
+        with open(m3u_android, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines[0], "#EXTM3U")
+        self.assertEqual(lines[1], "#PLAYLIST:My Playlist")
+        self.assertIn("#EXTINF:180,Artist Alpha - Song One", lines)
+        self.assertIn("Song One.flac", lines)
+        self.assertIn("#EXTINF:210,Artist Beta - Song Two", lines)
+        self.assertIn("Song Two.mp3", lines)
+        # Ensure filenames only, no directory slashes
+        for line in lines:
+            if line.endswith(".flac") or line.endswith(".mp3"):
+                self.assertNotIn("/", line)
+                self.assertNotIn("\\", line)
+
+        # 2. Absolute mode (Windows VLC/PotPlayer)
+        m3u_win = os.path.join(self.dest_dir, "windows_test.m3u8")
+        res = archive.export_tracks_to_m3u8("My Playlist", self.tracks, m3u_win, path_mode="absolute")
+        self.assertEqual(res, m3u_win)
+        with open(m3u_win, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn(self.track1_path.replace(os.sep, "/"), content)
+        self.assertIn(self.track2_path.replace(os.sep, "/"), content)
+
+        # 3. Android prefix mode
+        m3u_pfx = os.path.join(self.dest_dir, "pfx_test.m3u8")
+        res = archive.export_tracks_to_m3u8("My Playlist", self.tracks, m3u_pfx, path_mode="android_prefix", android_prefix="/storage/0123-4567/Music")
+        self.assertEqual(res, m3u_pfx)
+        with open(m3u_pfx, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("/storage/0123-4567/Music/Song One.flac", content)
+        self.assertIn("/storage/0123-4567/Music/Song Two.mp3", content)
+
+    def test_export_m3u_dialog_ui_and_actions(self):
+        import sys
+        from PyQt6.QtWidgets import QApplication
+        from gui.dialogs.export_m3u_dialog import ExportM3UDialog
+
+        app = QApplication.instance() or QApplication(sys.argv)
+        m3u_out = os.path.join(self.dest_dir, "dialog_export.m3u8")
+        diag = ExportM3UDialog(playlist_name="Dialog Test", tracks=self.tracks)
+
+        self.assertFalse(diag.validate(), "validate() must return False so MessageBoxBase does not close early")
+        self.assertEqual(len(diag.valid_tracks), 2)
+        self.assertEqual(diag.pages.currentIndex(), 0)
+
+        # Select Windows VLC/PotPlayer mode
+        diag.target_combo.setCurrentIndex(1)
+        diag.dest_input.setText(m3u_out)
+
+        # Trigger export
+        diag._on_export_clicked()
+
+        # Check export completed successfully
+        self.assertTrue(os.path.isfile(m3u_out))
+        self.assertEqual(diag.pages.currentIndex(), 1)
+        self.assertEqual(diag.cancelButton.text(), "Done")
+        self.assertIn("dialog_export.m3u8", diag.succ_details.text())
+        diag.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+

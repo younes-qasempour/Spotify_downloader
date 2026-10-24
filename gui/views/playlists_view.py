@@ -29,6 +29,7 @@ from gui.queue_delegate import TrackCardDelegate
 from gui.bridge import EngineSignalBridge, safe_invoke, safe_emit
 from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, BG_CARD, SPOTIFY_EMERALD
 from gui.dialogs.export_dialog import ExportDialog
+from gui.dialogs.export_m3u_dialog import ExportM3UDialog
 
 PRESET_NORMAL_STYLE = """
     PushButton {
@@ -335,6 +336,7 @@ class SavedPlaylistCard(CardWidget):
         on_sync=None,
         on_edit=None,
         on_export=None,
+        on_export_m3u=None,
         parent=None
     ):
         super().__init__(parent)
@@ -344,6 +346,7 @@ class SavedPlaylistCard(CardWidget):
         self.on_sync = on_sync
         self.on_edit = on_edit
         self.on_export = on_export
+        self.on_export_m3u = on_export_m3u
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_card_context_menu)
@@ -505,6 +508,10 @@ class SavedPlaylistCard(CardWidget):
         if self.on_export:
             self.on_export(self.data)
 
+    def _handle_export_m3u(self):
+        if self.on_export_m3u:
+            self.on_export_m3u(self.data)
+
     def _show_card_context_menu(self, pos):
         menu = QMenu(self)
         menu.setStyleSheet("""
@@ -527,7 +534,9 @@ class SavedPlaylistCard(CardWidget):
         act_open = menu.addAction("Browse & Download Tracks")
         act_edit = menu.addAction("Rename / Edit Playlist...")
         act_sync = menu.addAction("Sync Playlist")
-        act_export = menu.addAction("Export Playlist to Device / Folder...")
+        menu.addSeparator()
+        act_export_m3u = menu.addAction("Export Playlist File (.m3u8)...")
+        act_export = menu.addAction("Export Songs to Device / Folder...")
         menu.addSeparator()
         act_copy = menu.addAction("Copy Spotify Link")
         menu.addSeparator()
@@ -543,6 +552,8 @@ class SavedPlaylistCard(CardWidget):
             self._handle_edit()
         elif action == act_sync:
             self._handle_sync()
+        elif action == act_export_m3u:
+            self._handle_export_m3u()
         elif action == act_export:
             self._handle_export()
         elif action == act_copy:
@@ -1342,6 +1353,7 @@ class PlaylistsView(QWidget):
                 on_sync=self._sync_playlist,
                 on_edit=self._edit_playlist,
                 on_export=self._export_saved_playlist,
+                on_export_m3u=self._export_saved_playlist_m3u8_card,
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
@@ -1368,6 +1380,36 @@ class PlaylistsView(QWidget):
             return
 
         diag = ExportDialog(pl_name, valid_tracks, self.window() or self)
+        diag.exec()
+
+    def _export_saved_playlist_m3u8_card(self, playlist_data: Dict[str, Any]):
+        if not playlist_data:
+            return
+        pl_id = playlist_data.get("id")
+        pl_name = playlist_data.get("name", "Playlist")
+        if not pl_id:
+            return
+
+        tracks = self.archive.get_saved_playlist_tracks(pl_id, status="downloaded")
+        valid_tracks = [t for t in tracks if t.get("file_path") and os.path.isfile(t.get("file_path"))]
+        if not valid_tracks:
+            InfoBar.warning(
+                title="No Downloaded Songs",
+                content=f"No downloaded songs found on disk for '{pl_name}'. Please download songs first.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+                parent=self
+            )
+            return
+
+        diag = ExportM3UDialog(
+            playlist_name=pl_name,
+            tracks=valid_tracks,
+            archive=self.archive,
+            playlist_id=pl_id,
+            parent=self.window() or self
+        )
         diag.exec()
 
     def _delete_playlist(self, playlist_id: str):
@@ -2398,11 +2440,28 @@ class PlaylistsView(QWidget):
     def _on_export_m3u8_clicked(self):
         if not self.current_playlist_id:
             return
-        dest_p = self.archive.export_saved_playlist_m3u8(self.current_playlist_id)
-        if dest_p:
-            InfoBar.success("M3U8 Exported", f"Successfully exported playlist to: {os.path.basename(dest_p)}", duration=4000, parent=self)
-        else:
-            InfoBar.warning("No Downloaded Tracks", "Please download at least one track before exporting to M3U8.", duration=4000, parent=self)
+        pl_name = self.current_playlist_data.get("name", "Playlist") if self.current_playlist_data else "Playlist"
+        tracks = self.archive.get_saved_playlist_tracks(self.current_playlist_id, status="downloaded")
+        valid_tracks = [t for t in tracks if t.get("file_path") and os.path.isfile(t.get("file_path"))]
+        if not valid_tracks:
+            InfoBar.warning(
+                title="No Downloaded Songs",
+                content=f"No downloaded songs found on disk for '{pl_name}'. Please download songs first.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+                parent=self
+            )
+            return
+
+        diag = ExportM3UDialog(
+            playlist_name=pl_name,
+            tracks=valid_tracks,
+            archive=self.archive,
+            playlist_id=self.current_playlist_id,
+            parent=self.window() or self
+        )
+        diag.exec()
 
     def _on_export_songs_clicked(self):
         if not self.current_playlist_id:

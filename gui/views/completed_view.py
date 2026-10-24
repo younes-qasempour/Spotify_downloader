@@ -23,6 +23,7 @@ from core.spotify_client import TrackMetadata
 from core.queue_manager import QueueItem
 from core.config import config
 from gui.dialogs.export_dialog import ExportDialog
+from gui.dialogs.export_m3u_dialog import ExportM3UDialog
 
 
 class RenameCollectionDialog(MessageBoxBase):
@@ -68,6 +69,7 @@ class CollectionCard(CardWidget):
         on_browse=None,
         on_rename=None,
         on_export=None,
+        on_export_m3u=None,
         parent=None
     ):
         super().__init__(parent)
@@ -77,6 +79,7 @@ class CollectionCard(CardWidget):
         self.on_browse = on_browse
         self.on_rename = on_rename
         self.on_export = on_export
+        self.on_export_m3u = on_export_m3u
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_card_menu)
@@ -208,6 +211,9 @@ class CollectionCard(CardWidget):
         act_export = None
         if self.on_export:
             act_export = menu.addAction("Export Playlist to Device / Folder...")
+        act_export_m3u = None
+        if self.on_export_m3u:
+            act_export_m3u = menu.addAction("Export Playlist File (.m3u8)...")
         menu.addSeparator()
         act_folder = menu.addAction("Open Folder in Explorer")
 
@@ -221,6 +227,8 @@ class CollectionCard(CardWidget):
             self.on_rename()
         elif act_export and action == act_export and self.on_export:
             self.on_export()
+        elif act_export_m3u and action == act_export_m3u and self.on_export_m3u:
+            self.on_export_m3u()
         elif action == act_folder:
             self._open_folder()
 
@@ -388,8 +396,12 @@ class CompletedView(QWidget):
         self.banner_open_folder_btn.clicked.connect(self._open_current_collection_folder)
 
         self.banner_export_btn = ToolButton(FluentIcon.FOLDER_ADD, self.coll_banner)
-        self.banner_export_btn.setToolTip("Export Playlist to Device / Folder...")
+        self.banner_export_btn.setToolTip("Export Songs to Device / Folder...")
         self.banner_export_btn.clicked.connect(self._export_current_collection)
+
+        self.banner_export_m3u_btn = ToolButton(FluentIcon.SAVE, self.coll_banner)
+        self.banner_export_m3u_btn.setToolTip("Export Playlist File (.m3u8)...")
+        self.banner_export_m3u_btn.clicked.connect(self._export_current_collection_m3u)
 
         self.banner_rename_btn = ToolButton(FluentIcon.EDIT, self.coll_banner)
         self.banner_rename_btn.setToolTip("Rename Playlist")
@@ -397,6 +409,7 @@ class CompletedView(QWidget):
 
         banner_layout.addWidget(self.banner_open_folder_btn)
         banner_layout.addWidget(self.banner_export_btn)
+        banner_layout.addWidget(self.banner_export_m3u_btn)
         banner_layout.addWidget(self.banner_rename_btn)
 
         table_layout.addWidget(self.coll_banner)
@@ -739,6 +752,7 @@ class CompletedView(QWidget):
                 on_browse=lambda *args, n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "playlist", cp, fp, sub),
                 on_rename=lambda n=name: self._rename_playlist_collection(n),
                 on_export=lambda n=name: self._export_collection(n, "playlist"),
+                on_export_m3u=lambda n=name: self._export_collection_m3u(n, "playlist"),
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
@@ -820,6 +834,7 @@ class CompletedView(QWidget):
                 cover_path=cover_path,
                 on_browse=lambda *args, n=name, cp=cover_path, fp=folder, sub=subtitle: self._browse_collection(n, "album", cp, fp, sub),
                 on_export=lambda n=name: self._export_collection(n, "album"),
+                on_export_m3u=lambda n=name: self._export_collection_m3u(n, "album"),
                 parent=self.albums_container
             )
             self.albums_layout.insertWidget(self.albums_layout.count() - 1, card)
@@ -1210,42 +1225,53 @@ class CompletedView(QWidget):
         threading.Thread(target=worker, daemon=True, name=f"RG_{item.track.id}").start()
 
     def _export_m3u_playlist(self):
-        """Exports all tracks currently matching view filters into an M3U8/M3U playlist file."""
-        from PyQt6.QtWidgets import QFileDialog
-        items = [self.model.get_item(i) for i in range(self.model.rowCount())]
+        """Exports tracks currently matching view filters or selection into an M3U8 playlist file."""
+        selected_indexes = self.table.selectionModel().selectedRows()
+        if len(selected_indexes) > 1:
+            items = [self.model.get_item(idx.row()) for idx in selected_indexes]
+        else:
+            items = [self.model.get_item(i) for i in range(self.model.rowCount())]
+
         valid_items = [it for it in items if it and it.output_path and os.path.isfile(it.output_path)]
         if not valid_items:
             InfoBar.warning("No Tracks", "There are no playable tracks in the current view to export.", parent=self)
             return
 
-        suggested_name = "Playlist.m3u8"
-        if hasattr(self, "genre_combo") and self.genre_combo.currentText() != "All Genres":
-            suggested_name = f"{self.genre_combo.currentText()}.m3u8"
-        elif self._current_collection_name:
-            suggested_name = f"{self._current_collection_name}.m3u8"
+        pl_name = self._current_collection_name or "Playlist"
+        diag = ExportM3UDialog(
+            playlist_name=pl_name,
+            tracks=valid_items,
+            archive=self.archive,
+            parent=self.window() or self
+        )
+        diag.exec()
 
-        file_path, _ = QFileDialog.getSaveFileName(self, "Export M3U8 Playlist", suggested_name, "M3U8 Playlist (*.m3u8);;M3U Playlist (*.m3u)")
-        if not file_path:
+    def _export_current_collection_m3u(self):
+        if not self._current_collection_name:
+            return
+        self._export_collection_m3u(self._current_collection_name, self._current_collection_type or "playlist")
+
+    def _export_collection_m3u(self, name: str, coll_type: str = "playlist"):
+        tracks = self.archive.get_collection_tracks(name, coll_type)
+        valid_tracks = [t for t in tracks if t.get("file_path") and os.path.isfile(t.get("file_path"))]
+        if not valid_tracks:
+            InfoBar.warning(
+                title="No Downloaded Songs",
+                content=f"No downloaded songs found on disk for '{name}'.",
+                orient=Qt.Orientation.Horizontal,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+                parent=self
+            )
             return
 
-        try:
-            dest_dir = os.path.dirname(os.path.abspath(file_path))
-            with open(file_path, "w", encoding="utf-8", newline="\n") as f:
-                f.write("#EXTM3U\n")
-                if self._current_collection_name:
-                    f.write(f"#PLAYLIST:{self._current_collection_name}\n")
-                for it in valid_items:
-                    dur_sec = int(it.track.duration_ms / 1000) if it.track.duration_ms else -1
-                    f.write(f"#EXTINF:{dur_sec},{it.track.artist_str} - {it.track.title}\n")
-                    abs_audio = os.path.abspath(it.output_path)
-                    try:
-                        rel_path = os.path.relpath(abs_audio, dest_dir)
-                        f.write(f"{rel_path}\n")
-                    except Exception:
-                        f.write(f"{it.output_path}\n")
-            InfoBar.success("Playlist Exported", f"Exported {len(valid_items)} tracks to {os.path.basename(file_path)}", duration=4000, parent=self)
-        except Exception as e:
-            InfoBar.error("Export Failed", f"Could not write playlist: {e}", duration=4000, parent=self)
+        diag = ExportM3UDialog(
+            playlist_name=name,
+            tracks=valid_tracks,
+            archive=self.archive,
+            parent=self.window() or self
+        )
+        diag.exec()
 
     def _export_current_collection(self):
         if not self._current_collection_name:
