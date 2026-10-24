@@ -2073,11 +2073,15 @@ class PlaylistsView(QWidget):
         """
         menu.setStyleSheet(menu_style)
 
-        act_play = None
-        if item.status == "Completed" and item.output_path and os.path.isfile(item.output_path):
-            act_play = menu.addAction("Play Track")
+        file_exists = bool(item.output_path and os.path.isfile(item.output_path))
+        is_downloaded = (item.status == "Completed" or file_exists)
 
-        is_downloaded = (item.status == "Completed" or (item.output_path and os.path.isfile(item.output_path)))
+        act_play = None
+        act_reveal = None
+        if file_exists:
+            act_play = menu.addAction("Play Track")
+            act_reveal = menu.addAction("Reveal in File Explorer")
+            menu.addSeparator()
 
         act_download = None
         act_dl_melo = None
@@ -2091,25 +2095,21 @@ class PlaylistsView(QWidget):
         act_delete_file = None
 
         if is_downloaded:
-            redl_menu = menu.addMenu("Delete & Re-download")
+            redl_menu = menu.addMenu("Re-download Track")
             redl_menu.setStyleSheet(menu_style)
             act_redl_auto = redl_menu.addAction("Auto (Best Available)")
-            act_redl_melo = redl_menu.addAction("From Telegram Bot (MeloBot)")
-            act_redl_musi = redl_menu.addAction("From Musilon (320k MP3)")
-            act_redl_yt = redl_menu.addAction("From YouTube Music")
+            act_redl_melo = redl_menu.addAction("Via Telegram Bot (MeloBot)")
+            act_redl_musi = redl_menu.addAction("Via Musilon (320k MP3)")
+            act_redl_yt = redl_menu.addAction("Via YouTube Music")
 
             act_delete_file = menu.addAction("Delete Downloaded File")
         else:
             act_download = menu.addAction("Download This Track")
-            dl_sub = menu.addMenu("Download via Specific Engine")
+            dl_sub = menu.addMenu("Download via Specific Source")
             dl_sub.setStyleSheet(menu_style)
             act_dl_melo = dl_sub.addAction("Telegram Bot (MeloBot)")
             act_dl_musi = dl_sub.addAction("Musilon")
             act_dl_yt = dl_sub.addAction("YouTube Music")
-
-        menu.addSeparator()
-        act_copy_title = menu.addAction("Copy Title & Artist")
-        act_copy_url = menu.addAction("Copy Spotify URL")
 
         act_cancel = None
         if item.status in ("Downloading", "Resolving", "Queued", "Paused"):
@@ -2121,23 +2121,24 @@ class PlaylistsView(QWidget):
             menu.addSeparator()
             act_retry = menu.addAction("Retry Download")
 
-        act_reveal = None
-        if item.output_path and os.path.isfile(item.output_path):
-            menu.addSeparator()
-            act_reveal = menu.addAction("Reveal in File Explorer")
-
-        act_m3u8 = menu.addAction("Export Playlist (.m3u8)")
-
         act_reset = None
         if item.status in ("Failed", "Queued", "Stopped"):
             menu.addSeparator()
             act_reset = menu.addAction("Reset Status to Pending")
 
         menu.addSeparator()
+        act_copy_title = menu.addAction("Copy Title & Artist")
+        act_copy_url = menu.addAction("Copy Spotify URL")
+        act_m3u8 = menu.addAction("Export Playlist (.m3u8)")
+
+        menu.addSeparator()
         act_edit_track = menu.addAction("Edit Track Metadata...")
         act_edit_playlist = menu.addAction("Edit Playlist Details...")
 
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if not action:
+            return
+
         if act_play and action == act_play:
             if item.output_path and os.path.isfile(item.output_path):
                 main_win = self.window()
@@ -2178,7 +2179,7 @@ class PlaylistsView(QWidget):
                 duration=3500,
                 parent=self
             )
-        elif action in (act_redl_auto, act_redl_melo, act_redl_musi, act_redl_yt):
+        elif act_redl_auto and action in (act_redl_auto, act_redl_melo, act_redl_musi, act_redl_yt):
             t = item.track
             file_to_del = item.output_path
             if not file_to_del:
@@ -2229,7 +2230,7 @@ class PlaylistsView(QWidget):
                 duration=4000,
                 parent=self
             )
-        elif action in (act_download, act_dl_melo, act_dl_musi, act_dl_yt):
+        elif act_download and action in (act_download, act_dl_melo, act_dl_musi, act_dl_yt):
             t = item.track
             engine_choice = None
             engine_label = "Auto"

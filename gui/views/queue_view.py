@@ -855,6 +855,9 @@ class QueueView(QWidget):
         copy_url_act = menu.addAction(FluentIcon.LINK.qicon(), "Copy Source Link")
 
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if not action:
+            return
+
         if action == play_act and play_act:
             it = selected_items[0]
             completed_items = [

@@ -9,6 +9,8 @@ from core.archive import ArchiveManager
 
 class TestSubfolderSettings(unittest.TestCase):
     def setUp(self):
+        self.original_output_dir = config.get("download.output_dir")
+        self.original_subfolders = config.get("download.save_in_subfolders", False)
         self.test_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.test_dir, "test_archive.db")
         self.archive = ArchiveManager(db_path=self.db_path)
@@ -16,6 +18,9 @@ class TestSubfolderSettings(unittest.TestCase):
         config.set("download.save_in_subfolders", False)
 
     def tearDown(self):
+        if self.original_output_dir:
+            config.set("download.output_dir", self.original_output_dir)
+        config.set("download.save_in_subfolders", self.original_subfolders)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_save_in_subfolders_toggle(self):

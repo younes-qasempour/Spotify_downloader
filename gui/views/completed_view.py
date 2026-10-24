@@ -1070,12 +1070,12 @@ class CompletedView(QWidget):
         copy_act = menu.addAction("Copy Track Title")
         menu.addSeparator()
 
-        redl_menu = menu.addMenu("Delete & Re-download")
+        redl_menu = menu.addMenu("Re-download Track")
         redl_menu.setStyleSheet(menu_style)
         act_redl_auto = redl_menu.addAction("Auto (Best Available)")
-        act_redl_melo = redl_menu.addAction("From Telegram Bot (MeloBot)")
-        act_redl_musi = redl_menu.addAction("From Musilon (320k MP3)")
-        act_redl_yt = redl_menu.addAction("From YouTube Music")
+        act_redl_melo = redl_menu.addAction("Via Telegram Bot (MeloBot)")
+        act_redl_musi = redl_menu.addAction("Via Musilon (320k MP3)")
+        act_redl_yt = redl_menu.addAction("Via YouTube Music")
 
         act_del_file = menu.addAction("Delete File from Disk")
         menu.addSeparator()
@@ -1087,6 +1087,9 @@ class CompletedView(QWidget):
         delete_act = menu.addAction("Remove from Archive Only")
 
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if not action:
+            return
+
         if action == play_act:
             if item.output_path and os.path.isfile(item.output_path):
                 main_win = self.window()
@@ -1107,7 +1110,7 @@ class CompletedView(QWidget):
                 InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == copy_act:
             QApplication.clipboard().setText(f"{item.track.title} - {item.track.artist_str}")
-        elif action in (act_redl_auto, act_redl_melo, act_redl_musi, act_redl_yt):
+        elif act_redl_auto and action in (act_redl_auto, act_redl_melo, act_redl_musi, act_redl_yt):
             t = item.track
             if item.output_path and os.path.exists(item.output_path):
                 try:
