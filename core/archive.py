@@ -31,36 +31,81 @@ def normalize_path(path: str) -> str:
     return p
 
 
-def resolve_collection_cover(folder_path: str, sample_file: str = "") -> str:
+def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = "") -> str:
     """
     Resolves or extracts collection cover artwork into the dedicated app cache directory:
-    cache/covers/{folder_name}.jpg.
+    cache/covers/{name}.jpg.
     Never writes cover.jpg or any image files inside the user's music folder.
     Returns the path to the cached cover image if found/created, or empty string.
     """
-    if not folder_path:
+    if not collection_name_or_folder:
         return ""
 
-    folder_name = os.path.basename(os.path.normpath(folder_path))
-    safe_name = sanitize_filename(folder_name, max_length=50)
+    # Normalize name: if it's a directory path, use folder name
+    # But if folder name is 'downloads' or 'music', it's generic and NOT a valid collection name!
+    candidate_name = collection_name_or_folder.strip()
+    if os.path.isdir(candidate_name) or ("\\" in candidate_name or "/" in candidate_name):
+        candidate_name = os.path.basename(os.path.normpath(candidate_name))
 
+    if candidate_name.lower() in ("downloads", "music", ""):
+        # Generic folder; cannot be used as collection name
+        return ""
+
+    safe_name = sanitize_filename(candidate_name, max_length=50)
     covers_dir = str(get_covers_dir())
+    if not os.path.isdir(covers_dir):
+        return ""
 
-    # 1. Check if cached cover exists in app cache
+    # 1. Check exact matches in covers_dir
     cached_cover = os.path.join(covers_dir, f"{safe_name}.jpg")
     if os.path.isfile(cached_cover) and os.path.getsize(cached_cover) > 500:
         return cached_cover
 
-    # Also check playlist_ / album_ prefixed cache files
     for prefix in ("playlist_", "album_"):
         candidate = os.path.join(covers_dir, f"{prefix}{safe_name}.jpg")
         if os.path.isfile(candidate) and os.path.getsize(candidate) > 500:
             return candidate
 
-    # 2. Check if a cover image exists in folder to migrate to cache
-    if os.path.isdir(folder_path):
+    # 2. Case-insensitive and prefix match in covers_dir (handles long truncated names & unicode)
+    safe_lower = safe_name.lower()
+    try:
+        for f in os.listdir(covers_dir):
+            if not f.lower().endswith((".jpg", ".png", ".jpeg", ".webp")):
+                continue
+            stem = os.path.splitext(f)[0].lower()
+            if stem == safe_lower or stem == f"playlist_{safe_lower}" or stem == f"album_{safe_lower}":
+                cp = os.path.join(covers_dir, f)
+                if os.path.isfile(cp) and os.path.getsize(cp) > 500:
+                    return cp
+            # Prefix match for long playlist names (e.g., truncated to 50 chars)
+            if len(safe_lower) >= 25 and (stem.startswith(safe_lower[:25]) or safe_lower.startswith(stem[:25])):
+                cp = os.path.join(covers_dir, f)
+                if os.path.isfile(cp) and os.path.getsize(cp) > 500:
+                    return cp
+    except Exception:
+        pass
+
+    # 3. Check saved_playlists table in DB for cover_url
+    try:
+        db_p = get_archive_db_path()
+        if os.path.isfile(db_p):
+            with sqlite3.connect(str(db_p), timeout=5.0) as conn:
+                row = conn.execute(
+                    "SELECT cover_url FROM saved_playlists WHERE LOWER(name) = LOWER(?) AND cover_url IS NOT NULL AND cover_url != '' LIMIT 1",
+                    (candidate_name,)
+                ).fetchone()
+                if row and row[0]:
+                    import urllib.request
+                    urllib.request.urlretrieve(row[0], cached_cover)
+                    if os.path.isfile(cached_cover) and os.path.getsize(cached_cover) > 500:
+                        return cached_cover
+    except Exception as e:
+        logger.debug(f"Could not retrieve cover_url for {candidate_name}: {e}")
+
+    # 4. Check if a cover image exists in a directory if collection_name_or_folder was a folder
+    if os.path.isdir(collection_name_or_folder) and candidate_name.lower() not in ("downloads", "music"):
         for ext in (".jpg", ".jpeg", ".png", ".webp"):
-            old_cov = os.path.join(folder_path, f"cover{ext}")
+            old_cov = os.path.join(collection_name_or_folder, f"cover{ext}")
             if os.path.isfile(old_cov) and os.path.getsize(old_cov) > 500:
                 try:
                     shutil.copy2(old_cov, cached_cover)
@@ -68,20 +113,8 @@ def resolve_collection_cover(folder_path: str, sample_file: str = "") -> str:
                 except Exception:
                     pass
 
-    # 3. If no cover image exists, attempt extraction from sample_file or first audio file
+    # 5. Extract from sample_file if provided and cache as {safe_name}.jpg
     target_audio = sample_file if (sample_file and os.path.isfile(sample_file)) else None
-    if not target_audio and os.path.isdir(folder_path):
-        try:
-            for fname in os.listdir(folder_path):
-                if os.path.splitext(fname)[1].lower() in (".flac", ".mp3", ".opus", ".m4a", ".ogg"):
-                    candidate_p = os.path.join(folder_path, fname)
-                    is_valid, _ = is_valid_audio_file(candidate_p)
-                    if is_valid:
-                        target_audio = candidate_p
-                        break
-        except Exception:
-            pass
-
     if target_audio and os.path.isfile(target_audio):
         try:
             art_bytes = extract_embedded_cover(target_audio)
@@ -732,7 +765,7 @@ class ArchiveManager:
                     else:
                         sz_str = f"{sz_bytes / (1024 ** 2):.1f} MB"
 
-                    cover_path = resolve_collection_cover(folder_path, sample_file)
+                    cover_path = resolve_collection_cover(pl_name, sample_file)
 
                     results.append({
                         "name": pl_name,
@@ -818,7 +851,7 @@ class ArchiveManager:
                     else:
                         sz_str = f"{sz_bytes / (1024 ** 2):.1f} MB"
 
-                    cover_path = resolve_collection_cover(folder_path, sample_file)
+                    cover_path = resolve_collection_cover(alb_name, sample_file)
 
                     results.append({
                         "name": alb_name,
