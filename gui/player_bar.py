@@ -112,7 +112,7 @@ class MiniPlayerBar(QFrame):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setObjectName("mini_player_bar")
-        self.setFixedHeight(88)
+        self.setFixedHeight(72)
 
         self.current_file_path: Optional[str] = None
         self.current_track: Optional[TrackMetadata] = None
@@ -176,18 +176,18 @@ class MiniPlayerBar(QFrame):
         """)
 
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(18, 6, 18, 6)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(16, 4, 16, 4)
+        main_layout.setSpacing(14)
 
         # -------------------------------------------------------------
         # Left Section: Thumbnail, Title, Artist, Quality Badge
         # -------------------------------------------------------------
         left_layout = QHBoxLayout()
-        left_layout.setSpacing(12)
+        left_layout.setSpacing(10)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
         self.cover_label = QLabel(self)
-        self.cover_label.setFixedSize(52, 52)
+        self.cover_label.setFixedSize(44, 44)
         self.cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.cover_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cover_label.setToolTip("Click to show file in Windows Explorer")
@@ -775,13 +775,13 @@ class MiniPlayerBar(QFrame):
         else:
             img = img_or_pix
 
-        scaled = img.scaled(52, 52, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-        rounded = QPixmap(52, 52)
+        scaled = img.scaled(44, 44, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+        rounded = QPixmap(44, 44)
         rounded.fill(Qt.GlobalColor.transparent)
         p = QPainter(rounded)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         path = QPainterPath()
-        path.addRoundedRect(0, 0, 52, 52, 6, 6)
+        path.addRoundedRect(0, 0, 44, 44, 6, 6)
         p.setClipPath(path)
         p.drawPixmap(0, 0, QPixmap.fromImage(scaled))
         p.end()

@@ -302,19 +302,22 @@ class EditTrackDialog(MessageBoxBase):
 
 
 class MetricCard(CardWidget):
-    """Sleek metric summary card."""
+    """Sleek compact metric summary card."""
     def __init__(self, title: str, initial_value: str = "0", parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(4)
+        self.setFixedHeight(38)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 4, 12, 4)
+        layout.setSpacing(8)
 
         self.title_label = CaptionLabel(title, self)
         self.title_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.title_label.setStyleSheet("font-size: 11px;")
         self.value_label = StrongBodyLabel(initial_value, self)
-        self.value_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+        self.value_label.setStyleSheet("font-size: 14px; font-weight: bold; color: white;")
 
         layout.addWidget(self.title_label)
+        layout.addStretch(1)
         layout.addWidget(self.value_label)
 
     def set_value(self, val: str | int):
@@ -364,18 +367,18 @@ class SavedPlaylistCard(CardWidget):
         """)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 14, 18, 14)
-        layout.setSpacing(16)
+        layout.setContentsMargins(12, 8, 14, 8)
+        layout.setSpacing(12)
 
-        # 1. Playlist Cover Artwork (64x64)
+        # 1. Playlist Cover Artwork (48x48)
         self.thumb_label = QLabel(self)
-        self.thumb_label.setFixedSize(64, 64)
+        self.thumb_label.setFixedSize(48, 48)
         self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumb_label.setStyleSheet("""
             QLabel {
                 background-color: #2c2c2c;
                 border: 1px solid rgba(255, 255, 255, 0.10);
-                border-radius: 8px;
+                border-radius: 6px;
             }
         """)
 
@@ -384,7 +387,7 @@ class SavedPlaylistCard(CardWidget):
 
         # 2. Metadata Section (Title, Stats, Progress Bar)
         info_layout = QVBoxLayout()
-        info_layout.setSpacing(4)
+        info_layout.setSpacing(3)
 
         name = playlist_data.get("name") or "Untitled Playlist"
         tot = playlist_data.get("total_tracks") or 0
@@ -393,7 +396,7 @@ class SavedPlaylistCard(CardWidget):
         pct = playlist_data.get("progress_percent") or (round(down / tot * 100.0, 1) if tot > 0 else 0.0)
 
         self.title_label = StrongBodyLabel(name, self)
-        self.title_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #FFFFFF;")
+        self.title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #FFFFFF;")
 
         status_text = f"{tot} tracks  •  {down} downloaded  •  {pend} pending ({pct}%)"
         self.meta_label = CaptionLabel(status_text, self)
@@ -401,13 +404,13 @@ class SavedPlaylistCard(CardWidget):
 
         # Progress bar
         self.progress_bar = ProgressBar(self)
-        self.progress_bar.setFixedHeight(4)
+        self.progress_bar.setFixedHeight(3)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(int(pct))
         self.progress_bar.setStyleSheet("""
             ProgressBar {
                 background-color: #333333;
-                border-radius: 2px;
+                border-radius: 1.5px;
             }
         """)
 
@@ -418,9 +421,10 @@ class SavedPlaylistCard(CardWidget):
 
         # 3. Actions Section
         action_layout = QHBoxLayout()
-        action_layout.setSpacing(8)
+        action_layout.setSpacing(6)
 
         self.browse_btn = PrimaryPushButton(FluentIcon.CHEVRON_RIGHT, "Browse & Download", self)
+        self.browse_btn.setFixedHeight(30)
         self.browse_btn.clicked.connect(self._handle_open)
 
         self.sync_btn = ToolButton(FluentIcon.SYNC, self)
@@ -456,13 +460,13 @@ class SavedPlaylistCard(CardWidget):
             try:
                 img = QImage(local_cover)
                 if not img.isNull():
-                    scaled = img.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-                    rounded = QPixmap(64, 64)
+                    scaled = img.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    rounded = QPixmap(48, 48)
                     rounded.fill(Qt.GlobalColor.transparent)
                     p = QPainter(rounded)
                     p.setRenderHint(QPainter.RenderHint.Antialiasing)
                     path = QPainterPath()
-                    path.addRoundedRect(0, 0, 64, 64, 8, 8)
+                    path.addRoundedRect(0, 0, 48, 48, 6, 6)
                     p.setClipPath(path)
                     p.drawPixmap(0, 0, QPixmap.fromImage(scaled))
                     p.end()
@@ -473,7 +477,7 @@ class SavedPlaylistCard(CardWidget):
 
         if not loaded:
             icon_w = IconWidget(FluentIcon.MUSIC_FOLDER, self.thumb_label)
-            icon_w.setFixedSize(36, 36)
+            icon_w.setFixedSize(26, 26)
             icon_lay = QHBoxLayout(self.thumb_label)
             icon_lay.setContentsMargins(0, 0, 0, 0)
             icon_lay.addWidget(icon_w, 0, Qt.AlignmentFlag.AlignCenter)
@@ -616,8 +620,8 @@ class PlaylistsView(QWidget):
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(24, 20, 24, 20)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(18, 12, 18, 12)
+        main_layout.setSpacing(8)
 
         self.stacked = QStackedWidget(self)
 
@@ -627,7 +631,7 @@ class PlaylistsView(QWidget):
         self.list_page = QWidget(self)
         list_layout = QVBoxLayout(self.list_page)
         list_layout.setContentsMargins(0, 0, 0, 0)
-        list_layout.setSpacing(16)
+        list_layout.setSpacing(10)
 
         # 1. Header
         header_layout = QVBoxLayout()
@@ -741,91 +745,175 @@ class PlaylistsView(QWidget):
         self.detail_page = QWidget(self)
         detail_layout = QVBoxLayout(self.detail_page)
         detail_layout.setContentsMargins(0, 0, 0, 0)
-        detail_layout.setSpacing(14)
+        detail_layout.setSpacing(8)
 
-        # 1. Detail Top Navigation & Header
-        nav_layout = QHBoxLayout()
-        self.back_btn = PushButton(FluentIcon.LEFT_ARROW, "Back to Playlists", self)
-        self.back_btn.clicked.connect(self._show_overview)
-        nav_layout.addWidget(self.back_btn)
-        nav_layout.addStretch(1)
-        detail_layout.addLayout(nav_layout)
-
-        # Playlist Banner Card
+        # 1. Compact Playlist Header Banner (Back Button, Cover, Title, Stats & Playlist Actions)
         self.banner_card = CardWidget(self.detail_page)
+        self.banner_card.setStyleSheet("""
+            CardWidget {
+                background-color: #1e1e1e;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+            }
+        """)
         banner_layout = QHBoxLayout(self.banner_card)
-        banner_layout.setContentsMargins(16, 14, 16, 14)
-        banner_layout.setSpacing(16)
+        banner_layout.setContentsMargins(10, 6, 12, 6)
+        banner_layout.setSpacing(10)
 
-        self.detail_thumb = QLabel(self)
-        self.detail_thumb.setFixedSize(72, 72)
+        # Integrated Back Navigation Button
+        self.back_btn = PushButton(FluentIcon.LEFT_ARROW, "Back to Playlists", self.banner_card)
+        self.back_btn.setFixedHeight(30)
+        self.back_btn.clicked.connect(self._show_overview)
+        banner_layout.addWidget(self.back_btn)
+
+        # Compact 40x40 Artwork Thumbnail
+        self.detail_thumb = QLabel(self.banner_card)
+        self.detail_thumb.setFixedSize(40, 40)
         self.detail_thumb.setStyleSheet("""
             QLabel {
                 background-color: #2c2c2c;
                 border: 1px solid rgba(255, 255, 255, 0.10);
-                border-radius: 8px;
+                border-radius: 6px;
             }
         """)
         self.detail_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         banner_layout.addWidget(self.detail_thumb)
 
+        # Title & Stats in tight 2-line layout
         detail_info_layout = QVBoxLayout()
-        detail_info_layout.setSpacing(4)
-        self.detail_title = SubtitleLabel("Playlist Name", self)
-        self.detail_stats_label = CaptionLabel("0 Total • 0 Downloaded • 0 Pending", self)
-        self.detail_stats_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        detail_info_layout.setSpacing(2)
+        detail_info_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.detail_progress_bar = ProgressBar(self)
-        self.detail_progress_bar.setFixedHeight(5)
+        self.detail_title = StrongBodyLabel("Playlist Name", self.banner_card)
+        self.detail_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #FFFFFF;")
+
+        info_sub_row = QHBoxLayout()
+        info_sub_row.setSpacing(8)
+        self.detail_stats_label = CaptionLabel("0 Total • 0 Downloaded • 0 Pending", self.banner_card)
+        self.detail_stats_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.detail_stats_label.setStyleSheet("font-size: 11px;")
+        info_sub_row.addWidget(self.detail_stats_label)
+
+        self.detail_progress_bar = ProgressBar(self.banner_card)
+        self.detail_progress_bar.setFixedHeight(4)
         self.detail_progress_bar.setRange(0, 100)
+        self.detail_progress_bar.setFixedWidth(110)
+        info_sub_row.addWidget(self.detail_progress_bar)
+        info_sub_row.addStretch(1)
 
         detail_info_layout.addWidget(self.detail_title)
-        detail_info_layout.addWidget(self.detail_stats_label)
-        detail_info_layout.addWidget(self.detail_progress_bar)
+        detail_info_layout.addLayout(info_sub_row)
         banner_layout.addLayout(detail_info_layout, 1)
 
-        self.detail_edit_btn = PushButton(FluentIcon.EDIT, "Edit Playlist", self.banner_card)
-        self.detail_edit_btn.setToolTip("Rename or edit playlist details & artwork")
-        self.detail_edit_btn.clicked.connect(self._handle_detail_edit)
-        banner_layout.addWidget(self.detail_edit_btn)
-
-        self.detail_sync_btn = PushButton(FluentIcon.SYNC, "Sync Playlist", self.banner_card)
+        # Playlist-level Action Buttons
+        self.detail_sync_btn = PushButton(FluentIcon.SYNC, "Sync", self.banner_card)
+        self.detail_sync_btn.setFixedHeight(30)
         self.detail_sync_btn.setToolTip("Check for newly added or removed songs from online source")
         self.detail_sync_btn.clicked.connect(self._handle_detail_sync)
-        banner_layout.addWidget(self.detail_sync_btn)
 
+        self.detail_edit_btn = PushButton(FluentIcon.EDIT, "Edit", self.banner_card)
+        self.detail_edit_btn.setFixedHeight(30)
+        self.detail_edit_btn.setToolTip("Rename or edit playlist details & artwork")
+        self.detail_edit_btn.clicked.connect(self._handle_detail_edit)
+
+        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Folder", self.banner_card)
+        self.open_folder_btn.setFixedHeight(30)
+        self.open_folder_btn.setToolTip("Open playlist folder on disk")
+        self.open_folder_btn.clicked.connect(self._open_download_folder)
+
+        self.export_m3u8_btn = PushButton(FluentIcon.SHARE, "Export M3U8", self.banner_card)
+        self.export_m3u8_btn.setFixedHeight(30)
+        self.export_m3u8_btn.setToolTip("Export this playlist to a portable UTF-8 .m3u8 playlist file")
+        self.export_m3u8_btn.clicked.connect(self._on_export_m3u8_clicked)
+
+        self.export_songs_btn = PushButton(FluentIcon.FOLDER_ADD, "Export Songs", self.banner_card)
+        self.export_songs_btn.setFixedHeight(30)
+        self.export_songs_btn.setToolTip("Export downloaded songs from this playlist to an external device, USB drive, or folder")
+        self.export_songs_btn.clicked.connect(self._on_export_songs_clicked)
+
+        banner_layout.addWidget(self.detail_sync_btn)
+        banner_layout.addWidget(self.detail_edit_btn)
+        banner_layout.addWidget(self.open_folder_btn)
+        banner_layout.addWidget(self.export_m3u8_btn)
+        banner_layout.addWidget(self.export_songs_btn)
         detail_layout.addWidget(self.banner_card)
 
-        # 2. Batch Download Controls Panel
-        batch_card = CardWidget(self.detail_page)
-        batch_layout = QVBoxLayout(batch_card)
-        batch_layout.setContentsMargins(16, 14, 16, 14)
-        batch_layout.setSpacing(10)
+        # 2. Collapsible Batch Download Controls Panel
+        self.batch_card = CardWidget(self.detail_page)
+        self.batch_card.setStyleSheet("""
+            CardWidget {
+                background-color: #191919;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+            }
+        """)
+        batch_layout = QVBoxLayout(self.batch_card)
+        batch_layout.setContentsMargins(10, 6, 10, 6)
+        batch_layout.setSpacing(6)
 
-        batch_header = QHBoxLayout()
-        batch_title = StrongBodyLabel("Batch Audio Download", self)
-        batch_desc = CaptionLabel("Download pending songs in controlled batches to preserve Musilon VIP daily limits.", self)
-        batch_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
-        batch_header.addWidget(batch_title)
-        batch_header.addWidget(batch_desc)
-        batch_header.addStretch(1)
-        batch_layout.addLayout(batch_header)
+        # Row 1: Primary Batch Actions (Always visible, compact 30px)
+        batch_action_layout = QHBoxLayout()
+        batch_action_layout.setSpacing(8)
 
-        spin_lbl = BodyLabel("Batch Size:", self)
-        self.batch_spinbox = SpinBox(self)
+        self.download_batch_btn = PrimaryPushButton(FluentIcon.DOWNLOAD, "Download Next Batch (50)", self)
+        self.download_batch_btn.setFixedHeight(30)
+        self.download_batch_btn.clicked.connect(self._on_download_batch_clicked)
+
+        self.download_selected_btn = PushButton(FluentIcon.CHECKBOX, "Download Selected", self)
+        self.download_selected_btn.setFixedHeight(30)
+        self.download_selected_btn.clicked.connect(self._on_download_selected_clicked)
+
+        self.pause_btn = PushButton(FluentIcon.PAUSE, "Pause", self)
+        self.pause_btn.setFixedHeight(30)
+        self.pause_btn.clicked.connect(self._on_pause_clicked)
+
+        self.stop_btn = PushButton(FluentIcon.CLOSE, "Stop", self)
+        self.stop_btn.setFixedHeight(30)
+        self.stop_btn.clicked.connect(self._on_stop_clicked)
+
+        self.reset_btn = ToolButton(FluentIcon.SYNC, self)
+        self.reset_btn.setFixedHeight(30)
+        self.reset_btn.setToolTip("Reset queued & failed tracks in this playlist back to pending")
+        self.reset_btn.clicked.connect(self._on_reset_queued_clicked)
+
+        batch_action_layout.addWidget(self.download_batch_btn)
+        batch_action_layout.addWidget(self.download_selected_btn)
+        batch_action_layout.addWidget(self.pause_btn)
+        batch_action_layout.addWidget(self.stop_btn)
+        batch_action_layout.addWidget(self.reset_btn)
+        batch_action_layout.addStretch(1)
+
+        # Toggle button to expand/collapse presets drawer
+        self.batch_toggle_btn = PushButton(FluentIcon.SETTING, "Batch Options ▾", self)
+        self.batch_toggle_btn.setFixedHeight(30)
+        self.batch_toggle_btn.setToolTip("Configure batch download size and preset limits")
+        self.batch_toggle_btn.clicked.connect(self._toggle_batch_drawer)
+        batch_action_layout.addWidget(self.batch_toggle_btn)
+
+        batch_layout.addLayout(batch_action_layout)
+
+        # Row 2: Collapsible Presets Drawer (Hidden by default to save vertical space)
+        self.batch_drawer = QWidget(self.batch_card)
+        drawer_layout = QHBoxLayout(self.batch_drawer)
+        drawer_layout.setContentsMargins(0, 4, 0, 2)
+        drawer_layout.setSpacing(6)
+
+        spin_lbl = CaptionLabel("Batch Size:", self.batch_drawer)
+        self.batch_spinbox = SpinBox(self.batch_drawer)
         self.batch_spinbox.setRange(1, 5000)
         self.batch_spinbox.setValue(50)
-        self.batch_spinbox.setFixedWidth(135)
+        self.batch_spinbox.setFixedWidth(110)
+        self.batch_spinbox.setFixedHeight(28)
         self.batch_spinbox.setStyleSheet("""
             SpinBox {
                 color: #FFFFFF;
                 font-weight: 600;
-                font-size: 13px;
+                font-size: 12px;
                 background-color: rgba(255, 255, 255, 0.08);
                 border: 1px solid rgba(255, 255, 255, 0.18);
                 border-radius: 6px;
-                padding-left: 10px;
-                padding-right: 68px;
+                padding-left: 8px;
+                padding-right: 50px;
             }
             SpinBox:hover {
                 background-color: rgba(255, 255, 255, 0.14);
@@ -838,100 +926,62 @@ class PlaylistsView(QWidget):
         """)
         self.batch_spinbox.valueChanged.connect(self._on_batch_size_changed)
 
-        # Preset buttons
-        self.preset_25 = PushButton("25", self)
-        self.preset_25.setFixedWidth(46)
+        self.preset_25 = PushButton("25", self.batch_drawer)
+        self.preset_25.setFixedSize(38, 28)
         self.preset_25.setStyleSheet(PRESET_NORMAL_STYLE)
         self.preset_25.clicked.connect(lambda: self._select_batch_preset(25))
 
-        self.preset_50 = PushButton("50", self)
-        self.preset_50.setFixedWidth(46)
+        self.preset_50 = PushButton("50", self.batch_drawer)
+        self.preset_50.setFixedSize(38, 28)
         self.preset_50.setStyleSheet(PRESET_NORMAL_STYLE)
         self.preset_50.clicked.connect(lambda: self._select_batch_preset(50))
 
-        self.preset_100 = PushButton("100", self)
-        self.preset_100.setFixedWidth(52)
+        self.preset_100 = PushButton("100", self.batch_drawer)
+        self.preset_100.setFixedSize(44, 28)
         self.preset_100.setStyleSheet(PRESET_NORMAL_STYLE)
         self.preset_100.clicked.connect(lambda: self._select_batch_preset(100))
 
-        self.preset_200 = PushButton("200", self)
-        self.preset_200.setFixedWidth(52)
+        self.preset_200 = PushButton("200", self.batch_drawer)
+        self.preset_200.setFixedSize(44, 28)
         self.preset_200.setStyleSheet(PRESET_NORMAL_STYLE)
         self.preset_200.clicked.connect(lambda: self._select_batch_preset(200))
 
-        self.preset_all = PushButton("All Pending", self)
-        self.preset_all.setFixedWidth(92)
+        self.preset_all = PushButton("All Pending", self.batch_drawer)
+        self.preset_all.setFixedHeight(28)
         self.preset_all.setStyleSheet(PRESET_NORMAL_STYLE)
         self.preset_all.clicked.connect(self._set_batch_to_all_pending)
 
-        # Main Download Button
-        self.download_batch_btn = PrimaryPushButton(FluentIcon.DOWNLOAD, "Download Next Batch (50)", self)
-        self.download_batch_btn.clicked.connect(self._on_download_batch_clicked)
+        batch_desc = CaptionLabel("Download pending songs in controlled batches to preserve Musilon VIP daily limits.", self.batch_drawer)
+        batch_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
 
-        self.download_selected_btn = PushButton(FluentIcon.CHECKBOX, "Download Selected", self)
-        self.download_selected_btn.clicked.connect(self._on_download_selected_clicked)
+        drawer_layout.addWidget(spin_lbl)
+        drawer_layout.addWidget(self.batch_spinbox)
+        drawer_layout.addWidget(self.preset_25)
+        drawer_layout.addWidget(self.preset_50)
+        drawer_layout.addWidget(self.preset_100)
+        drawer_layout.addWidget(self.preset_200)
+        drawer_layout.addWidget(self.preset_all)
+        drawer_layout.addSpacing(8)
+        drawer_layout.addWidget(batch_desc)
+        drawer_layout.addStretch(1)
 
-        self.pause_btn = PushButton(FluentIcon.PAUSE, "Pause", self)
-        self.pause_btn.clicked.connect(self._on_pause_clicked)
-
-        self.stop_btn = PushButton(FluentIcon.CLOSE, "Stop", self)
-        self.stop_btn.clicked.connect(self._on_stop_clicked)
-
-        self.reset_btn = ToolButton(FluentIcon.SYNC, self)
-        self.reset_btn.setToolTip("Reset queued & failed tracks in this playlist back to pending")
-        self.reset_btn.clicked.connect(self._on_reset_queued_clicked)
-
-        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Folder", self)
-        self.open_folder_btn.clicked.connect(self._open_download_folder)
-
-        self.export_m3u8_btn = PushButton(FluentIcon.SHARE, "Export M3U8", self)
-        self.export_m3u8_btn.setToolTip("Export this playlist to a portable UTF-8 .m3u8 playlist file")
-        self.export_m3u8_btn.clicked.connect(self._on_export_m3u8_clicked)
-
-        self.export_songs_btn = PushButton(FluentIcon.FOLDER_ADD, "Export Songs", self)
-        self.export_songs_btn.setToolTip("Export downloaded songs from this playlist to an external device, USB drive, or folder")
-        self.export_songs_btn.clicked.connect(self._on_export_songs_clicked)
-
-        # Row 1: Batch Size Selection & Quick Presets
-        batch_size_layout = QHBoxLayout()
-        batch_size_layout.setSpacing(8)
-        batch_size_layout.addWidget(spin_lbl)
-        batch_size_layout.addWidget(self.batch_spinbox)
-        batch_size_layout.addWidget(self.preset_25)
-        batch_size_layout.addWidget(self.preset_50)
-        batch_size_layout.addWidget(self.preset_100)
-        batch_size_layout.addWidget(self.preset_200)
-        batch_size_layout.addWidget(self.preset_all)
-        batch_size_layout.addStretch(1)
-
-        # Row 2: Action Buttons
-        batch_action_layout = QHBoxLayout()
-        batch_action_layout.setSpacing(10)
-        batch_action_layout.addWidget(self.download_batch_btn)
-        batch_action_layout.addWidget(self.download_selected_btn)
-        batch_action_layout.addWidget(self.pause_btn)
-        batch_action_layout.addWidget(self.stop_btn)
-        batch_action_layout.addWidget(self.reset_btn)
-        batch_action_layout.addWidget(self.open_folder_btn)
-        batch_action_layout.addWidget(self.export_m3u8_btn)
-        batch_action_layout.addWidget(self.export_songs_btn)
-        batch_action_layout.addStretch(1)
-
-        batch_layout.addLayout(batch_size_layout)
-        batch_layout.addSpacing(6)
-        batch_layout.addLayout(batch_action_layout)
-        detail_layout.addWidget(batch_card)
+        self.batch_drawer.setVisible(False)
+        batch_layout.addWidget(self.batch_drawer)
+        detail_layout.addWidget(self.batch_card)
 
         # 3. Track Search & Status Filter Row
         filter_layout = QHBoxLayout()
-        filter_layout.setSpacing(10)
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+        filter_layout.setSpacing(8)
 
         self.track_search_input = LineEdit(self)
+        self.track_search_input.setFixedHeight(30)
         self.track_search_input.setPlaceholderText("Filter tracks in this playlist by title or artist...")
         self.track_search_input.setClearButtonEnabled(True)
         self.track_search_input.textChanged.connect(self._on_track_filter_changed)
 
         self.sort_combo = ComboBox(self)
+        self.sort_combo.setFixedHeight(30)
         self.sort_combo.addItems([
             "Sort: Default Order",
             "Sort: Genre (A-Z)",
@@ -940,18 +990,20 @@ class PlaylistsView(QWidget):
             "Sort: Duration (Shortest)",
             "Sort: Duration (Longest)"
         ])
-        self.sort_combo.setFixedWidth(175)
+        self.sort_combo.setFixedWidth(165)
         self.sort_combo.currentIndexChanged.connect(self._on_track_filter_changed)
 
         self.genre_combo = ComboBox(self)
+        self.genre_combo.setFixedHeight(30)
         self.genre_combo.addItems(["All Genres"])
-        self.genre_combo.setFixedWidth(145)
+        self.genre_combo.setFixedWidth(135)
         self.genre_combo.currentIndexChanged.connect(self._on_track_filter_changed)
 
         self.status_filter_combo = ComboBox(self)
+        self.status_filter_combo.setFixedHeight(30)
         self.status_filter_combo.addItems(["All Statuses", "Pending Only", "Queued Only", "Downloaded Only"])
         self.status_filter_combo.currentIndexChanged.connect(self._on_track_filter_changed)
-        self.status_filter_combo.setFixedWidth(145)
+        self.status_filter_combo.setFixedWidth(135)
 
         filter_layout.addWidget(self.track_search_input, 1)
         filter_layout.addWidget(self.sort_combo)
@@ -967,7 +1019,7 @@ class PlaylistsView(QWidget):
         self.table.horizontalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(76)
+        self.table.verticalHeader().setDefaultSectionSize(56)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.setSelectionBehavior(TableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(TableView.SelectionMode.ExtendedSelection)
@@ -1681,13 +1733,13 @@ class PlaylistsView(QWidget):
             try:
                 img = QImage(local_cover)
                 if not img.isNull():
-                    scaled = img.scaled(72, 72, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-                    rounded = QPixmap(72, 72)
+                    scaled = img.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    rounded = QPixmap(40, 40)
                     rounded.fill(Qt.GlobalColor.transparent)
                     p = QPainter(rounded)
                     p.setRenderHint(QPainter.RenderHint.Antialiasing)
                     path = QPainterPath()
-                    path.addRoundedRect(0, 0, 72, 72, 8, 8)
+                    path.addRoundedRect(0, 0, 40, 40, 6, 6)
                     p.setClipPath(path)
                     p.drawPixmap(0, 0, QPixmap.fromImage(scaled))
                     p.end()
@@ -1697,7 +1749,7 @@ class PlaylistsView(QWidget):
         else:
             self.detail_thumb.clear()
             icon_w = IconWidget(FluentIcon.MUSIC_FOLDER, self.detail_thumb)
-            icon_w.setFixedSize(40, 40)
+            icon_w.setFixedSize(22, 22)
             icon_lay = QHBoxLayout(self.detail_thumb)
             icon_lay.setContentsMargins(0, 0, 0, 0)
             icon_lay.addWidget(icon_w, 0, Qt.AlignmentFlag.AlignCenter)
@@ -1739,6 +1791,14 @@ class PlaylistsView(QWidget):
         self.current_playlist_id = None
         self.current_playlist_data = None
         self.reload_playlists()
+
+    def _toggle_batch_drawer(self):
+        if not hasattr(self, "batch_drawer"):
+            return
+        self._batch_drawer_expanded = not getattr(self, "_batch_drawer_expanded", False)
+        self.batch_drawer.setVisible(self._batch_drawer_expanded)
+        if hasattr(self, "batch_toggle_btn"):
+            self.batch_toggle_btn.setText("Batch Options ▴" if self._batch_drawer_expanded else "Batch Options ▾")
 
     def _select_batch_preset(self, count: int):
         self.batch_spinbox.setValue(count)

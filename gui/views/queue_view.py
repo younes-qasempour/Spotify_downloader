@@ -25,21 +25,24 @@ from gui.styles import BG_PRIMARY, BG_CARD, SPOTIFY_EMERALD, TEXT_PRIMARY, TEXT_
 
 
 class MetricCard(CardWidget):
-    """Sleek metric summary card."""
+    """Sleek compact metric summary card."""
     def __init__(self, title: str, initial_value: str = "0", parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(100)
-        self.setMaximumWidth(135)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 9, 14, 9)
-        layout.setSpacing(3)
+        self.setFixedHeight(34)
+        self.setMinimumWidth(80)
+        self.setMaximumWidth(125)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setSpacing(6)
 
         self.title_label = CaptionLabel(title, self)
         self.title_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.title_label.setStyleSheet("font-size: 11px;")
         self.value_label = StrongBodyLabel(initial_value, self)
-        self.value_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #FFFFFF;")
+        self.value_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #FFFFFF;")
 
         layout.addWidget(self.title_label)
+        layout.addStretch(1)
         layout.addWidget(self.value_label)
 
     def set_value(self, val: str | int):
@@ -166,49 +169,44 @@ class QueueView(QWidget):
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(24, 18, 24, 18)
-        main_layout.setSpacing(14)
+        main_layout.setContentsMargins(18, 12, 18, 12)
+        main_layout.setSpacing(8)
 
-        # 1. Header Toolbar Row: Title + Open Downloads Folder Button
+        # 1. Header Toolbar Row: Title + URL Input + Enqueue Button + Folder Button
         header_row = QHBoxLayout()
-        header_row.setSpacing(12)
+        header_row.setSpacing(10)
 
-        title_label = SubtitleLabel("Download Queue", self)
+        title_label = StrongBodyLabel("Download Queue", self)
+        title_label.setStyleSheet("font-size: 15px; font-weight: 700; color: #FFFFFF;")
         header_row.addWidget(title_label)
-        header_row.addStretch(1)
 
-        self.open_downloads_btn = PushButton(FluentIcon.FOLDER, "Open Downloads Folder", self)
+        self.url_input = LineEdit(self)
+        self.url_input.setFixedHeight(32)
+        self.url_input.setPlaceholderText("Paste Spotify / YouTube link, or enter song title & artist...")
+        self.url_input.setClearButtonEnabled(True)
+        self.url_input.returnPressed.connect(self._on_enqueue_clicked)
+        header_row.addWidget(self.url_input, 1)
+
+        self.enqueue_btn = PrimaryPushButton(FluentIcon.DOWNLOAD, "Analyze & Enqueue", self)
+        self.enqueue_btn.setFixedHeight(32)
+        self.enqueue_btn.clicked.connect(self._on_enqueue_clicked)
+        header_row.addWidget(self.enqueue_btn)
+
+        self.open_downloads_btn = PushButton(FluentIcon.FOLDER, "Open Folder", self)
+        self.open_downloads_btn.setFixedHeight(32)
         self.open_downloads_btn.setToolTip("Open local download directory in Windows Explorer")
         self.open_downloads_btn.clicked.connect(self._open_downloads_folder)
         header_row.addWidget(self.open_downloads_btn)
 
         main_layout.addLayout(header_row)
 
-        # 2. Input Bar & Enqueue Controls
-        input_container = CardWidget(self)
-        input_layout = QHBoxLayout(input_container)
-        input_layout.setContentsMargins(12, 10, 12, 10)
-        input_layout.setSpacing(10)
-
-        self.url_input = LineEdit(self)
-        self.url_input.setPlaceholderText("Paste Spotify / YouTube / SoundCloud link, or enter song title & artist to search...")
-        self.url_input.setClearButtonEnabled(True)
-        self.url_input.returnPressed.connect(self._on_enqueue_clicked)
-
-        self.enqueue_btn = PrimaryPushButton(FluentIcon.DOWNLOAD, "Analyze && Enqueue", self)
-        self.enqueue_btn.clicked.connect(self._on_enqueue_clicked)
-
-        input_layout.addWidget(self.url_input, 1)
-        input_layout.addWidget(self.enqueue_btn)
-        main_layout.addWidget(input_container)
-
-        # 3. Metric Cards & Queue Controls Row
+        # 2. Metric Cards & Queue Controls Row
         ctrl_layout = QHBoxLayout()
-        ctrl_layout.setSpacing(10)
+        ctrl_layout.setSpacing(8)
 
-        self.card_total = MetricCard("Total Tracks", "0", self)
-        self.card_active = MetricCard("Downloading", "0", self)
-        self.card_completed = MetricCard("Completed", "0", self)
+        self.card_total = MetricCard("Total", "0", self)
+        self.card_active = MetricCard("Active", "0", self)
+        self.card_completed = MetricCard("Done", "0", self)
         self.card_failed = MetricCard("Failed", "0", self)
 
         ctrl_layout.addWidget(self.card_total)
@@ -218,19 +216,24 @@ class QueueView(QWidget):
         ctrl_layout.addStretch(1)
 
         self.start_btn = PrimaryPushButton(FluentIcon.PLAY, "Start All", self)
+        self.start_btn.setFixedHeight(30)
         self.start_btn.clicked.connect(self._on_start_clicked)
 
         self.pause_btn = PushButton(FluentIcon.PAUSE, "Pause", self)
+        self.pause_btn.setFixedHeight(30)
         self.pause_btn.clicked.connect(self._on_pause_clicked)
 
         self.stop_btn = PushButton(FluentIcon.CLOSE, "Stop", self)
+        self.stop_btn.setFixedHeight(30)
         self.stop_btn.clicked.connect(self._on_stop_clicked)
 
         self.retry_btn = PushButton(FluentIcon.SYNC, "Retry Failed", self)
+        self.retry_btn.setFixedHeight(30)
         self.retry_btn.clicked.connect(self._on_retry_failed_clicked)
         self.retry_btn.setEnabled(False)
 
         self.clear_btn = PushButton(FluentIcon.DELETE, "Clear Completed", self)
+        self.clear_btn.setFixedHeight(30)
         self.clear_btn.clicked.connect(self._on_clear_clicked)
 
         ctrl_layout.addWidget(self.start_btn)
@@ -240,12 +243,12 @@ class QueueView(QWidget):
         ctrl_layout.addWidget(self.clear_btn)
         main_layout.addLayout(ctrl_layout)
 
-        # 4. Master Overall Progress Bar (Visible when items in queue)
+        # 3. Master Overall Progress Bar (Visible when items in queue)
         self.progress_container = QFrame(self)
         self.progress_container.setStyleSheet("background: transparent;")
         prog_layout = QVBoxLayout(self.progress_container)
         prog_layout.setContentsMargins(0, 0, 0, 0)
-        prog_layout.setSpacing(4)
+        prog_layout.setSpacing(3)
 
         prog_info_row = QHBoxLayout()
         self.overall_prog_label = CaptionLabel("Overall Progress: 0%", self.progress_container)
@@ -261,19 +264,20 @@ class QueueView(QWidget):
         self.master_progress_bar = ProgressBar(self.progress_container)
         self.master_progress_bar.setRange(0, 100)
         self.master_progress_bar.setValue(0)
-        self.master_progress_bar.setFixedHeight(5)
+        self.master_progress_bar.setFixedHeight(4)
         prog_layout.addWidget(self.master_progress_bar)
 
         self.progress_container.setVisible(False)
         main_layout.addWidget(self.progress_container)
 
-        # 5. Search & Filter Bar (Embedded in filter_container, hidden when queue is empty)
+        # 4. Search & Filter Bar (Embedded in filter_container, hidden when queue is empty)
         self.filter_container = QWidget(self)
         filter_layout = QHBoxLayout(self.filter_container)
         filter_layout.setContentsMargins(0, 0, 0, 0)
-        filter_layout.setSpacing(10)
+        filter_layout.setSpacing(8)
 
         self.status_combo = ComboBox(self.filter_container)
+        self.status_combo.setFixedHeight(30)
         self.status_combo.addItems([
             "All Tracks",
             "Active / Downloading",
@@ -281,10 +285,11 @@ class QueueView(QWidget):
             "Completed Only",
             "Failed / Stopped"
         ])
-        self.status_combo.setFixedWidth(165)
+        self.status_combo.setFixedWidth(160)
         self.status_combo.currentIndexChanged.connect(self._on_filter_changed)
 
         self.remove_selected_btn = PushButton(FluentIcon.DELETE, "Remove Selected", self.filter_container)
+        self.remove_selected_btn.setFixedHeight(30)
         self.remove_selected_btn.clicked.connect(self._remove_selected_tracks)
         self.remove_selected_btn.setEnabled(False)
 
@@ -298,13 +303,15 @@ class QueueView(QWidget):
 
         # Shortened & Collapsible Search Bar (appears when user clicks search or presses Ctrl+F)
         self.search_btn = ToolButton(FluentIcon.SEARCH, self.filter_container)
+        self.search_btn.setFixedHeight(30)
         self.search_btn.setToolTip("Search Queue (Ctrl+F)")
         self.search_btn.clicked.connect(self._toggle_search_bar)
 
         self.search_input = LineEdit(self.filter_container)
+        self.search_input.setFixedHeight(30)
         self.search_input.setPlaceholderText("Filter queue...")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setFixedWidth(220)
+        self.search_input.setFixedWidth(200)
         self.search_input.setVisible(False)
         self.search_input.textChanged.connect(self._on_filter_changed)
 
@@ -319,7 +326,7 @@ class QueueView(QWidget):
         self.search_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.search_shortcut.activated.connect(self._on_search_shortcut)
 
-        # 6. Central Display Area: Stack between Empty State and TableView
+        # 5. Central Display Area: Stack between Empty State and TableView
         self.center_container = QWidget(self)
         self.center_layout = QStackedLayout(self.center_container)
         self.center_layout.setContentsMargins(0, 0, 0, 0)
@@ -340,7 +347,7 @@ class QueueView(QWidget):
         self.table.horizontalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(76)
+        self.table.verticalHeader().setDefaultSectionSize(56)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.setSelectionBehavior(TableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(TableView.SelectionMode.ExtendedSelection)

@@ -278,37 +278,12 @@ class CompletedView(QWidget):
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(24, 20, 24, 20)
-        main_layout.setSpacing(14)
+        main_layout.setContentsMargins(18, 12, 18, 12)
+        main_layout.setSpacing(8)
 
-        # 1. Header Row
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(12)
-
-        title_box = QVBoxLayout()
-        title = SubtitleLabel("Music Library & Archive", self)
-        self.stats_label = CaptionLabel("Loading library...", self)
-        self.stats_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
-        title_box.addWidget(title)
-        title_box.addWidget(self.stats_label)
-
-        header_layout.addLayout(title_box)
-        header_layout.addStretch(1)
-
-        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Downloads Folder", self)
-        self.open_folder_btn.clicked.connect(self._open_download_folder)
-
-        self.rescan_btn = ToolButton(FluentIcon.SYNC, self)
-        self.rescan_btn.setToolTip("Rescan & Sync Downloads from Disk")
-        self.rescan_btn.clicked.connect(self._on_rescan_clicked)
-
-        header_layout.addWidget(self.open_folder_btn)
-        header_layout.addWidget(self.rescan_btn)
-        main_layout.addLayout(header_layout)
-
-        # 2. Segmented Navigation & Search Row
+        # 1. Unified Navigation, Filter & Action Toolbar Row
         nav_row = QHBoxLayout()
-        nav_row.setSpacing(16)
+        nav_row.setSpacing(10)
 
         self.segmented = SegmentedWidget(self)
         self.segmented.addItem("tracks", "🎵 All Songs", onClick=lambda: self._switch_tab(0))
@@ -316,9 +291,23 @@ class CompletedView(QWidget):
         self.segmented.addItem("albums", "💿 Albums", onClick=lambda: self._switch_tab(2))
         nav_row.addWidget(self.segmented)
 
+        self.stats_label = CaptionLabel("Loading library...", self)
+        self.stats_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.stats_label.setStyleSheet("font-size: 11px;")
+        nav_row.addWidget(self.stats_label)
+
         nav_row.addStretch(1)
 
+        self.search_input = LineEdit(self)
+        self.search_input.setFixedHeight(30)
+        self.search_input.setPlaceholderText("Search songs, artists, albums, or playlists...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setFixedWidth(220)
+        self.search_input.textChanged.connect(self._on_search_changed)
+        nav_row.addWidget(self.search_input)
+
         self.sort_combo = ComboBox(self)
+        self.sort_combo.setFixedHeight(30)
         self.sort_combo.addItems([
             "Sort: Title (A-Z)",
             "Sort: Track Number",
@@ -329,33 +318,39 @@ class CompletedView(QWidget):
             "Sort: Genre (A-Z)"
         ])
         self.sort_combo.setCurrentIndex(0)
-        self.sort_combo.setFixedWidth(190)
+        self.sort_combo.setFixedWidth(160)
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         nav_row.addWidget(self.sort_combo)
 
         self.genre_combo = ComboBox(self)
-        self.genre_combo.setFixedWidth(150)
+        self.genre_combo.setFixedHeight(30)
+        self.genre_combo.setFixedWidth(125)
         self.genre_combo.addItems(["All Genres"])
         self.genre_combo.currentIndexChanged.connect(self._on_genre_changed)
         nav_row.addWidget(self.genre_combo)
 
-        self.search_input = LineEdit(self)
-        self.search_input.setPlaceholderText("Search songs, artists, albums, or playlists...")
-        self.search_input.setClearButtonEnabled(True)
-        self.search_input.setFixedWidth(270)
-        self.search_input.textChanged.connect(self._on_search_changed)
-        nav_row.addWidget(self.search_input)
+        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Downloads", self)
+        self.open_folder_btn.setFixedHeight(30)
+        self.open_folder_btn.setToolTip("Open local download directory in Windows Explorer")
+        self.open_folder_btn.clicked.connect(self._open_download_folder)
+        nav_row.addWidget(self.open_folder_btn)
+
+        self.rescan_btn = ToolButton(FluentIcon.SYNC, self)
+        self.rescan_btn.setFixedHeight(30)
+        self.rescan_btn.setToolTip("Rescan & Sync Downloads from Disk")
+        self.rescan_btn.clicked.connect(self._on_rescan_clicked)
+        nav_row.addWidget(self.rescan_btn)
 
         main_layout.addLayout(nav_row)
 
-        # 3. Stacked Widget (Pages)
+        # 2. Stacked Widget (Pages)
         self.stacked = QStackedWidget(self)
 
         # --- Page 0: All Songs Table ---
         self.table_page = QWidget(self)
         table_layout = QVBoxLayout(self.table_page)
         table_layout.setContentsMargins(0, 0, 0, 0)
-        table_layout.setSpacing(10)
+        table_layout.setSpacing(6)
 
         # Collection Context Banner (displayed when browsing a specific playlist or album)
         self.coll_banner = QFrame(self.table_page)
@@ -368,25 +363,27 @@ class CompletedView(QWidget):
         """)
         self.coll_banner.setVisible(False)
         banner_layout = QHBoxLayout(self.coll_banner)
-        banner_layout.setContentsMargins(14, 10, 16, 10)
-        banner_layout.setSpacing(14)
+        banner_layout.setContentsMargins(10, 6, 12, 6)
+        banner_layout.setSpacing(10)
 
-        self.back_btn = PushButton(FluentIcon.LEFT_ARROW, "Back to Playlists", self.coll_banner)
+        self.back_btn = PushButton(FluentIcon.LEFT_ARROW, "Back to Collections", self.coll_banner)
+        self.back_btn.setFixedHeight(28)
         self.back_btn.clicked.connect(self._on_back_to_collections)
         banner_layout.addWidget(self.back_btn)
 
         self.banner_thumb = QLabel(self.coll_banner)
-        self.banner_thumb.setFixedSize(44, 44)
+        self.banner_thumb.setFixedSize(36, 36)
         self.banner_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.banner_thumb.setStyleSheet("background-color: #2a2a2a; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.08);")
         banner_layout.addWidget(self.banner_thumb)
 
         banner_text_box = QVBoxLayout()
-        banner_text_box.setSpacing(2)
+        banner_text_box.setSpacing(1)
         self.banner_title = StrongBodyLabel("", self.coll_banner)
-        self.banner_title.setStyleSheet("font-size: 15px; font-weight: 600; color: #FFFFFF;")
+        self.banner_title.setStyleSheet("font-size: 13px; font-weight: 600; color: #FFFFFF;")
         self.banner_desc = CaptionLabel("", self.coll_banner)
         self.banner_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.banner_desc.setStyleSheet("font-size: 11px;")
         banner_text_box.addWidget(self.banner_title)
         banner_text_box.addWidget(self.banner_desc)
         banner_layout.addLayout(banner_text_box, 1)
@@ -421,7 +418,7 @@ class CompletedView(QWidget):
         self.table.horizontalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(76)
+        self.table.verticalHeader().setDefaultSectionSize(56)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.setSelectionBehavior(TableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(TableView.SelectionMode.SingleSelection)
