@@ -22,30 +22,28 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.6.0'
-    release_name = 'Flacify v1.6.0 — Centralized Master Library, Multi-Device Playlist Exporter & Clean Deduplication'
+    tag = 'v1.6.1'
+    release_name = 'Flacify v1.6.1 — High-Density UI Overhaul & Collapsible Batch Controls'
 
     release_body = (
-        "# 🚀 Flacify v1.6.0 Release Notes\n\n"
-        "### 🏛️ Centralized Master Library (Zero Duplication)\n"
-        "- **Single Master Storage**: All downloaded tracks reside in a single central repository (`downloads/`).\n"
-        "- **Virtual Playlist References**: Multiple playlists reference the same local tracks without duplicate downloads or wasted disk space.\n"
-        "- **Automatic Remaster Deduplication**: Intelligently detects and merges duplicate tracks across album versions (e.g. Remastered, Deluxe, Anniversary Editions) while keeping all playlists linked.\n\n"
-        "### 📦 Multi-Device Track & Playlist Exporter\n"
-        "- **Portable Song Exporter**: One-click export of any playlist or selection to external USB drives, car stereos, or portable DAPs.\n"
-        "- **On-the-Fly Transcoding**: Convert on export to MP3 (320 kbps CBR via FFmpeg), FLAC, or Opus without touching the original lossless files.\n"
-        "- **Incremental & Non-Destructive**: Skip already exported files and preview live percentage and progress.\n\n"
-        "### 🎵 Multi-Platform `.m3u8` Playlist Exporter\n"
-        "- **Exact Spotify Track Order**: Preserves the 100% exact track sequence from Spotify (`ORDER BY track_number ASC`).\n"
-        "- **Android Universal Preset**: Generates filename-only playlists (`Song.flac`) that Poweramp, Musicolet, GoneMAD, and VLC Android index automatically regardless of folder structure.\n"
-        "- **Windows PC Preset**: Generates absolute paths for VLC, PotPlayer, KMPlayer, and Foobar2000, with a one-click *Play in Default Player* action.\n\n"
-        "### ⚡ MeloBot Engine Isolation & Context Menu Fixes\n"
-        "- **Musilon Limit Suppression**: MeloBot download sessions are strictly isolated; Musilon quota or VIP expiration popups are suppressed.\n"
-        "- **Context Menu Overhaul**: Fixed right-click triggering re-downloads inadvertently; added direct *Play Track* and *Reveal in File Explorer*.\n\n"
+        "# 🚀 Flacify v1.6.1 Release Notes\n\n"
+        "### 🎛️ High-Density Track Layout (Double Visible Songs)\n"
+        "- **Optimized 56px Card Rows**: Refined table row height from 72px down to 56px and album art thumbnails to 40x40, allowing 10+ tracks to be visible at once on typical desktop displays.\n"
+        "- **Enhanced Typography & Padding**: Carefully proportioned title, artist, and format tags with smooth anti-aliased font rendering and zero text clipping.\n\n"
+        "### 📦 Collapsible Batch Controls Drawer\n"
+        "- **Drawer Architecture**: Transformed the bulky batch download block into a clean, collapsible drawer with an instant toggle (`Batch Options ▾` / `▴`).\n"
+        "- **One-Click Batch Presets**: Instant batch count selection buttons (`25`, `50`, `100`, `200`, `All Pending`) alongside a smooth custom SpinBox.\n"
+        "- **Single-Row Action Bar**: Core download actions (`Download Batch`, `Download Selected`, `Pause`, `Stop`, `Reset`) now align compactly in a single 38px toolbar.\n\n"
+        "### 🧩 Unified Single-Row Navigation & Search\n"
+        "- **Playlists View**: Merged back navigation, playlist thumbnail, metadata stats, progress bar, and export actions into a sleek 50px header.\n"
+        "- **Queue View**: Integrated title, Spotify URL input, Enqueue button, and Open Folder trigger into a unified 32px top bar.\n"
+        "- **Completed Library**: Combined tab switchers (*All Songs*, *Playlists*, *Albums*), status stats, search query input, and format dropdowns into a unified single-row controls bar.\n\n"
+        "### 🎵 Compact 72px Floating Player Dock\n"
+        "- **Screen Real Estate Reclaimed**: Compacted bottom player bar height from 88px to 72px with 44x44 cover art, maximizing table space while keeping all seeking, volume, and playback controls immediately accessible.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.6.0.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.6.0.exe`\n"
+        "Download and run **`Flacify_Setup_v1.6.1.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.6.1.exe`\n"
     )
 
     token = get_github_token()
@@ -93,7 +91,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.6.0.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.6.1.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")
