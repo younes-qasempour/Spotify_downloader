@@ -16,6 +16,13 @@ class LyricsData:
     plain_lyrics: Optional[str] = None
     instrumental: bool = False
 
+    def get(self, key: str, default=None):
+        if key in ("synced", "synced_lyrics"):
+            return self.synced_lyrics if self.synced_lyrics is not None else default
+        if key in ("plain", "plain_lyrics"):
+            return self.plain_lyrics if self.plain_lyrics is not None else default
+        return getattr(self, key, default)
+
 
 class LyricsEngine:
     """
@@ -202,3 +209,147 @@ class LyricsEngine:
         except Exception as e:
             logger.error(f"Failed to write .lrc file {lrc_path}: {e}")
             return None
+
+    def save_lrc_file(self, synced_lyrics: str, lrc_path: str) -> Optional[str]:
+        """Writes raw synchronized LRC text directly to the specified lrc_path."""
+        if not synced_lyrics or not lrc_path:
+            return None
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(lrc_path)), exist_ok=True)
+            with open(lrc_path, "w", encoding="utf-8", newline="") as f:
+                f.write(synced_lyrics)
+            return lrc_path
+        except Exception as e:
+            logger.error(f"Failed to write .lrc file {lrc_path}: {e}")
+            return None
+
+    def translate_lyrics(self, lines: list[str], target_lang: str = "en") -> list[str]:
+        """
+        Translates a list of lyric lines into the target language ('en' for English, 'fa' for Persian).
+        Uses persistent local disk caching in <cache_dir>/lyrics_translations/ and batched translation
+        requests with automatic per-line and secondary provider fallback.
+        """
+        import hashlib
+        import json
+        from core.paths import get_cache_dir
+
+        lang = (target_lang or "").strip().lower()
+        if lang in ("english", "en-us", "en-gb"):
+            lang = "en"
+        elif lang in ("persian", "farsi", "fa-ir", "فارسی"):
+            lang = "fa"
+
+        if not lines or lang not in ("en", "fa"):
+            return list(lines)
+
+        # Check persistent disk cache first
+        cache_dir = os.path.join(str(get_cache_dir()), "lyrics_translations")
+        os.makedirs(cache_dir, exist_ok=True)
+        payload_hash = hashlib.sha1(
+            (f"{lang}||" + "\n".join(lines)).encode("utf-8", errors="replace")
+        ).hexdigest()[:20]
+        cache_file = os.path.join(cache_dir, f"trans_{lang}_{payload_hash}.json")
+
+        if os.path.isfile(cache_file):
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                if isinstance(cached, list) and len(cached) == len(lines):
+                    return [str(x) for x in cached]
+            except Exception:
+                pass
+
+        # Identify unique translatable lines (skip empty or instrumental-only markers)
+        unique_lines: list[str] = []
+        seen_set: set[str] = set()
+        for raw_line in lines:
+            cleaned = (raw_line or "").strip()
+            if not cleaned:
+                continue
+            stripped_notes = cleaned.strip("♪♫ \t-—•*")
+            if not stripped_notes or stripped_notes.lower() in ("[instrumental]", "instrumental"):
+                continue
+            if cleaned not in seen_set:
+                seen_set.add(cleaned)
+                unique_lines.append(cleaned)
+
+        if not unique_lines:
+            return list(lines)
+
+        translation_map: dict[str, str] = {}
+
+        # Translate in batches of 20 unique lines using newline-delimited Google GTX endpoint
+        batch_size = 20
+        for start_i in range(0, len(unique_lines), batch_size):
+            batch = unique_lines[start_i: start_i + batch_size]
+            joined_text = "\n".join(batch)
+            translated_batch = self._translate_batch_gtx(joined_text, lang, expected_count=len(batch))
+            if translated_batch and len(translated_batch) == len(batch):
+                for orig_l, trans_l in zip(batch, translated_batch):
+                    translation_map[orig_l] = trans_l.strip()
+            else:
+                # Fallback: translate line-by-line for this batch to guarantee 1-to-1 alignment
+                for orig_l in batch:
+                    single_res = self._translate_single_line(orig_l, lang)
+                    translation_map[orig_l] = single_res.strip() if single_res else orig_l
+
+        result_lines: list[str] = []
+        for raw_line in lines:
+            cleaned = (raw_line or "").strip()
+            result_lines.append(translation_map.get(cleaned, raw_line))
+
+        # Save to persistent cache if we obtained meaningful translations
+        try:
+            if any(r != o for r, o in zip(result_lines, lines)):
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(result_lines, f, ensure_ascii=False, indent=2)
+        except Exception as e_cache:
+            logger.debug(f"Could not write lyrics translation cache: {e_cache}")
+
+        return result_lines
+
+    def _translate_batch_gtx(self, joined_text: str, target_lang: str, expected_count: int) -> Optional[list[str]]:
+        """Calls Google Translate GTX JSON endpoint on a newline-joined batch of lyric lines."""
+        try:
+            url = "https://translate.googleapis.com/translate_a/single"
+            params = {
+                "client": "gtx",
+                "sl": "auto",
+                "tl": target_lang,
+                "dt": "t",
+                "q": joined_text,
+            }
+            resp = self.session.get(url, params=params, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list) and data and isinstance(data[0], list):
+                    full_translated = "".join(
+                        str(seg[0]) for seg in data[0] if isinstance(seg, list) and seg and seg[0] is not None
+                    )
+                    split_lines = [l.strip() for l in full_translated.split("\n")]
+                    # Handle trailing newline if present
+                    if len(split_lines) == expected_count + 1 and not split_lines[-1]:
+                        split_lines.pop()
+                    if len(split_lines) == expected_count:
+                        return split_lines
+        except Exception as e:
+            logger.debug(f"GTX batch translation error ({target_lang}): {e}")
+        return None
+
+    def _translate_single_line(self, text: str, target_lang: str) -> str:
+        """Translates a single lyric line via GTX with MyMemory fallback."""
+        res = self._translate_batch_gtx(text, target_lang, expected_count=1)
+        if res and res[0]:
+            return res[0]
+        try:
+            url = "https://api.mymemory.translated.net/get"
+            resp = self.session.get(url, params={"q": text, "langpair": f"autodetect|{target_lang}"}, timeout=8)
+            if resp.status_code == 200:
+                data = resp.json()
+                trans = (data.get("responseData") or {}).get("translatedText")
+                if trans and isinstance(trans, str):
+                    return trans.strip()
+        except Exception as e:
+            logger.debug(f"Fallback single line translation error: {e}")
+        return text
+

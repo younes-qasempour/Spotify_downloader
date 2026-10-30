@@ -121,6 +121,7 @@ class MiniPlayerBar(QFrame):
     """
 
     sig_eq_preview_ready = pyqtSignal(str, str, int, bool, object)
+    sig_lyrics_translated = pyqtSignal(str, str, list)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -134,6 +135,8 @@ class MiniPlayerBar(QFrame):
         self.current_index: int = -1
         self.lyrics_timeline: List[Tuple[int, str]] = []
         self.lyrics_are_synced: bool = True
+        self.lyrics_translation_lang: str = str(config.get("ui.lyrics_translation_lang", "none") or "none")
+        self.lyrics_translated_lines: List[str] = []
         self.last_lyric_idx: int = -1
         self._user_seeking: bool = False
         try:
@@ -411,6 +414,13 @@ class MiniPlayerBar(QFrame):
         self.lyrics_btn.setFixedSize(28, 28)
         self.lyrics_btn.clicked.connect(self.open_lyrics_drawer)
 
+        self.translate_btn = ToolButton(FluentIcon.LANGUAGE, self)
+        self.translate_btn.setToolTip("Translate Lyrics (English / Persian فارسی)")
+        self.translate_btn.setFixedSize(28, 28)
+        self.translate_btn.clicked.connect(self._show_translate_menu)
+        self.sig_lyrics_translated.connect(self._on_bar_lyrics_translated)
+        self._update_translate_btn_state()
+
         self.eq_btn = ToolButton(make_svg_icon(SVG_EQ, color="#CCCCCC"), self)
         self.eq_btn.setToolTip("10-Band Equalizer & Bass Boost")
         self.eq_btn.setFixedSize(28, 28)
@@ -446,6 +456,7 @@ class MiniPlayerBar(QFrame):
         self.close_btn.clicked.connect(self.stop_and_hide)
 
         right_layout.addWidget(self.lyrics_btn)
+        right_layout.addWidget(self.translate_btn)
         right_layout.addWidget(self.eq_btn)
         right_layout.addWidget(self.device_btn)
         right_layout.addWidget(self.volume_btn)
@@ -830,6 +841,7 @@ class MiniPlayerBar(QFrame):
     def _load_lyrics(self, file_path: str, track: Optional[TrackMetadata]):
         """Parses companion .lrc file or embedded lyrics tags for live synchronized karaoke timestamps."""
         self.lyrics_timeline.clear()
+        self.lyrics_translated_lines.clear()
         self.lyrics_are_synced = True
         self.last_lyric_idx = -1
 
@@ -900,15 +912,129 @@ class MiniPlayerBar(QFrame):
             self.lyrics_timeline = [(i * step, txt) for i, txt in enumerate(plain_lines)]
 
         if self.lyrics_timeline:
-            self.active_lyric_label.setText(self.lyrics_timeline[0][1])
-            if len(self.lyrics_timeline) > 1:
-                self.next_lyric_label.setText(f"  →  {self.lyrics_timeline[1][1]}")
-                self.next_lyric_label.setVisible(True)
-            else:
-                self.next_lyric_label.setText("")
-                self.next_lyric_label.setVisible(False)
+            self.last_lyric_idx = 0
+            self._refresh_active_lyric_display()
+            if self.lyrics_translation_lang in ("en", "fa"):
+                self.set_lyrics_translation_language(self.lyrics_translation_lang)
         else:
             self.active_lyric_label.setText("♪ Synchronized Karaoke Lyrics ♪")
+            self.next_lyric_label.setText("")
+            self.next_lyric_label.setVisible(False)
+
+    def _update_translate_btn_state(self):
+        if not hasattr(self, "translate_btn"):
+            return
+        lang = getattr(self, "lyrics_translation_lang", "none")
+        if lang == "en":
+            self.translate_btn.setStyleSheet("ToolButton { border: 1px solid #1ED760; background-color: rgba(29, 185, 84, 0.18); border-radius: 5px; }")
+            self.translate_btn.setToolTip("Lyrics Translation: English (Click to change)")
+        elif lang == "fa":
+            self.translate_btn.setStyleSheet("ToolButton { border: 1px solid #1ED760; background-color: rgba(29, 185, 84, 0.18); border-radius: 5px; }")
+            self.translate_btn.setToolTip("Lyrics Translation: Persian / فارسی (Click to change)")
+        else:
+            self.translate_btn.setStyleSheet("")
+            self.translate_btn.setToolTip("Translate Lyrics (English / Persian فارسی)")
+
+    def _show_translate_menu(self):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #242424;
+                color: #FFFFFF;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 20px 6px 12px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #383838;
+            }
+        """)
+        cur = getattr(self, "lyrics_translation_lang", "none")
+        act_orig = menu.addAction(f"{'✓ ' if cur not in ('en', 'fa') else '   '}Original Lyrics (Off)")
+        act_en = menu.addAction(f"{'✓ ' if cur == 'en' else '   '}Translate to English")
+        act_fa = menu.addAction(f"{'✓ ' if cur == 'fa' else '   '}Translate to Persian (فارسی)")
+        menu.addSeparator()
+        act_open = menu.addAction("Open Full Karaoke Lyrics Viewer...")
+
+        chosen = menu.exec(self.translate_btn.mapToGlobal(self.translate_btn.rect().topLeft()))
+        if not chosen:
+            return
+        if chosen == act_orig:
+            self.set_lyrics_translation_language("none")
+        elif chosen == act_en:
+            self.set_lyrics_translation_language("en")
+        elif chosen == act_fa:
+            self.set_lyrics_translation_language("fa")
+        elif chosen == act_open:
+            self.open_lyrics_drawer()
+
+    def set_lyrics_translation_language(self, lang: str):
+        """Sets the active lyrics translation language ('en', 'fa', or 'none') and translates current track lyrics."""
+        lang = (lang or "none").strip().lower()
+        if lang not in ("en", "fa"):
+            self.lyrics_translation_lang = "none"
+            self.lyrics_translated_lines.clear()
+            config.set("ui.lyrics_translation_lang", "none")
+            self._update_translate_btn_state()
+            self._refresh_active_lyric_display()
+            return
+
+        self.lyrics_translation_lang = lang
+        config.set("ui.lyrics_translation_lang", lang)
+        self._update_translate_btn_state()
+
+        if not self.lyrics_timeline:
+            return
+
+        fp = self.current_file_path or ""
+        raw_lines = [txt for _, txt in self.lyrics_timeline]
+
+        import threading
+        def worker():
+            try:
+                from core.lyrics import LyricsEngine
+                trans = LyricsEngine().translate_lyrics(raw_lines, target_lang=lang)
+                self.sig_lyrics_translated.emit(fp, lang, trans)
+            except Exception as e:
+                logger.debug(f"Player bar lyrics translation error: {e}")
+
+        threading.Thread(target=worker, daemon=True, name=f"BarLyricsTrans_{lang}").start()
+
+    def _on_bar_lyrics_translated(self, fp: str, lang: str, trans: list):
+        if fp != (self.current_file_path or "") or lang != self.lyrics_translation_lang:
+            return
+        if trans and len(trans) == len(self.lyrics_timeline):
+            self.lyrics_translated_lines = list(trans)
+            self._refresh_active_lyric_display()
+
+    def _refresh_active_lyric_display(self):
+        if not self.lyrics_timeline:
+            return
+        idx = max(0, self.last_lyric_idx)
+        if idx >= len(self.lyrics_timeline):
+            idx = 0
+        orig_text = self.lyrics_timeline[idx][1]
+        self.active_lyric_label.setText(orig_text)
+
+        has_trans = (
+            self.lyrics_translation_lang in ("en", "fa")
+            and len(self.lyrics_translated_lines) == len(self.lyrics_timeline)
+        )
+        if has_trans and self.lyrics_translated_lines[idx] and self.lyrics_translated_lines[idx] != orig_text:
+            tr_txt = self.lyrics_translated_lines[idx]
+            if self.lyrics_translation_lang == "fa":
+                self.next_lyric_label.setText(f"  •  \u200f{tr_txt}")
+            else:
+                self.next_lyric_label.setText(f"  •  {tr_txt}")
+            self.next_lyric_label.setVisible(True)
+        elif idx + 1 < len(self.lyrics_timeline):
+            self.next_lyric_label.setText(f"  →  {self.lyrics_timeline[idx + 1][1]}")
+            self.next_lyric_label.setVisible(True)
+        else:
             self.next_lyric_label.setText("")
             self.next_lyric_label.setVisible(False)
 
@@ -1014,13 +1140,7 @@ class MiniPlayerBar(QFrame):
 
             if idx != -1 and idx != self.last_lyric_idx:
                 self.last_lyric_idx = idx
-                self.active_lyric_label.setText(self.lyrics_timeline[idx][1])
-                if idx + 1 < len(self.lyrics_timeline):
-                    self.next_lyric_label.setText(f"  →  {self.lyrics_timeline[idx + 1][1]}")
-                    self.next_lyric_label.setVisible(True)
-                else:
-                    self.next_lyric_label.setText("")
-                    self.next_lyric_label.setVisible(False)
+                self._refresh_active_lyric_display()
 
     def _on_player_duration_changed(self, dur_ms: int):
         self.total_time_label.setText(self._format_ms(dur_ms))

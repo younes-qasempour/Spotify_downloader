@@ -24,16 +24,27 @@ logger = logging.getLogger("gui.dialogs.player_panels")
 
 
 class LyricLineRow(QFrame):
-    """Interactive clickable lyric line row inside the Karaoke Lyrics Drawer."""
+    """Interactive clickable lyric line row inside the Karaoke Lyrics Drawer (supports bilingual translated subtitle)."""
 
     clicked_timestamp = pyqtSignal(int)
 
-    def __init__(self, timestamp_ms: int, text: str, is_synced: bool = True, parent=None):
+    def __init__(
+        self,
+        timestamp_ms: int,
+        text: str,
+        is_synced: bool = True,
+        translated_text: str = "",
+        target_lang: str = "",
+        parent=None
+    ):
         super().__init__(parent)
         self.timestamp_ms = timestamp_ms
         self.lyric_text = text
+        self.translated_text = ""
+        self.target_lang = ""
         self.is_synced = is_synced
         self._is_active = False
+        self._is_past = False
 
         if is_synced and timestamp_ms >= 0:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -50,16 +61,59 @@ class LyricLineRow(QFrame):
         self.time_lbl.setFixedWidth(42)
         self.time_lbl.setStyleSheet("color: #666666; font-family: 'Consolas', monospace; font-size: 11px;")
 
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(3)
+
         self.text_lbl = BodyLabel(text, self)
         self.text_lbl.setWordWrap(True)
         self.text_lbl.setStyleSheet("color: #AAAAAA; font-size: 14px; font-weight: 500; background: transparent;")
 
+        self.trans_lbl = CaptionLabel("", self)
+        self.trans_lbl.setWordWrap(True)
+        self.trans_lbl.setVisible(False)
+
+        text_col.addWidget(self.text_lbl)
+        text_col.addWidget(self.trans_lbl)
+
         lay.addWidget(self.time_lbl, 0, Qt.AlignmentFlag.AlignTop)
-        lay.addWidget(self.text_lbl, 1)
+        lay.addLayout(text_col, 1)
+
+        if translated_text:
+            self.set_translation(translated_text, target_lang)
         self.set_active(False, is_past=False)
+
+    def set_translation(self, translated_text: str, target_lang: str = ""):
+        self.translated_text = (translated_text or "").strip()
+        self.target_lang = (target_lang or "").strip().lower()
+        show_trans = bool(
+            self.translated_text
+            and self.translated_text.lower() != (self.lyric_text or "").strip().lower()
+        )
+        if show_trans:
+            disp = f"\u200f{self.translated_text}" if self.target_lang == "fa" else self.translated_text
+            self.trans_lbl.setText(disp)
+            self.trans_lbl.setVisible(True)
+        else:
+            self.trans_lbl.setText("")
+            self.trans_lbl.setVisible(False)
+        self._apply_translation_style()
+
+    def _apply_translation_style(self):
+        font_family = "'Vazirmatn', 'Tahoma', 'Segoe UI', sans-serif" if self.target_lang == "fa" else "'Segoe UI', sans-serif"
+        if self._is_active:
+            self.trans_lbl.setStyleSheet(
+                f"color: #86EFAC; font-family: {font_family}; font-size: 13.5px; font-weight: 600; background: transparent;"
+            )
+        else:
+            c = "#64748B" if self._is_past else "#94A3B8"
+            self.trans_lbl.setStyleSheet(
+                f"color: {c}; font-family: {font_family}; font-size: 12.5px; font-weight: 500; background: transparent;"
+            )
 
     def set_active(self, active: bool, is_past: bool = False):
         self._is_active = active
+        self._is_past = is_past
         if active:
             self.setStyleSheet("""
                 LyricLineRow {
@@ -84,6 +138,7 @@ class LyricLineRow(QFrame):
             color = "#707070" if is_past else "#CCCCCC"
             self.time_lbl.setStyleSheet("color: #555555; font-family: 'Consolas', monospace; font-size: 11px; background: transparent;")
             self.text_lbl.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: 500; background: transparent;")
+        self._apply_translation_style()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.is_synced and self.timestamp_ms >= 0:
@@ -94,19 +149,23 @@ class LyricLineRow(QFrame):
 class KaraokeLyricsDrawer(MessageBoxBase):
     """
     Slide-up Synchronized Karaoke Lyrics Viewer synced in real-time to MiniPlayerBar.
-    Supports click-to-seek on any line, live auto-scrolling, and one-click online lyrics fetching.
+    Supports click-to-seek on any line, live auto-scrolling, one-click online lyrics fetching,
+    and instant bilingual lyrics translation to English and Persian (فارسی).
     """
 
     sig_lyrics_fetched = pyqtSignal(bool, str)
+    sig_translation_ready = pyqtSignal(str, list)
 
     def __init__(self, player_bar, parent=None):
         super().__init__(parent or player_bar)
         self.player_bar = player_bar
         self.line_widgets: List[LyricLineRow] = []
         self._active_idx: int = -1
+        self.current_trans_lang: str = getattr(player_bar, "lyrics_translation_lang", "") or str(config.get("ui.lyrics_translation_lang", "none") or "none")
+        self.translated_lines: List[str] = list(getattr(player_bar, "lyrics_translated_lines", []))
 
-        self.widget.setMinimumWidth(620)
-        self.widget.setMinimumHeight(540)
+        self.widget.setMinimumWidth(660)
+        self.widget.setMinimumHeight(560)
 
         # Header with Cover Art + Track Info + Sync Badge
         header_card = CardWidget(self)
@@ -153,36 +212,44 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         h_lay.addWidget(self.mode_badge)
         self.viewLayout.addWidget(header_card)
 
-        # Action toolbar row
+        # Action & Translation toolbar row
         tools_row = QHBoxLayout()
         tools_row.setSpacing(8)
 
-        self.fetch_btn = PushButton(FluentIcon.SYNC, "Fetch / Sync Lyrics Online", self)
+        self.fetch_btn = PushButton(FluentIcon.SYNC, "Fetch / Sync Lyrics", self)
         self.fetch_btn.setFixedHeight(30)
         self.fetch_btn.clicked.connect(self._fetch_lyrics_online)
 
-        self.copy_btn = PushButton(FluentIcon.COPY, "Copy Lyrics", self)
+        self.translate_en_btn = PushButton(FluentIcon.LANGUAGE, "Translate: English", self)
+        self.translate_en_btn.setFixedHeight(30)
+        self.translate_en_btn.setToolTip("Translate lyrics to English (click again to return to Original)")
+        self.translate_en_btn.clicked.connect(lambda: self._on_translate_btn_clicked("en"))
+
+        self.translate_fa_btn = PushButton(FluentIcon.LANGUAGE, "Translate: Persian (فارسی)", self)
+        self.translate_fa_btn.setFixedHeight(30)
+        self.translate_fa_btn.setToolTip("Translate lyrics to Persian / فارسی (click again to return to Original)")
+        self.translate_fa_btn.clicked.connect(lambda: self._on_translate_btn_clicked("fa"))
+
+        self.copy_btn = PushButton(FluentIcon.COPY, "Copy", self)
         self.copy_btn.setFixedHeight(30)
         self.copy_btn.clicked.connect(self._copy_lyrics)
 
-        self.export_btn = PushButton(FluentIcon.SAVE, "Save .lrc File", self)
+        self.export_btn = PushButton(FluentIcon.SAVE, "Save .lrc", self)
         self.export_btn.setFixedHeight(30)
         self.export_btn.clicked.connect(self._export_lrc_file)
 
         tools_row.addWidget(self.fetch_btn)
+        tools_row.addWidget(self.translate_en_btn)
+        tools_row.addWidget(self.translate_fa_btn)
         tools_row.addWidget(self.copy_btn)
         tools_row.addWidget(self.export_btn)
         tools_row.addStretch(1)
-
-        hint_lbl = CaptionLabel("Tip: Click any timestamped line to jump directly to that part of the song", self)
-        hint_lbl.setTextColor(TEXT_MUTED, TEXT_MUTED)
-        tools_row.addWidget(hint_lbl)
         self.viewLayout.addLayout(tools_row)
 
         # Scrollable Karaoke Viewport
         self.scroll_area = SmoothScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setMinimumHeight(330)
+        self.scroll_area.setMinimumHeight(340)
         self.scroll_area.setStyleSheet("""
             QScrollArea, SmoothScrollArea {
                 background-color: #161616;
@@ -206,15 +273,122 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         self.cancelButton.setVisible(False)
 
         self.sig_lyrics_fetched.connect(self._on_lyrics_fetched)
+        self.sig_translation_ready.connect(self._on_translation_ready)
 
         self._load_header_cover()
         self.rebuild_lyrics_view()
+        self._update_translate_buttons_style()
+
+        # If a translation language was active, ensure this track's lines are translated
+        if self.current_trans_lang in ("en", "fa"):
+            timeline = getattr(self.player_bar, "lyrics_timeline", [])
+            if timeline and len(self.translated_lines) != len(timeline):
+                self.translate_lyrics_to(self.current_trans_lang)
 
         # Live 100ms sync timer while drawer is open
         self._sync_timer = QTimer(self)
         self._sync_timer.setInterval(120)
         self._sync_timer.timeout.connect(self._sync_active_line)
         self._sync_timer.start()
+
+    def _update_translate_buttons_style(self):
+        active_style = """
+            PushButton {
+                background-color: rgba(29, 185, 84, 0.22);
+                color: #1ED760;
+                border: 1px solid #1ED760;
+                border-radius: 5px;
+                padding: 4px 10px;
+                font-weight: 700;
+            }
+            PushButton:hover {
+                background-color: rgba(29, 185, 84, 0.32);
+            }
+        """
+        normal_style = ""
+        self.translate_en_btn.setStyleSheet(active_style if self.current_trans_lang == "en" else normal_style)
+        self.translate_fa_btn.setStyleSheet(active_style if self.current_trans_lang == "fa" else normal_style)
+
+    def _on_translate_btn_clicked(self, target_lang: str):
+        # Toggle off if clicking the already active language
+        if self.current_trans_lang == target_lang:
+            self.translate_lyrics_to("none")
+        else:
+            self.translate_lyrics_to(target_lang)
+
+    def translate_lyrics_to(self, target_lang: str):
+        """Translates current lyrics into 'en' (English), 'fa' (Persian), or 'none' (Original)."""
+        lang = (target_lang or "none").strip().lower()
+        if lang not in ("en", "fa"):
+            self.current_trans_lang = "none"
+            self.translated_lines = []
+            config.set("ui.lyrics_translation_lang", "none")
+            if self.player_bar:
+                self.player_bar.lyrics_translation_lang = "none"
+                self.player_bar.lyrics_translated_lines = []
+                if hasattr(self.player_bar, "_update_translate_btn_state"):
+                    self.player_bar._update_translate_btn_state()
+                self.player_bar._refresh_active_lyric_display()
+            for w in self.line_widgets:
+                w.set_translation("", "")
+            self._update_translate_buttons_style()
+            return
+
+        timeline: List[Tuple[int, str]] = list(getattr(self.player_bar, "lyrics_timeline", []))
+        if not timeline:
+            InfoBar.warning("No Lyrics", "No lyrics loaded to translate.", duration=3000, parent=self)
+            return
+
+        self.current_trans_lang = lang
+        config.set("ui.lyrics_translation_lang", lang)
+        self._update_translate_buttons_style()
+
+        btn = self.translate_en_btn if lang == "en" else self.translate_fa_btn
+        orig_text = "Translate: English" if lang == "en" else "Translate: Persian (فارسی)"
+        btn.setEnabled(False)
+        btn.setText("Translating...")
+
+        raw_lines = [txt for _, txt in timeline]
+
+        def worker():
+            try:
+                from core.lyrics import LyricsEngine
+                eng = LyricsEngine()
+                trans = eng.translate_lyrics(raw_lines, target_lang=lang)
+                self.sig_translation_ready.emit(lang, trans)
+            except Exception as e:
+                logger.warning(f"Lyrics translation failed ({lang}): {e}")
+                self.sig_translation_ready.emit(lang, [])
+
+        threading.Thread(target=worker, daemon=True, name=f"LyricsTranslate_{lang}").start()
+
+    def _on_translation_ready(self, lang: str, translated: list):
+        self.translate_en_btn.setEnabled(True)
+        self.translate_en_btn.setText("Translate: English")
+        self.translate_fa_btn.setEnabled(True)
+        self.translate_fa_btn.setText("Translate: Persian (فارسی)")
+        self._update_translate_buttons_style()
+
+        if lang != self.current_trans_lang:
+            return
+
+        if not translated or len(translated) != len(self.line_widgets):
+            InfoBar.warning("Translation Failed", "Could not translate lyrics right now. Check your internet connection.", duration=3500, parent=self)
+            return
+
+        self.translated_lines = list(translated)
+        if self.player_bar:
+            self.player_bar.lyrics_translation_lang = lang
+            self.player_bar.lyrics_translated_lines = list(translated)
+            if hasattr(self.player_bar, "_update_translate_btn_state"):
+                self.player_bar._update_translate_btn_state()
+            self.player_bar._refresh_active_lyric_display()
+
+        for idx, w in enumerate(self.line_widgets):
+            w.set_translation(self.translated_lines[idx], lang)
+
+        lang_label = "English" if lang == "en" else "Persian (فارسی)"
+        InfoBar.success("Lyrics Translated", f"Showing bilingual lyrics with {lang_label} translation.", duration=2500, parent=self)
 
     def _load_header_cover(self):
         fp = self.player_bar.current_file_path
@@ -250,7 +424,7 @@ class KaraokeLyricsDrawer(MessageBoxBase):
             self.mode_badge.setText("No Lyrics Embedded")
             empty_lbl = BodyLabel(
                 "No lyrics were found embedded in this track.\n"
-                "Click 'Fetch / Sync Lyrics Online' above to search LRCLIB for synchronized karaoke lyrics.",
+                "Click 'Fetch / Sync Lyrics' above to search LRCLIB for synchronized karaoke lyrics.",
                 self.lines_container
             )
             empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -263,8 +437,21 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         else:
             self.mode_badge.setText(f"Plain Lyrics ({len(timeline)} lines)")
 
-        for ts_ms, text in timeline:
-            row = LyricLineRow(ts_ms, text, is_synced=is_synced, parent=self.lines_container)
+        has_valid_trans = (
+            self.current_trans_lang in ("en", "fa")
+            and len(self.translated_lines) == len(timeline)
+        )
+
+        for idx_l, (ts_ms, text) in enumerate(timeline):
+            t_txt = self.translated_lines[idx_l] if has_valid_trans else ""
+            row = LyricLineRow(
+                ts_ms,
+                text,
+                is_synced=is_synced,
+                translated_text=t_txt,
+                target_lang=self.current_trans_lang if has_valid_trans else "",
+                parent=self.lines_container,
+            )
             row.clicked_timestamp.connect(self._on_line_clicked)
             self.lines_layout.insertWidget(self.lines_layout.count() - 1, row)
             self.line_widgets.append(row)
@@ -293,9 +480,11 @@ class KaraokeLyricsDrawer(MessageBoxBase):
     def set_track_info(self, title: str, artist: str, timeline: List[Tuple[int, str]], plain_text: str = "", has_synced: bool = True):
         self.title_lbl.setText(title)
         self.artist_lbl.setText(artist)
+        self.translated_lines = []
         if self.player_bar:
             self.player_bar.lyrics_timeline = list(timeline)
             self.player_bar.lyrics_are_synced = has_synced
+            self.player_bar.lyrics_translated_lines = []
         self.rebuild_lyrics_view()
 
     def update_active_line(self, idx: int):
@@ -317,7 +506,7 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         dur_ms = (getattr(track, "duration_ms", 0) if track else 0) or self.player_bar.player.duration()
 
         self.fetch_btn.setEnabled(False)
-        self.fetch_btn.setText("Fetching from LRCLIB...")
+        self.fetch_btn.setText("Fetching...")
 
         def worker():
             try:
@@ -334,12 +523,12 @@ class KaraokeLyricsDrawer(MessageBoxBase):
                     duration_ms=dur_ms
                 )
                 lyr = eng.fetch_lyrics(t_meta)
-                if lyr and (lyr.get("synced") or lyr.get("plain")):
+                if lyr and (lyr.synced_lyrics or lyr.plain_lyrics):
                     AudioTagger().tag_file(fp, t_meta, lyrics_data=lyr, embed_art=False, embed_lyrics=True)
-                    if lyr.get("synced"):
+                    if lyr.synced_lyrics:
                         base, _ = os.path.splitext(fp)
-                        eng.save_lrc_file(lyr["synced"], f"{base}.lrc")
-                    self.sig_lyrics_fetched.emit(True, "Synchronized lyrics fetched and embedded!" if lyr.get("synced") else "Plain lyrics fetched and embedded!")
+                        eng.save_lrc_file(lyr.synced_lyrics, f"{base}.lrc")
+                    self.sig_lyrics_fetched.emit(True, "Synchronized lyrics fetched and embedded!" if lyr.synced_lyrics else "Plain lyrics fetched and embedded!")
                 else:
                     self.sig_lyrics_fetched.emit(False, "No lyrics found on LRCLIB for this track.")
             except Exception as e:
@@ -349,10 +538,13 @@ class KaraokeLyricsDrawer(MessageBoxBase):
 
     def _on_lyrics_fetched(self, ok: bool, msg: str):
         self.fetch_btn.setEnabled(True)
-        self.fetch_btn.setText("Fetch / Sync Lyrics Online")
+        self.fetch_btn.setText("Fetch / Sync Lyrics")
         if ok:
             self.player_bar._load_lyrics(self.player_bar.current_file_path, self.player_bar.current_track)
+            self.translated_lines = []
             self.rebuild_lyrics_view()
+            if self.current_trans_lang in ("en", "fa"):
+                self.translate_lyrics_to(self.current_trans_lang)
             InfoBar.success("Lyrics Updated", msg, duration=3500, parent=self)
         else:
             InfoBar.warning("Lyrics Not Found", msg, duration=4000, parent=self)
@@ -361,8 +553,13 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         timeline = getattr(self.player_bar, "lyrics_timeline", [])
         if not timeline:
             return
-        text = "\n".join(line for _, line in timeline)
-        QApplication.clipboard().setText(text)
+        has_trans = self.current_trans_lang in ("en", "fa") and len(self.translated_lines) == len(timeline)
+        out_lines = []
+        for idx, (_, line) in enumerate(timeline):
+            out_lines.append(line)
+            if has_trans and self.translated_lines[idx] and self.translated_lines[idx] != line:
+                out_lines.append(f"  [{self.translated_lines[idx]}]")
+        QApplication.clipboard().setText("\n".join(out_lines))
         InfoBar.success("Copied", "Copied lyrics to clipboard.", duration=2500, parent=self)
 
     def _export_lrc_file(self):
@@ -373,12 +570,16 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         default_lrc = os.path.splitext(fp)[0] + ".lrc"
         out_path, _ = QFileDialog.getSaveFileName(self, "Save Synchronized .lrc File", default_lrc, "LRC Files (*.lrc)")
         if out_path:
+            has_trans = self.current_trans_lang in ("en", "fa") and len(self.translated_lines) == len(timeline)
             lines = []
-            for ts_ms, txt in timeline:
+            for idx, (ts_ms, txt) in enumerate(timeline):
                 mins = max(0, ts_ms // 60000)
                 secs = max(0, (ts_ms % 60000) // 1000)
                 centis = max(0, (ts_ms % 1000) // 10)
-                lines.append(f"[{mins:02d}:{secs:02d}.{centis:02d}] {txt}")
+                if has_trans and self.translated_lines[idx] and self.translated_lines[idx] != txt:
+                    lines.append(f"[{mins:02d}:{secs:02d}.{centis:02d}] {txt} / {self.translated_lines[idx]}")
+                else:
+                    lines.append(f"[{mins:02d}:{secs:02d}.{centis:02d}] {txt}")
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
             InfoBar.success("Saved .lrc", f"Exported lyrics to {os.path.basename(out_path)}", duration=3000, parent=self)

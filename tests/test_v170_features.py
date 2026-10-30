@@ -238,25 +238,53 @@ class TestV170Features(unittest.TestCase):
     # 5. GUI Dialogs & Controls Instantiation Verification
     # -----------------------------------------------------------------
     def test_gui_v170_dialogs_and_controls(self):
+        from unittest.mock import patch
         from PyQt6.QtWidgets import QApplication
+        from core.lyrics import LyricsEngine
         from gui.dialogs.player_panels import KaraokeLyricsDrawer, EqualizerDialog
         from gui.player_bar import MiniPlayerBar
 
         app = QApplication.instance() or QApplication([])
         player_bar = MiniPlayerBar()
         self.assertTrue(hasattr(player_bar, "lyrics_btn"))
+        self.assertTrue(hasattr(player_bar, "translate_btn"))
         self.assertTrue(hasattr(player_bar, "eq_btn"))
 
         drawer = KaraokeLyricsDrawer(player_bar)
+        self.assertTrue(hasattr(drawer, "translate_en_btn"))
+        self.assertTrue(hasattr(drawer, "translate_fa_btn"))
         drawer.set_track_info(
             "Test Song",
             "Test Artist",
-            [(1000, "Line 1"), (4000, "Line 2")],
-            "Line 1\nLine 2",
+            [(1000, "Bonjour le monde"), (4000, "La musique est belle")],
+            "Bonjour le monde\nLa musique est belle",
             has_synced=True,
         )
         drawer.update_active_line(1)
         self.assertEqual(drawer._active_idx, 1)
+
+        # Verify bilingual translation display on LyricLineRow (English & Persian)
+        drawer.current_trans_lang = "en"
+        drawer._on_translation_ready("en", ["Hello world", "Music is beautiful"])
+        self.assertEqual(drawer.line_widgets[0].translated_text, "Hello world")
+        self.assertFalse(drawer.line_widgets[0].trans_lbl.isHidden())
+
+        drawer.current_trans_lang = "fa"
+        drawer._on_translation_ready("fa", ["سلام دنیا", "موسیقی زیباست"])
+        self.assertEqual(drawer.line_widgets[1].translated_text, "موسیقی زیباست")
+        self.assertIn("موسیقی زیباست", drawer.line_widgets[1].trans_lbl.text())
+
+        # Verify LyricsEngine.translate_lyrics deduplication & batching
+        eng = LyricsEngine()
+        with patch.object(eng, "_translate_batch_gtx", return_value=["سلام دنیا", "موسیقی زیباست"]):
+            res_fa = eng.translate_lyrics(
+                ["Bonjour le monde", "♪ Instrumental ♪", "La musique est belle", "Bonjour le monde"],
+                target_lang="fa",
+            )
+            self.assertEqual(res_fa[0], "سلام دنیا")
+            self.assertEqual(res_fa[1], "♪ Instrumental ♪")
+            self.assertEqual(res_fa[2], "موسیقی زیباست")
+            self.assertEqual(res_fa[3], "سلام دنیا")
 
         eq_dlg = EqualizerDialog(player_bar)
         self.assertEqual(len(eq_dlg.band_sliders), 10)

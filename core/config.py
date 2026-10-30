@@ -89,6 +89,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "eq_preamp": 0.0,
         "eq_bass_boost": 0.0,
         "eq_bands": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "lyrics_translation_lang": "none",
     },
     "playlists": {
         "auto_sync_on_startup": True,
