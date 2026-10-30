@@ -37,7 +37,8 @@ from core.spotify_client import TrackMetadata
 from core.utils import (
     sanitize_filename, is_valid_audio_file, format_bytes,
     PERSIAN_ARTIST_ALIASES, is_persian_or_arabic, transliterate_persian,
-    consonant_skeleton, normalize_special_unicode
+    consonant_skeleton, normalize_special_unicode,
+    has_katakana, romanize_katakana, phonetic_skeleton
 )
 from core.paths import get_cache_dir
 from core.config import config
@@ -479,25 +480,38 @@ class MeloBotEngine:
 
             clean_artists = [sanitize_filename(a, max_length=80).strip() for a in (track.artists or [track.primary_artist])]
             clean_artists = [a for a in clean_artists if a]
-            clean_title = sanitize_filename(track.title, max_length=150).strip()
+            norm_raw_title = normalize_special_unicode(track.title).strip()
+            clean_title = sanitize_filename(norm_raw_title, max_length=150).strip()
             # Extract parenthetical alternate title/subtitle (e.g. "As One Together (Yeki Shodan)" -> "Yeki Shodan")
             sub_title = ""
-            m_sub = re.search(r'[\(\[]\s*([^\)\]]{3,40})\s*[\)\]]', clean_title)
+            m_sub = re.search(r'[\(\[]\s*([^\)\]]{3,40})\s*[\)\]]', norm_raw_title)
             if m_sub:
                 s_cand = m_sub.group(1).strip()
-                if not any(k in s_cand.lower() for k in ("feat", "ft", "remaster", "version", "edition", "live", "mix", "op", "ed")):
-                    sub_title = s_cand
+                excluded_sub_kw = (
+                    "feat", "ft", "with", "remaster", "version", "ver.", "ver ", "edition",
+                    "live", "mix", "op", "ed", "take", "prise", "single", "album", "original",
+                    "studio", "アルバムバージョン", "シングルバージョン", "バージョン", "chinese", "japanese", "english"
+                )
+                if not any(k in s_cand.lower() for k in excluded_sub_kw):
+                    sub_title = sanitize_filename(s_cand, max_length=60).strip()
 
-            # Strip common extra tags like '(Remastered)', '[Explicit]', '(feat. ...)', '(2nd version, 1877)', etc.
+            # Strip common extra tags like '(Remastered)', '[Explicit]', '(feat. ...)', '(Album Version)', '(アルバムバージョン)', '- Take 1', etc.
+            ver_take_pat = r'(?:album\s*(?:version|ver\.?)|single\s*(?:version|ver\.?)|original\s*(?:version|ver\.?)|studio\s*(?:version|ver\.?)|アルバム・?バージョン|シングル・?バージョン|オリジナル・?バージョン|take\s*\d+|prise\s*\d+|alternate\s+take|bonus\s+track)'
             clean_title_no_parentheses = re.sub(
-                r'[\(\[]\s*(?:\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{4})?|\d{4}\s+version|version\s*,\s*\d{4}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*|die\s+verurteilten|shawshank|soundtrack|ost|第?\s*\d+\s*[-–—~〜]\s*\d+\s*話?\s*(?:OP|ED)?)\s*[\)\]]',
+                rf'[\(\[]\s*(?:(?:feat\.?|ft\.?|with|featuring)\b[^\)\]]*|(?:\d{{4}}\s+)?remaster(?:ed)?(?:\s+\d{{4}})?(?:\s+version)?|explicit|clean|{ver_take_pat}|\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{{4}})?|\d{{4}}\s+version|version\s*,\s*\d{{4}}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*|die\s+verurteilten|shawshank|soundtrack|ost|第?\s*\d+\s*[-–—~〜]\s*\d+\s*話?\s*(?:OP|ED)?)\s*[\)\]]',
                 '',
-                clean_title,
+                norm_raw_title,
+                flags=re.IGNORECASE
+            ).strip()
+            clean_title_no_parentheses = re.sub(
+                rf'[\-\–\—]\s*(?:(?:feat\.?|ft\.?|with|featuring)\b.*|(?:\d{{4}}\s+)?remaster(?:ed)?(?:\s+\d{{4}})?(?:\s+version)?|{ver_take_pat})\s*$',
+                '',
+                clean_title_no_parentheses,
                 flags=re.IGNORECASE
             ).strip()
             if sub_title:
                 clean_title_no_parentheses = re.sub(r'[\(\[]\s*' + re.escape(sub_title) + r'\s*[\)\]]', '', clean_title_no_parentheses).strip()
-            clean_title_no_parentheses = re.sub(r'\s+', ' ', clean_title_no_parentheses).strip()
+            clean_title_no_parentheses = sanitize_filename(re.sub(r'\s+', ' ', clean_title_no_parentheses).strip(), max_length=150).strip()
 
             all_artist_text = (track.title + " " + " ".join(track.artists or [track.primary_artist])).lower()
             is_classical = any(k in all_artist_text for k in (
@@ -701,13 +715,16 @@ class MeloBotEngine:
                         "requiem", "canzonetta", "duettino", "aria", "cavatina"
                     )) or bool(re.search(r'\b(?:op|wab|bwv|hob|k|rv)\.?\s*\d+\b', all_artist_text))
                     max_dur_tol = max(45.0, target_dur * 0.15) if is_classical else 25.0
+                    if re.search(r'(?:take\s*\d+|prise\s*\d+|version|ver\.?|バージョン|remaster)', normalize_special_unicode(track.title), re.IGNORECASE):
+                        max_dur_tol = max(max_dur_tol, 36.0)
 
                     if dur > 0 and target_dur > 0 and abs(dur - target_dur) > max_dur_tol:
                         logger.warning(
                             f"MeloBot delivered audio with duration mismatch ({dur}s vs target {target_dur:.1f}s, "
-                            f"diff={abs(dur - target_dur):.1f}s > {max_dur_tol:.1f}s). Discarding mismatch audio."
+                            f"diff={abs(dur - target_dur):.1f}s > {max_dur_tol:.1f}s). Aborting candidate and moving to next vector."
                         )
-                        continue
+                        last_clicked_msg = None
+                        break
 
                     audio_msg = msg
                     break
@@ -905,6 +922,9 @@ class MeloBotEngine:
         return False
 
     def _clean_track_str(self, text: str) -> str:
+        import unicodedata
+        text = normalize_special_unicode(text)
+        text = "".join(c for c in unicodedata.normalize('NFKD', text) if unicodedata.category(c) != 'Mn')
         text = text.replace("'", "").replace("’", "").replace("`", "")
         text = text.replace("-", " ")
         text = re.sub(r'x\s+[\d\.]+[kmKM]?', '', text)
@@ -940,6 +960,10 @@ class MeloBotEngine:
             w_skel = consonant_skeleton(transliterate_persian(w))
             bw_skel = consonant_skeleton(transliterate_persian(bw))
             if w_skel and bw_skel and len(w_skel) >= 3 and w_skel == bw_skel:
+                return True
+            w_phon = phonetic_skeleton(w)
+            bw_phon = phonetic_skeleton(bw)
+            if w_phon and bw_phon and len(w_phon) >= 3 and w_phon == bw_phon:
                 return True
             return False
 
@@ -1009,8 +1033,9 @@ class MeloBotEngine:
             'live', 'لایو', 'زنده', 'کنسرت', 'concert', 'unplugged',
             # Acoustic & Orchestral
             'acoustic', 'آکوستیک', 'orchestral', 'ارکسترال', 'symphony', 'سمفونی',
-            # Remix, DJ, Mix
+            # Remix, DJ, Mix, Edit
             'remix', 'ریمیکس', 'میکس', 'mix', 'vip mix', 'club', 'dubstep',
+            'extended', 'short edit',
             'dj', 'دی جی', 'دی‌جی', 'podcast', 'پادکست',
             # Vocal / Instrumental
             'acapella', 'آکاپلا', 'instrumental', 'بی کلام', 'بیکلام', 'karaoke',
@@ -1035,17 +1060,30 @@ class MeloBotEngine:
                 return -1.0  # Track requested this version, but button does not have it
 
         # 3. Title Word Match Ratio (Calculated against full title, subtitle, and core title without parentheses)
+        norm_track_title = normalize_special_unicode(track.title)
         sub_title = ""
-        m_sub = re.search(r'[\(\[]\s*([^\)\]]{3,40})\s*[\)\]]', track.title)
+        m_sub = re.search(r'[\(\[]\s*([^\)\]]{3,40})\s*[\)\]]', norm_track_title)
         if m_sub:
             s_cand = m_sub.group(1).strip()
-            if not any(k in s_cand.lower() for k in ("feat", "ft", "remaster", "version", "edition", "live", "mix", "op", "ed")):
+            excluded_sub_kw = (
+                "feat", "ft", "with", "remaster", "version", "ver.", "ver ", "edition",
+                "live", "mix", "op", "ed", "take", "prise", "single", "album", "original",
+                "studio", "アルバムバージョン", "シングルバージョン", "バージョン", "chinese", "japanese", "english"
+            )
+            if not any(k in s_cand.lower() for k in excluded_sub_kw):
                 sub_title = s_cand
 
+        ver_take_pat = r'(?:album\s*(?:version|ver\.?)|single\s*(?:version|ver\.?)|original\s*(?:version|ver\.?)|studio\s*(?:version|ver\.?)|アルバム・?バージョン|シングル・?バージョン|オリジナル・?バージョン|take\s*\d+|prise\s*\d+|alternate\s+take|bonus\s+track)'
         clean_core_title = re.sub(
-            r'[\(\[]\s*(?:\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{4})?|\d{4}\s+version|version\s*,\s*\d{4}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*|die\s+verurteilten|shawshank|soundtrack|ost|第?\s*\d+\s*[-–—~〜]\s*\d+\s*話?\s*(?:OP|ED)?)\s*[\)\]]',
+            rf'[\(\[]\s*(?:(?:feat\.?|ft\.?|with|featuring)\b[^\)\]]*|(?:\d{{4}}\s+)?remaster(?:ed)?(?:\s+\d{{4}})?(?:\s+version)?|explicit|clean|{ver_take_pat}|\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{{4}})?|\d{{4}}\s+version|version\s*,\s*\d{{4}}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*|die\s+verurteilten|shawshank|soundtrack|ost|第?\s*\d+\s*[-–—~〜]\s*\d+\s*話?\s*(?:OP|ED)?)\s*[\)\]]',
             '',
-            track.title,
+            norm_track_title,
+            flags=re.IGNORECASE
+        ).strip()
+        clean_core_title = re.sub(
+            rf'[\-\–\—]\s*(?:(?:feat\.?|ft\.?|with|featuring)\b.*|(?:\d{{4}}\s+)?remaster(?:ed)?(?:\s+\d{{4}})?(?:\s+version)?|{ver_take_pat})\s*$',
+            '',
+            clean_core_title,
             flags=re.IGNORECASE
         ).strip()
         if sub_title:
@@ -1061,7 +1099,7 @@ class MeloBotEngine:
 
         title_ratio = max(full_ratio, core_ratio)
 
-        # Transliteration & consonant skeleton title matching (e.g. "Amo Sabzi Froosh" vs "عمو سبزی فروش")
+        # Transliteration & consonant skeleton title matching (e.g. "Amo Sabzi Froosh" vs "عمو سبزی فروش", "アスタリスク" vs "Asterisk")
         t_skel = consonant_skeleton(transliterate_persian(t_clean))
         core_skel = consonant_skeleton(transliterate_persian(core_clean)) if core_clean else ""
         btn_skel = consonant_skeleton(transliterate_persian(btn_clean))
@@ -1072,6 +1110,12 @@ class MeloBotEngine:
         elif core_skel and len(core_skel) >= 3 and (core_skel in btn_skel or btn_skel in core_skel or SequenceMatcher(None, core_skel, btn_skel).ratio() >= 0.75):
             title_ratio = max(title_ratio, 0.90)
             skel_match = True
+        elif has_katakana(clean_core_title) or has_katakana(button_text):
+            core_phon = phonetic_skeleton(clean_core_title)
+            btn_phon = phonetic_skeleton(button_text)
+            if core_phon and len(core_phon) >= 3 and (core_phon in btn_phon or btn_phon in core_phon):
+                title_ratio = max(title_ratio, 0.92)
+                skel_match = True
 
         # Check subtitle matching (e.g. "Yeki Shodan" in "As One Together (Yeki Shodan)")
         if sub_title:

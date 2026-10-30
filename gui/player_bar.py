@@ -18,6 +18,7 @@ from qfluentwidgets import (
 
 from core.spotify_client import TrackMetadata
 from core.archive import resolve_collection_cover
+from core.config import config
 from gui.queue_delegate import extract_embedded_cover, ThumbnailCache
 from gui.styles import TEXT_MUTED
 
@@ -122,7 +123,11 @@ class MiniPlayerBar(QFrame):
         self.lyrics_timeline: List[Tuple[int, str]] = []
         self.last_lyric_idx: int = -1
         self._user_seeking: bool = False
-        self._saved_vol: float = 0.85
+        try:
+            cfg_vol = int(config.get("ui.player_volume", 100))
+        except Exception:
+            cfg_vol = 100
+        self._saved_vol: float = max(0.0, min(1.0, cfg_vol / 100.0))
 
         # Playback Modes
         self.shuffle_enabled: bool = False
@@ -959,6 +964,10 @@ class MiniPlayerBar(QFrame):
             self._saved_vol = vol_float
             self.volume_btn.setIcon(FluentIcon.VOLUME)
             self.volume_btn.setToolTip("Mute")
+            try:
+                config.set("ui.player_volume", val)
+            except Exception:
+                pass
         else:
             self.volume_btn.setIcon(FluentIcon.MUTE)
             self.volume_btn.setToolTip("Unmute")
@@ -968,9 +977,9 @@ class MiniPlayerBar(QFrame):
             self._saved_vol = self.audio_output.volume()
             self.volume_slider.setValue(0)
         else:
-            restore_vol = getattr(self, "_saved_vol", 0.85) or 0.85
+            restore_vol = getattr(self, "_saved_vol", 1.0) or 1.0
             if restore_vol < 0.05:
-                restore_vol = 0.85
+                restore_vol = 1.0
             self.volume_slider.setValue(int(restore_vol * 100))
 
     def _open_in_explorer(self):

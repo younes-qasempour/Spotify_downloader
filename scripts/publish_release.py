@@ -22,28 +22,30 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.6.1'
-    release_name = 'Flacify v1.6.1 — High-Density UI Overhaul & Collapsible Batch Controls'
+    tag = 'v1.6.2'
+    release_name = 'Flacify v1.6.2 — EBU R128 Volume Boost & Balancing, Japanese/Take Resolution & Bug Fixes'
 
     release_body = (
-        "# 🚀 Flacify v1.6.1 Release Notes\n\n"
-        "### 🎛️ High-Density Track Layout (Double Visible Songs)\n"
-        "- **Optimized 56px Card Rows**: Refined table row height from 72px down to 56px and album art thumbnails to 40x40, allowing 10+ tracks to be visible at once on typical desktop displays.\n"
-        "- **Enhanced Typography & Padding**: Carefully proportioned title, artist, and format tags with smooth anti-aliased font rendering and zero text clipping.\n\n"
-        "### 📦 Collapsible Batch Controls Drawer\n"
-        "- **Drawer Architecture**: Transformed the bulky batch download block into a clean, collapsible drawer with an instant toggle (`Batch Options ▾` / `▴`).\n"
-        "- **One-Click Batch Presets**: Instant batch count selection buttons (`25`, `50`, `100`, `200`, `All Pending`) alongside a smooth custom SpinBox.\n"
-        "- **Single-Row Action Bar**: Core download actions (`Download Batch`, `Download Selected`, `Pause`, `Stop`, `Reset`) now align compactly in a single 38px toolbar.\n\n"
-        "### 🧩 Unified Single-Row Navigation & Search\n"
-        "- **Playlists View**: Merged back navigation, playlist thumbnail, metadata stats, progress bar, and export actions into a sleek 50px header.\n"
-        "- **Queue View**: Integrated title, Spotify URL input, Enqueue button, and Open Folder trigger into a unified 32px top bar.\n"
-        "- **Completed Library**: Combined tab switchers (*All Songs*, *Playlists*, *Albums*), status stats, search query input, and format dropdowns into a unified single-row controls bar.\n\n"
-        "### 🎵 Compact 72px Floating Player Dock\n"
-        "- **Screen Real Estate Reclaimed**: Compacted bottom player bar height from 88px to 72px with 44x44 cover art, maximizing table space while keeping all seeking, volume, and playback controls immediately accessible.\n\n"
+        "# 🚀 Flacify v1.6.2 Release Notes\n\n"
+        "### 🔊 High-Fidelity EBU R128 Volume Boost & Loudness Balancing\n"
+        "- **Automatic & Batch Loudness Normalization (`-9.0 LUFS`)**: Quiet or unevenly mastered tracks are now automatically boosted and balanced to a uniform, punchy `-9.0 LUFS` target using EBU R128 integrated loudness measurement.\n"
+        "- **Zero-Distortion Lookahead Brickwall Limiter**: Uses a 5ms lookahead peak limiter (`alimiter=limit=0.95`) at `-0.4 dBFS` so quiet songs gain +4 dB to +9 dB of clean loudness without digital clipping or inter-sample distortion.\n"
+        "- **100% Metadata, 640x640 Cover Art & Lyrics Preservation**: Snapshots and restores all ID3v2.3/Vorbis/MP4 tags, embedded cover art, synchronized `.lrc` lyrics, and genres during normalization, while stamping `REPLAYGAIN_TRACK_GAIN` and `FLACIFY_NORMALIZED` tags.\n"
+        "- **One-Click Library & Track Volume Controls**: Added **Boost & Balance All Songs Volume** in *Settings -> Library Maintenance*, an **Auto-Boost & Balance Audio Volume (EBU R128)** toggle in *Settings -> Tagging*, and a right-click **Boost & Balance Track Volume** context menu option in the *Completed Library*.\n"
+        "- **Persistent Player Volume**: Upgraded the built-in player default volume to `100%` and persisted volume slider changes across sessions.\n\n"
+        "### 🎯 Japanese Katakana, Full-Width Unicode & Studio Take Resolution Fixes\n"
+        "- **Cross-Script Katakana & Full-Width Normalization**: Added full-width ASCII (`\uFF01-\uFF5E`, `＊`, `（`, `）`, `〜`) normalization and a cross-script Katakana/Romaji `phonetic_skeleton` matcher in both `MeloBotEngine` and `YtdlpEngine` (resolving tracks like `ORANGE RANGE - ＊〜アスタリスク〜（アルバムバージョン）` against `*Asterisk` / `＊～アスタリスク～`).\n"
+        "- **Japanese Quotation Bracket Preservation**: Fixed a regex bug in `YtdlpEngine._score_candidate` where Japanese title brackets (`「...」`, `『...』`) were inadvertently stripped as parenthetical noise.\n"
+        "- **Studio Take & Version Disambiguation**: Stripped non-searchable version suffixes (`(アルバムバージョン)`, `(Album Version)`, `(Single Version)`, `- Take 1`, `- Prise 1`) from search queries while expanding duration tolerance (`36s`) for multi-take archival recordings (resolving tracks like `Jacques Brel - Jaurès - Take 1`).\n"
+        "- **MeloBot Quality Button Loop Fix**: Fixed an infinite re-click loop in `MeloBotEngine._async_query_melobot` where a duration mismatch on an audio delivery did not clear `last_clicked_msg`, eliminating 45-second timeouts.\n\n"
+        "### 🛠️ Stability & Codebase Bug Fixes\n"
+        "- **Windows UTF-8 Subprocess Decoding**: Fixed `UnicodeDecodeError` crashes in background FFmpeg reader threads (`core/transcoder.py` and `core/utils.py`) when processing files with Japanese, Persian, or French metadata on Windows (`cp1252`).\n"
+        "- **Missing ReplayGain Batch Method**: Implemented `ArchiveManager.retag_all_library_replaygain` in `core/archive.py` and fixed a duplicate button reference in `SettingsView`.\n"
+        "- **SQLite Resource Leak Fix**: Ensured all `sqlite3.Connection` handles in `ArchiveManager.resolve_collection_cover` are deterministically closed via `contextlib.closing`.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.6.1.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.6.1.exe`\n"
+        "Download and run **`Flacify_Setup_v1.6.2.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.6.2.exe`\n"
     )
 
     token = get_github_token()
@@ -91,7 +93,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.6.1.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.6.2.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")

@@ -661,6 +661,17 @@ class CascadingAudioEngine:
         except Exception as e_verify:
             logger.debug(f"Post-tag verification check: {e_verify}")
 
+        # Automatic EBU R128 Loudness Boost & Balancing (preserves all tags, cover art, and lyrics)
+        if config.get("download.normalize_volume", True) and not (cancel_check and cancel_check()):
+            if status_callback:
+                status_callback("Balancing Volume")
+            try:
+                from core.utils import normalize_audio_loudness
+                target_lufs = float(config.get("download.target_lufs", -9.0) or -9.0)
+                normalize_audio_loudness(final_file_path, target_lufs=target_lufs)
+            except Exception as e_norm:
+                logger.warning(f"Volume normalization skipped for '{track.title}': {e_norm}")
+
         if status_callback:
             status_callback("Completed")
 

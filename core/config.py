@@ -76,11 +76,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "proxy": "",
         "generate_m3u8": True,
         "replaygain_tagging": False,
+        "normalize_volume": True,
+        "target_lufs": -9.0,
         "target_format": "original",
     },
     "ui": {
         "theme": "Dark",
         "clipboard_auto_detect": True,
+        "player_volume": 100,
     },
 }
 

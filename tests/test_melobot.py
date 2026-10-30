@@ -457,6 +457,105 @@ class TestMeloBotIntegration(unittest.TestCase):
         time.sleep(0.15)
         self.assertTrue(cancelled_flag[0])
 
+    def test_japanese_katakana_and_fullwidth_resolution(self):
+        from core.ytdlp_engine import YtdlpEngine
+        from core.utils import normalize_special_unicode, romanize_katakana, phonetic_skeleton
+
+        raw_title = "＊〜アスタリスク〜（アルバムバージョン）"
+        norm_u = normalize_special_unicode(raw_title)
+        self.assertEqual(norm_u, "*~アスタリスク~(アルバムバージョン)")
+        self.assertEqual(phonetic_skeleton("＊〜アスタリスク〜"), phonetic_skeleton("*Asterisk"))
+        self.assertIn("asutarisuku", romanize_katakana("アスタリスク"))
+
+        yt_engine = YtdlpEngine()
+        core_title, feat, flags = yt_engine._clean_title_for_search(raw_title)
+        self.assertEqual(core_title, "*~アスタリスク~")
+        self.assertEqual(flags.get("subtitle", ""), "")
+
+        # Official Sony Music YouTube delivery with Romaji/English title '*Asterisk'
+        cand_official = {
+            "id": "46DtSMqE3e8",
+            "title": "*Asterisk",
+            "uploader": "ORANGE RANGE",
+            "duration": 256,
+            "description": "Provided to YouTube by Sony Music Labels Inc.\n\n*Asterisk · ORANGE RANGE\n\n* Asterisk\n\n℗ 2005 Sony Music Labels Inc."
+        }
+        score_off, reason_off = yt_engine._score_candidate(
+            cand=cand_official,
+            all_artists=["ORANGE RANGE"],
+            core_title=core_title,
+            raw_title=raw_title,
+            flags=flags,
+            target_dur=256.066
+        )
+        self.assertGreater(score_off, 100.0, f"Expected high score for official *Asterisk delivery, got {score_off} ({reason_off})")
+
+        # Japanese quotation brackets candidate '「＊〜アスタリスク〜」ORANGE RANGE'
+        cand_jp_quotes = {
+            "id": "v29Dx96995A",
+            "title": "「＊〜アスタリスク〜」ORANGE RANGE",
+            "uploader": "ORANGE RANGE Official",
+            "duration": 255,
+            "description": "ORANGE RANGE"
+        }
+        score_jp, reason_jp = yt_engine._score_candidate(
+            cand=cand_jp_quotes,
+            all_artists=["ORANGE RANGE"],
+            core_title=core_title,
+            raw_title=raw_title,
+            flags=flags,
+            target_dur=256.066
+        )
+        self.assertGreater(score_jp, 80.0, f"Expected positive score for Japanese quoted title, got {score_jp} ({reason_jp})")
+
+        # MeloBot candidate scoring for ORANGE RANGE
+        melo_engine = MeloBotEngine(session_name="test_dummy_unauth_session")
+        track_orange = TrackMetadata(
+            id="5SGXscLlCZeIGfrirRiodQ",
+            title=raw_title,
+            artists=["ORANGE RANGE"],
+            album="ИATURAL",
+            duration_ms=256066
+        )
+        self.assertGreater(melo_engine._score_candidate("🎵 ORANGE RANGE, *~Asterisk~", track_orange), 80.0)
+        self.assertGreater(melo_engine._score_candidate("🎵 ORANGE RANGE, ＊〜アスタリスク〜", track_orange), 80.0)
+
+    def test_studio_take_and_diacritic_resolution(self):
+        from core.ytdlp_engine import YtdlpEngine
+
+        raw_title = "Jaurès - Take 1"
+        yt_engine = YtdlpEngine()
+        core_title, feat, flags = yt_engine._clean_title_for_search(raw_title)
+        self.assertEqual(core_title, "Jaurès")
+
+        cand_brel = {
+            "id": "dieN6yJL2M0",
+            "title": "Jaurès",
+            "uploader": "Jacques Brel - Topic",
+            "duration": 219,
+            "description": "Provided to YouTube by Universal Music Group\n\nJaurès · Jacques Brel\n\nLes Marquises\n\n℗ 1977 Barclay"
+        }
+        score_brel, reason_brel = yt_engine._score_candidate(
+            cand=cand_brel,
+            all_artists=["Jacques Brel"],
+            core_title=core_title,
+            raw_title=raw_title,
+            flags=flags,
+            target_dur=191.92
+        )
+        self.assertGreater(score_brel, 90.0, f"Expected high score for Jacques Brel Jaurès, got {score_brel} ({reason_brel})")
+
+        melo_engine = MeloBotEngine(session_name="test_dummy_unauth_session")
+        track_brel = TrackMetadata(
+            id="5Ld4gtSBYRvs92TYB8zK2S",
+            title=raw_title,
+            artists=["Jacques Brel"],
+            album="Les Marquises",
+            duration_ms=191920
+        )
+        self.assertGreater(melo_engine._score_candidate("🎵 Jacques Brel, Jaurès", track_brel), 100.0)
+        self.assertGreater(melo_engine._score_candidate("🎵 Jacques Brel, Jaures", track_brel), 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()

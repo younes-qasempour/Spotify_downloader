@@ -967,11 +967,11 @@ class SettingsView(QScrollArea):
         clean_info.addWidget(clean_title)
         clean_info.addWidget(clean_desc)
 
-        self.clean_lib_btn = PushButton(FluentIcon.DELETE, "Clean Library", down_card)
-        self.clean_lib_btn.clicked.connect(self._clean_library)
+        self.clean_lib_top_btn = PushButton(FluentIcon.DELETE, "Clean Library", down_card)
+        self.clean_lib_top_btn.clicked.connect(self._clean_library)
 
         clean_row.addLayout(clean_info, 1)
-        clean_row.addWidget(self.clean_lib_btn)
+        clean_row.addWidget(self.clean_lib_top_btn)
         d_layout.addLayout(clean_row)
 
         main_layout.addWidget(down_card)
@@ -1076,6 +1076,29 @@ class SettingsView(QScrollArea):
         m3u_row.addLayout(m3u_info, 1)
         m3u_row.addWidget(self.m3u_switch)
         t_layout.addLayout(m3u_row)
+
+        # Auto-Boost & Balance Audio Volume (EBU R128) switch
+        norm_row = QHBoxLayout()
+        norm_info = QVBoxLayout()
+        norm_title = BodyLabel("Auto-Boost & Balance Audio Volume (EBU R128)", tag_card)
+        norm_title.setStyleSheet("font-weight: bold;")
+        norm_desc = CaptionLabel(
+            "Automatically boosts quiet songs and balances loud tracks to a uniform, punchy -9.0 LUFS master level "
+            "using transparent 5ms lookahead true-peak limiting (-0.4 dBFS) with zero clipping or metadata loss.",
+            tag_card
+        )
+        norm_desc.setTextColor(TEXT_SECONDARY, TEXT_SECONDARY)
+        norm_desc.setWordWrap(True)
+        norm_info.addWidget(norm_title)
+        norm_info.addWidget(norm_desc)
+
+        self.norm_vol_switch = SwitchButton(tag_card)
+        self.norm_vol_switch.setChecked(config.get("download.normalize_volume", True))
+        self.norm_vol_switch.checkedChanged.connect(lambda v: config.set("download.normalize_volume", v))
+
+        norm_row.addLayout(norm_info, 1)
+        norm_row.addWidget(self.norm_vol_switch)
+        t_layout.addLayout(norm_row)
 
         # ReplayGain 2.0 Normalization Tagging switch
         rg_row = QHBoxLayout()
@@ -1187,9 +1210,13 @@ class SettingsView(QScrollArea):
         self.clean_lib_btn = PushButton(FluentIcon.DELETE, "Clean Corrupt Files & Cache", maint_card)
         self.clean_lib_btn.clicked.connect(self._clean_library)
 
+        self.boost_vol_btn = PrimaryPushButton(FluentIcon.VOLUME, "Boost & Balance All Songs Volume", maint_card)
+        self.boost_vol_btn.clicked.connect(self._boost_library_volume)
+
         self.batch_replaygain_btn = PushButton(FluentIcon.MIX_VOLUMES, "Calculate ReplayGain 2.0", maint_card)
         self.batch_replaygain_btn.clicked.connect(self._batch_replaygain)
 
+        btn_row.addWidget(self.boost_vol_btn)
         btn_row.addWidget(self.repair_lib_btn)
         btn_row.addWidget(self.retag_genres_btn)
         btn_row.addWidget(self.clean_lib_btn)
@@ -1778,6 +1805,9 @@ class SettingsView(QScrollArea):
         from core.archive import ArchiveManager
         self.clean_lib_btn.setEnabled(False)
         self.clean_lib_btn.setText("Cleaning...")
+        if hasattr(self, "clean_lib_top_btn"):
+            self.clean_lib_top_btn.setEnabled(False)
+            self.clean_lib_top_btn.setText("Cleaning...")
 
         def worker():
             try:
@@ -1797,6 +1827,9 @@ class SettingsView(QScrollArea):
     def _on_clean_finished(self, success: bool, msg: str):
         self.clean_lib_btn.setEnabled(True)
         self.clean_lib_btn.setText("Clean Corrupt Files & Cache")
+        if hasattr(self, "clean_lib_top_btn"):
+            self.clean_lib_top_btn.setEnabled(True)
+            self.clean_lib_top_btn.setText("Clean Library")
         if success:
             InfoBar.success("Library Cleaned", msg, duration=5000, parent=self)
         else:
@@ -1902,4 +1935,39 @@ class SettingsView(QScrollArea):
             InfoBar.success("ReplayGain 2.0 Complete", msg, duration=5000, parent=self)
         else:
             InfoBar.error("ReplayGain Error", f"Failed to calculate ReplayGain: {msg}", duration=5000, parent=self)
+
+    def _boost_library_volume(self):
+        from core.archive import ArchiveManager
+        self.boost_vol_btn.setEnabled(False)
+        self.boost_vol_btn.setText("Boosting & Balancing Volume...")
+        self.maint_status_label.setText("Measuring & normalizing audio loudness across library (-9.0 LUFS EBU R128)...")
+
+        def progress_cb(cur: int, total: int, msg: str):
+            QTimer.singleShot(0, lambda: safe_invoke(self.maint_status_label.setText, f"[{cur}/{total}] {msg}"))
+
+        def worker():
+            try:
+                arc = ArchiveManager()
+                target_lufs = float(config.get("download.target_lufs", -9.0) or -9.0)
+                workers = min(12, max(4, (os.cpu_count() or 4)))
+                stats = arc.normalize_all_library_tracks(target_lufs=target_lufs, max_workers=workers, progress_callback=progress_cb)
+                msg = (
+                    f"Volume boost & balance complete: {stats['scanned']} tracks processed — "
+                    f"{stats['boosted']} boosted, {stats['attenuated']} balanced, "
+                    f"{stats['already_balanced']} already optimal ({stats['errors']} skipped)."
+                )
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_boost_volume_finished, True, msg))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: safe_invoke(self._on_boost_volume_finished, False, str(e)))
+
+        threading.Thread(target=worker, daemon=True, name="VolumeBoostWorker").start()
+
+    def _on_boost_volume_finished(self, success: bool, msg: str):
+        self.boost_vol_btn.setEnabled(True)
+        self.boost_vol_btn.setText("Boost & Balance All Songs Volume")
+        self.maint_status_label.setText(msg)
+        if success:
+            InfoBar.success("Library Volume Boosted & Balanced", msg, duration=6000, parent=self)
+        else:
+            InfoBar.error("Volume Normalization Error", f"Failed to normalize library volume: {msg}", duration=5000, parent=self)
 

@@ -12,7 +12,8 @@ from core.spotify_client import TrackMetadata
 from core.utils import (
     clean_watermarks, format_bytes, ensure_ffmpeg,
     PERSIAN_ARTIST_ALIASES, PERSIAN_TITLE_MAPPINGS, is_persian_or_arabic, transliterate_persian,
-    consonant_skeleton, normalize_special_unicode
+    consonant_skeleton, normalize_special_unicode,
+    has_katakana, romanize_katakana, phonetic_skeleton
 )
 from core.config import config
 from core.paths import get_app_data_dir, get_resource_path
@@ -197,7 +198,9 @@ class YtdlpEngine:
             sub_lower = sub_cand.lower()
             excluded_sub = (
                 "feat", "ft.", "with", "remaster", "live", "mix", "remix", "edit", "acoustic",
-                "version", "instrumental", "karaoke", "op", "ed", "ost", "theme", "soundtrack",
+                "version", "ver.", "ver ", "take", "prise", "single", "album", "original", "studio",
+                "アルバムバージョン", "シングルバージョン", "バージョン", "chinese", "japanese", "english", "korean",
+                "instrumental", "karaoke", "op", "ed", "ost", "theme", "soundtrack",
                 "deluxe", "bonus", "vol", "edition", "part", "pt.", "die verurteilten", "shawshank"
             )
             if not any(k in sub_lower for k in excluded_sub) and not re.match(r'^(?:19|20)\d{2}$', sub_cand):
@@ -262,6 +265,11 @@ class YtdlpEngine:
 
         # Strip classical version / edition / year / catalogue parentheticals like (2nd version, 1877), (1877 Version), (Ed. Nowak)
         core = re.sub(r'[\(\[]\s*(?:\d+(?:st|nd|rd|th)?\s+version(?:\s*,\s*\d{4})?|\d{4}\s+version|version\s*,\s*\d{4}|ed\.?\s+[^\)\]]+|edition\b[^\)\]]*)\s*[\)\]]', '', core, flags=re.IGNORECASE)
+
+        # Strip album/single/original/studio versions, Japanese version tags (アルバムバージョン), and studio Take/Prise numbers
+        ver_take_pat = r'(?:album\s*(?:version|ver\.?)|single\s*(?:version|ver\.?)|original\s*(?:version|ver\.?)|studio\s*(?:version|ver\.?)|アルバム・?バージョン|シングル・?バージョン|オリジナル・?バージョン|take\s*\d+|prise\s*\d+|alternate\s+take|bonus\s+track)'
+        core = re.sub(rf'[\(\[]\s*{ver_take_pat}\s*[\)\]]', '', core, flags=re.IGNORECASE)
+        core = re.sub(rf'[\-\–\—]\s*{ver_take_pat}\s*$', '', core, flags=re.IGNORECASE)
 
         # Strip foreign movie titles in parentheses like (Die Verurteilten)
         core = re.sub(r'[\(\[]\s*(?:die\s+verurteilten|shawshank|soundtrack|ost|score|theme)\b[^\)\]]*[\)\]]', '', core, flags=re.IGNORECASE)
@@ -419,11 +427,12 @@ class YtdlpEngine:
                     break
 
         # Strip standard publication and subtitle tags
-        cand_core = re.sub(r'[\(\[]\s*(?:official\s+)?(?:music\s+)?(?:audio|video|lyrics?|hd|4k|visualizer|kurdish\s+subtitle|persian\s+subtitle|farsi\s+sub|english\s+translation)\s*[\)\]]', '', cand_title_clean, flags=re.IGNORECASE)
-        cand_core = re.sub(r'[\-\–\—]\s*(?:official\s+)?(?:music\s+)?(?:audio|video|lyrics?|hd|4k|visualizer)\s*$', '', cand_core, flags=re.IGNORECASE)
+        cand_core = re.sub(r'[\(\[【]\s*(?:official\s+)?(?:music\s+)?(?:audio|video|mv|pv|lyrics?|hd|4k|visualizer|期間限定|フル|short\s*ver\.?|kurdish\s+subtitle|persian\s+subtitle|farsi\s+sub|english\s+translation)[^\)\]】]*[\)\]】]', '', cand_title_clean, flags=re.IGNORECASE)
+        cand_core = re.sub(r'[\-\–\—]\s*(?:official\s+)?(?:music\s+)?(?:audio|video|mv|pv|lyrics?|hd|4k|visualizer)\s*$', '', cand_core, flags=re.IGNORECASE)
         cand_core = re.sub(r'[\(\[]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?\s*[\)\]]', '', cand_core, flags=re.IGNORECASE)
         cand_core = re.sub(r'[\-\–\—]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?\s*$', '', cand_core, flags=re.IGNORECASE)
-        cand_core = re.sub(r'[\(\[『「].*?[\)\]』」]', '', cand_core).strip()
+        cand_core = re.sub(r'[\(\[【].*?[\)\]】]', '', cand_core)
+        cand_core = cand_core.replace('『', ' ').replace('』', ' ').replace('「', ' ').replace('」', ' ').strip()
 
         norm_cand_core = self._normalize_text(cand_core)
 
@@ -444,6 +453,25 @@ class YtdlpEngine:
             best_sim = max(best_sim, trans_sim, skel_sim)
 
         skel_matched = bool(core_skel and len(core_skel) >= 3 and (core_skel in cand_skel or (raw_skel and len(raw_skel) >= 3 and raw_skel in cand_skel)))
+
+        # Cross-script Katakana / Romaji phonetic skeleton matching (e.g. '＊〜アスタリスク〜' <-> '*Asterisk')
+        if has_katakana(core_title) or has_katakana(cand_title):
+            core_phon = phonetic_skeleton(core_title)
+            cand_phon = phonetic_skeleton(cand_core)
+            cand_full_phon = phonetic_skeleton(cand_title)
+            if core_phon and len(core_phon) >= 3 and (
+                core_phon == cand_phon
+                or core_phon in cand_phon
+                or (len(cand_phon) >= 3 and cand_phon in core_phon)
+                or core_phon in cand_full_phon
+            ):
+                skel_matched = True
+                best_sim = max(best_sim, 0.92)
+            else:
+                rom_core = self._normalize_text(romanize_katakana(core_title))
+                rom_cand = self._normalize_text(romanize_katakana(cand_core))
+                if rom_core and rom_cand:
+                    best_sim = max(best_sim, difflib.SequenceMatcher(None, rom_core, rom_cand).ratio())
 
         # 4. Artist verification
         artist_in_channel = any(a in uploader_norm for a in norm_artists)
@@ -550,6 +578,12 @@ class YtdlpEngine:
                         return True
                     if len(w_skel) >= 4 and (w_skel in cw_skel or cw_skel in w_skel):
                         return True
+            w_phon = phonetic_skeleton(target_w)
+            if len(w_phon) >= 3:
+                for cw in all_cand_words:
+                    cw_phon = phonetic_skeleton(cw)
+                    if w_phon == cw_phon or (len(w_phon) >= 4 and (w_phon in cw_phon or cw_phon in w_phon)):
+                        return True
             return False
 
         desc_words = set(desc_norm.split())
@@ -586,9 +620,13 @@ class YtdlpEngine:
         # Base title score (max 50)
         if norm_core == norm_cand_core or norm_core in norm_cand_core or norm_raw in norm_cand_core or norm_core in cand_title_norm or norm_raw in cand_title_norm or best_sim >= 0.85:
             title_score = 50.0
+            if skel_matched:
+                sig_missing = []
+                sig_extra = [w for w in sig_extra if not _word_in_cand(w)]
         elif skel_matched and diff <= 12.0:
             title_score = 48.0
             sig_missing = []
+            sig_extra = [w for w in sig_extra if not _word_in_cand(w)]
         elif (is_official_delivery or is_topic_channel or is_official_channel) and (artist_in_desc or artist_in_channel or artist_in_title) and diff <= 3.0:
             title_score = 48.0
         else:
@@ -647,7 +685,7 @@ class YtdlpEngine:
             title_score -= len(sig_extra) * 8.0
 
         # Resilient safety net for verified official releases / topic channels / labels with close duration
-        if title_score < 10.0 and (is_official_delivery or (is_topic_channel and artist_in_channel) or (persian_artist_matched and is_persian_label)) and diff <= 4.0:
+        if title_score < 20.0 and (is_official_delivery or (is_topic_channel and artist_in_channel) or (persian_artist_matched and is_persian_label)) and diff <= 4.0:
             title_score = 45.0
             sig_missing = []
             sig_extra = []
@@ -890,11 +928,12 @@ class YtdlpEngine:
                         if flags.get("subtitle"):
                             queries.append(f'ytsearch5:{alias} {flags["subtitle"]}')
 
-        # Add album-assisted queries
+        # Add album-assisted queries (excluding generic placeholder album names)
         if track.album:
             clean_alb = re.sub(r'[\(\[].*?[\)\]]', '', track.album).strip()
             clean_alb = clean_watermarks(clean_alb).strip()
-            if clean_alb and len(clean_alb) > 2 and clean_alb.lower() != core_title.lower():
+            ignored_albums = ("unknown", "unknown album", "single", "singles", "spotify playlist", "playlist", "downloads", "liked songs")
+            if clean_alb and len(clean_alb) > 2 and clean_alb.lower() != core_title.lower() and clean_alb.lower() not in ignored_albums:
                 queries.append(f'ytsearch5:{artist} {clean_alb} {core_title}')
                 queries.append(f'ytsearch5:{clean_alb} {core_title}')
                 queries.append(f'ytsearch5:{core_title} {clean_alb}')

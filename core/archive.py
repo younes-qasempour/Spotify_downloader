@@ -4,7 +4,7 @@ import sqlite3
 import threading
 import logging
 import shutil
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from typing import Optional, List, Dict, Any, Callable, Tuple, Generator
 from pathlib import Path
 
@@ -89,7 +89,7 @@ def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = 
     try:
         db_p = get_archive_db_path()
         if os.path.isfile(db_p):
-            with sqlite3.connect(str(db_p), timeout=5.0) as conn:
+            with closing(sqlite3.connect(str(db_p), timeout=5.0)) as conn:
                 row = conn.execute(
                     "SELECT cover_url FROM saved_playlists WHERE LOWER(name) = LOWER(?) AND cover_url IS NOT NULL AND cover_url != '' LIMIT 1",
                     (candidate_name,)
@@ -2682,6 +2682,143 @@ class ArchiveManager:
                 stats["errors"] += 1
 
         logger.info(f"Library Genre Retag completed: {stats}")
+        return stats
+
+    def normalize_all_library_tracks(
+        self,
+        root_dir: str = "",
+        target_lufs: float = -9.0,
+        max_workers: int = 8,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None
+    ) -> Dict[str, int]:
+        """
+        Scans all downloaded audio files in the library and boosts/balances their loudness
+        to `target_lufs` (default -9.0 LUFS) using EBU R128 measurement and lookahead peak limiting
+        while preserving 100% of embedded cover artwork, lyrics, genres, and metadata tags.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from core.utils import normalize_audio_loudness
+
+        if not root_dir:
+            root_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
+            if not os.path.isabs(root_dir):
+                root_dir = os.path.normpath(os.path.join(str(get_default_download_dir()), root_dir))
+
+        stats = {
+            "scanned": 0,
+            "boosted": 0,
+            "attenuated": 0,
+            "already_balanced": 0,
+            "errors": 0
+        }
+
+        if not os.path.isdir(root_dir):
+            return stats
+
+        audio_files: List[str] = []
+        for root, _dirs, files in os.walk(root_dir):
+            if os.path.basename(root).lower() in ("lyrics", "cache", "logs", "bin"):
+                continue
+            for fname in files:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in (".flac", ".opus", ".mp3", ".m4a", ".ogg") and not fname.endswith(".part") and ".norm_tmp" not in fname:
+                    audio_files.append(os.path.join(root, fname))
+
+        total_files = len(audio_files)
+        if total_files == 0:
+            return stats
+
+        logger.info(f"Starting Library Volume Boost & Balance ({target_lufs:.1f} LUFS) across {total_files} tracks in: {root_dir}")
+
+        def _process_one(fpath: str) -> Tuple[str, Optional[Tuple[float, float]]]:
+            if cancel_check and cancel_check():
+                return fpath, None
+            res = normalize_audio_loudness(fpath, target_lufs=target_lufs)
+            return fpath, res
+
+        completed_idx = 0
+        with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+            futures = {pool.submit(_process_one, fp): fp for fp in audio_files}
+            for fut in as_completed(futures):
+                if cancel_check and cancel_check():
+                    break
+                completed_idx += 1
+                stats["scanned"] += 1
+                fp = futures[fut]
+                bname = os.path.basename(fp)
+                try:
+                    _, result = fut.result()
+                    if result is None:
+                        stats["errors"] += 1
+                        status_txt = f"Skipped {bname}"
+                    else:
+                        orig_lufs, gain_db = result
+                        if abs(gain_db) < 0.05:
+                            stats["already_balanced"] += 1
+                            status_txt = f"Balanced: {bname}"
+                        elif gain_db > 0:
+                            stats["boosted"] += 1
+                            status_txt = f"Boosted {bname} ({gain_db:+.1f} dB)"
+                        else:
+                            stats["attenuated"] += 1
+                            status_txt = f"Balanced {bname} ({gain_db:+.1f} dB)"
+                except Exception as e:
+                    logger.debug(f"Volume normalization worker error on {fp}: {e}")
+                    stats["errors"] += 1
+                    status_txt = f"Error on {bname}"
+
+                if progress_callback:
+                    progress_callback(completed_idx, total_files, status_txt)
+
+        logger.info(f"Library Volume Boost & Balance completed: {stats}")
+        return stats
+
+    def retag_all_library_replaygain(
+        self,
+        root_dir: str = "",
+        progress_callback: Optional[Callable[[int, int, str], None]] = None
+    ) -> Dict[str, int]:
+        """
+        Calculates EBU R128 ReplayGain 2.0 tags and embeds them across all audio files in the library.
+        """
+        from core.tagger import AudioTagger
+        from core.utils import calculate_replaygain
+
+        if not root_dir:
+            root_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
+            if not os.path.isabs(root_dir):
+                root_dir = os.path.normpath(os.path.join(str(get_default_download_dir()), root_dir))
+
+        stats = {"scanned": 0, "calculated": 0, "errors": 0}
+        if not os.path.isdir(root_dir):
+            return stats
+
+        tagger = AudioTagger()
+        audio_files: List[str] = []
+        for root, _dirs, files in os.walk(root_dir):
+            if os.path.basename(root).lower() in ("lyrics", "cache", "logs", "bin"):
+                continue
+            for fname in files:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in (".flac", ".opus", ".mp3", ".m4a", ".ogg") and not fname.endswith(".part"):
+                    audio_files.append(os.path.join(root, fname))
+
+        total_files = len(audio_files)
+        for idx, fpath in enumerate(audio_files, 1):
+            stats["scanned"] += 1
+            bname = os.path.basename(fpath)
+            if progress_callback:
+                progress_callback(idx, total_files, f"Analyzing {bname}")
+            try:
+                rg = calculate_replaygain(fpath)
+                if rg and tagger.tag_replaygain(fpath, rg[0], rg[1]):
+                    stats["calculated"] += 1
+                else:
+                    stats["errors"] += 1
+            except Exception:
+                stats["errors"] += 1
+
         return stats
 
 

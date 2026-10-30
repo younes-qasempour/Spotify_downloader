@@ -1117,6 +1117,7 @@ class CompletedView(QWidget):
 
         m3u_act = menu.addAction("Export Playlist (.m3u8)...")
         details_act = menu.addAction("View Metadata & Genres")
+        boost_vol_act = menu.addAction("Boost & Balance Track Volume")
         rg_act = menu.addAction("Calculate ReplayGain 2.0")
         menu.addSeparator()
         delete_act = menu.addAction("Remove from Archive Only")
@@ -1189,6 +1190,11 @@ class CompletedView(QWidget):
             self._export_m3u_playlist()
         elif action == details_act:
             self._show_track_details_dialog(item)
+        elif action == boost_vol_act:
+            if item.output_path and os.path.isfile(item.output_path):
+                self._boost_track_volume_single(item)
+            else:
+                InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == rg_act:
             if item.output_path and os.path.isfile(item.output_path):
                 self._apply_replaygain_single(item)
@@ -1198,6 +1204,36 @@ class CompletedView(QWidget):
             self.archive.delete_track(item.track.id)
             self.reload_all()
             InfoBar.info("Removed", f"Removed '{item.track.title}' from archive.", duration=2500, parent=self)
+
+    def _boost_track_volume_single(self, item: QueueItem):
+        """Boosts and balances loudness on a single track using EBU R128 + lookahead limiter."""
+        fpath = item.output_path
+        title = item.track.title
+        InfoBar.info("Boosting & Balancing Volume", f"Normalizing volume for '{title}' (-9.0 LUFS)...", duration=3000, parent=self)
+
+        def worker():
+            from core.utils import normalize_audio_loudness
+            try:
+                target_lufs = float(config.get("download.target_lufs", -9.0) or -9.0)
+                res = normalize_audio_loudness(fpath, target_lufs=target_lufs, force=True)
+                if res:
+                    orig_lufs, gain_db = res
+                    QTimer.singleShot(
+                        0,
+                        lambda: safe_invoke(
+                            InfoBar.success,
+                            "Volume Boosted & Balanced",
+                            f"'{title}': {orig_lufs:.1f} LUFS -> {target_lufs:.1f} LUFS (gain {gain_db:+.1f} dB)",
+                            duration=4500,
+                            parent=self
+                        )
+                    )
+                else:
+                    QTimer.singleShot(0, lambda: safe_invoke(InfoBar.warning, "Normalization Skipped", f"Could not normalize '{title}'.", duration=4000, parent=self))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: safe_invoke(InfoBar.error, "Volume Error", str(e), duration=4000, parent=self))
+
+        threading.Thread(target=worker, daemon=True, name=f"BoostVol_{item.track.id}").start()
 
     def _apply_replaygain_single(self, item: QueueItem):
         """Calculates and tags EBU R128 ReplayGain on a single track in background."""
