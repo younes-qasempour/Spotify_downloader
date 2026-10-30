@@ -253,6 +253,8 @@ class ArchiveManager:
                         "ALTER TABLE saved_playlist_tracks ADD COLUMN quality_badge TEXT DEFAULT '';",
                         "ALTER TABLE saved_playlist_tracks ADD COLUMN source_type TEXT DEFAULT '';",
                         "ALTER TABLE saved_playlist_tracks ADD COLUMN genre TEXT DEFAULT '';",
+                        "ALTER TABLE saved_playlists ADD COLUMN auto_sync INTEGER DEFAULT 0;",
+                        "ALTER TABLE saved_playlists ADD COLUMN last_synced_at TIMESTAMP;",
                     ]:
                         try:
                             conn.execute(col_stmt)
@@ -2037,6 +2039,15 @@ class ArchiveManager:
             updated_tracks = self.get_saved_playlist_tracks(playlist_id)
             after_count = len(updated_tracks)
             delta_tracks = [t for t in new_tracks if t.id not in existing_ids]
+            try:
+                with self.connection() as conn:
+                    with conn:
+                        conn.execute(
+                            "UPDATE saved_playlists SET last_synced_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (playlist_id,)
+                        )
+            except Exception:
+                pass
             logger.info(f"Synced playlist '{name}': {added_count} new track(s) added, {removed_count} removed, total {after_count}.")
             return {
                 "added": added_count,
@@ -2045,6 +2056,26 @@ class ArchiveManager:
                 "delta_tracks": delta_tracks
             }
 
+    def set_playlist_auto_sync(self, playlist_id: str, enabled: bool) -> bool:
+        """Pins or unpins a saved playlist for scheduled background Auto-Sync ('Watch Playlist')."""
+        if not playlist_id:
+            return False
+        try:
+            with self.connection() as conn:
+                with conn:
+                    conn.execute(
+                        "UPDATE saved_playlists SET auto_sync = ? WHERE id = ?",
+                        (1 if enabled else 0, playlist_id)
+                    )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set auto_sync on playlist {playlist_id}: {e}")
+            return False
+
+    def get_watched_playlists(self) -> List[Dict[str, Any]]:
+        """Returns all saved playlists that have Auto-Sync ('Watch Playlist') enabled."""
+        return [p for p in self.get_saved_playlists() if p.get("auto_sync") and p.get("spotify_url")]
+
     def get_saved_playlists(self) -> List[Dict[str, Any]]:
         """Returns all saved playlists with aggregate statistics."""
         try:
@@ -2052,13 +2083,14 @@ class ArchiveManager:
                 query = """
                     SELECT 
                         p.id, p.name, p.spotify_url, p.cover_url, p.total_tracks, p.created_at, p.updated_at,
+                        COALESCE(p.auto_sync, 0) as auto_sync, p.last_synced_at,
                         COUNT(t.id) as track_count,
                         SUM(CASE WHEN t.status = 'downloaded' THEN 1 ELSE 0 END) as downloaded_count,
                         SUM(CASE WHEN t.status != 'downloaded' THEN 1 ELSE 0 END) as pending_count
                     FROM saved_playlists p
                     LEFT JOIN saved_playlist_tracks t ON p.id = t.playlist_id
                     GROUP BY p.id
-                    ORDER BY p.updated_at DESC
+                    ORDER BY COALESCE(p.auto_sync, 0) DESC, p.updated_at DESC
                 """
                 rows = conn.execute(query).fetchall()
                 results = []
@@ -2080,6 +2112,8 @@ class ArchiveManager:
                         "downloaded_count": down,
                         "pending_count": pend,
                         "progress_percent": pct,
+                        "auto_sync": bool(r["auto_sync"]),
+                        "last_synced_at": r["last_synced_at"] or "",
                         "created_at": r["created_at"],
                         "updated_at": r["updated_at"]
                     })
@@ -2095,6 +2129,7 @@ class ArchiveManager:
                 query = """
                     SELECT 
                         p.id, p.name, p.spotify_url, p.cover_url, p.total_tracks, p.created_at, p.updated_at,
+                        COALESCE(p.auto_sync, 0) as auto_sync, p.last_synced_at,
                         COUNT(t.id) as track_count,
                         SUM(CASE WHEN t.status = 'downloaded' THEN 1 ELSE 0 END) as downloaded_count,
                         SUM(CASE WHEN t.status != 'downloaded' THEN 1 ELSE 0 END) as pending_count
@@ -2123,6 +2158,8 @@ class ArchiveManager:
                     "downloaded_count": down,
                     "pending_count": pend,
                     "progress_percent": pct,
+                    "auto_sync": bool(r["auto_sync"]),
+                    "last_synced_at": r["last_synced_at"] or "",
                     "created_at": r["created_at"],
                     "updated_at": r["updated_at"]
                 }
@@ -2820,5 +2857,388 @@ class ArchiveManager:
                 stats["errors"] += 1
 
         return stats
+
+    # -------------------------------------------------------------------------
+    # Smart Duplicate & Acoustic Fingerprint Merger + Batch Spectrum Scanner
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def _quality_rank(file_path: str, quality_badge: str = "", size_bytes: int = 0) -> Tuple[int, int]:
+        ext = os.path.splitext(file_path)[1].lower()
+        badge_up = (quality_badge or "").upper()
+        if ext == ".flac":
+            tier = 100 if "24" in badge_up else 90
+        elif ext == ".wav":
+            tier = 85
+        elif ext == ".mp3":
+            tier = 75 if "320" in badge_up else 65
+        elif ext == ".opus":
+            tier = 70
+        elif ext == ".m4a":
+            tier = 68
+        else:
+            tier = 50
+        return tier, size_bytes
+
+    def find_library_duplicates(
+        self,
+        root_dir: str = "",
+        use_acoustic_fingerprint: bool = True,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Detects duplicate songs across the library (Single vs Album releases, multiple playlist folders,
+        or multiple format downloads) using:
+        1. ISRC code matching
+        2. Canonical normalized Artist + Title + Duration matching
+        3. Acoustic Envelope Fingerprinting (64-bit energy/ZCR signature)
+        Returns a list of duplicate group dictionaries with a ranked 'master' file and 'duplicates' list.
+        """
+        from core.utils import compute_acoustic_fingerprint, fingerprint_similarity, normalize_special_unicode, phonetic_skeleton
+
+        if not root_dir:
+            root_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
+            if not os.path.isabs(root_dir):
+                root_dir = os.path.normpath(os.path.join(str(get_default_download_dir()), root_dir))
+
+        db_rows = self.get_all_tracks()
+        path_to_meta: Dict[str, Dict[str, Any]] = {}
+        for r in db_rows:
+            fp = normalize_path(r.get("file_path", ""))
+            if fp and os.path.isfile(fp):
+                entry = path_to_meta.setdefault(fp, {
+                    "file_path": fp,
+                    "title": r.get("title", ""),
+                    "artist": r.get("artist", ""),
+                    "album": r.get("album", ""),
+                    "isrc": (r.get("isrc") or "").strip().upper(),
+                    "duration_ms": int(r.get("duration_ms") or 0),
+                    "quality_badge": r.get("quality_badge", ""),
+                    "spotify_ids": [],
+                })
+                if r.get("spotify_id") and r["spotify_id"] not in entry["spotify_ids"]:
+                    entry["spotify_ids"].append(r["spotify_id"])
+
+        # Also scan disk for any audio files in root_dir not yet in path_to_meta
+        if os.path.isdir(root_dir):
+            for root, _dirs, files in os.walk(root_dir):
+                if os.path.basename(root).lower() in ("lyrics", "cache", "logs", "bin", "eq_preview", "spectrograms"):
+                    continue
+                for fname in files:
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in (".flac", ".mp3", ".opus", ".m4a", ".ogg") and not fname.endswith(".part") and ".norm_tmp" not in fname:
+                        fp = normalize_path(os.path.join(root, fname))
+                        if fp not in path_to_meta and os.path.isfile(fp):
+                            stem = os.path.splitext(fname)[0]
+                            stem = TRACK_PREFIX_PATTERN.sub("", stem).strip()
+                            artist_g, title_g = (stem.split(" - ", 1) if " - " in stem else ("Unknown Artist", stem))
+                            qb_inf, _ = self.infer_badge_from_file(fp)
+                            dur_ms = 0
+                            try:
+                                import mutagen
+                                m = mutagen.File(fp)
+                                if m and m.info:
+                                    dur_ms = int(float(getattr(m.info, "length", 0.0) or 0.0) * 1000)
+                            except Exception:
+                                pass
+                            path_to_meta[fp] = {
+                                "file_path": fp,
+                                "title": title_g.strip(),
+                                "artist": artist_g.strip(),
+                                "album": os.path.basename(root),
+                                "isrc": "",
+                                "duration_ms": dur_ms,
+                                "quality_badge": qb_inf,
+                                "spotify_ids": [],
+                            }
+
+        all_entries = list(path_to_meta.values())
+        total = len(all_entries)
+        if total < 2:
+            return []
+
+        for idx, ent in enumerate(all_entries, 1):
+            fp = ent["file_path"]
+            try:
+                st = os.stat(fp)
+                ent["size_bytes"] = st.st_size
+                ent["inode"] = (st.st_dev, st.st_ino) if st.st_ino else None
+            except Exception:
+                ent["size_bytes"] = 0
+                ent["inode"] = None
+
+            clean_t = re.sub(r'[\(\[\{].*?[\)\]\}]', '', normalize_special_unicode(ent["title"])).strip().lower()
+            clean_a = normalize_special_unicode(ent["artist"]).split(",")[0].strip().lower()
+            ent["norm_key"] = f"{phonetic_skeleton(clean_a) or clean_a}::{phonetic_skeleton(clean_t) or clean_t}"
+
+        # Union-Find clustering across all_entries
+        parent = list(range(total))
+        reasons: Dict[int, str] = {}
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def union(i: int, j: int, reason: str):
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[rj] = ri
+                reasons[ri] = reason
+
+        # Pass 1: ISRC exact match
+        isrc_map: Dict[str, int] = {}
+        for i, ent in enumerate(all_entries):
+            isrc = ent.get("isrc", "")
+            if isrc and len(isrc) >= 8:
+                if isrc in isrc_map:
+                    union(isrc_map[isrc], i, f"ISRC Match ({isrc})")
+                else:
+                    isrc_map[isrc] = i
+
+        # Pass 2: Normalized Artist + Title + Duration (within ±4.5s)
+        key_map: Dict[str, List[int]] = {}
+        for i, ent in enumerate(all_entries):
+            nk = ent["norm_key"]
+            if nk and nk != "::":
+                for prev_i in key_map.get(nk, []):
+                    d1 = ent.get("duration_ms") or 0
+                    d2 = all_entries[prev_i].get("duration_ms") or 0
+                    if d1 == 0 or d2 == 0 or abs(d1 - d2) <= 4500:
+                        union(prev_i, i, "Same Artist & Title")
+                key_map.setdefault(nk, []).append(i)
+
+        # Pass 3: Acoustic Fingerprint for same-title or close-duration tracks
+        if use_acoustic_fingerprint:
+            title_buckets: Dict[str, List[int]] = {}
+            for i, ent in enumerate(all_entries):
+                t_part = ent["norm_key"].split("::")[-1]
+                if len(t_part) >= 3:
+                    title_buckets.setdefault(t_part, []).append(i)
+
+            candidates_for_fp = [idxs for idxs in title_buckets.values() if len(idxs) > 1]
+            done_fp = 0
+            for idxs in candidates_for_fp:
+                # Only compute fingerprints if not all already in same cluster
+                roots = {find(x) for x in idxs}
+                if len(roots) <= 1:
+                    continue
+                for x in idxs:
+                    if "fingerprint" not in all_entries[x]:
+                        done_fp += 1
+                        if progress_callback:
+                            progress_callback(done_fp, len(all_entries), f"Fingerprinting {os.path.basename(all_entries[x]['file_path'])}")
+                        all_entries[x]["fingerprint"] = compute_acoustic_fingerprint(all_entries[x]["file_path"]) or ""
+                for a_idx in range(len(idxs)):
+                    for b_idx in range(a_idx + 1, len(idxs)):
+                        ia, ib = idxs[a_idx], idxs[b_idx]
+                        if find(ia) == find(ib):
+                            continue
+                        fp_a = all_entries[ia].get("fingerprint", "")
+                        fp_b = all_entries[ib].get("fingerprint", "")
+                        sim = fingerprint_similarity(fp_a, fp_b)
+                        if sim >= 0.86:
+                            union(ia, ib, f"Acoustic Fingerprint ({int(sim * 100)}% Match)")
+
+        clusters: Dict[int, List[Dict[str, Any]]] = {}
+        for i, ent in enumerate(all_entries):
+            r = find(i)
+            clusters.setdefault(r, []).append(ent)
+
+        duplicate_groups: List[Dict[str, Any]] = []
+        for root_idx, members in clusters.items():
+            if len(members) < 2:
+                continue
+            # Sort members by quality rank descending so best file is master
+            members_sorted = sorted(
+                members,
+                key=lambda m: self._quality_rank(m["file_path"], m.get("quality_badge", ""), m.get("size_bytes", 0)),
+                reverse=True
+            )
+            master = members_sorted[0]
+            dups = members_sorted[1:]
+            master_inode = master.get("inode")
+            reclaimable = 0
+            for d in dups:
+                is_hl = bool(master_inode and d.get("inode") == master_inode and master_inode[1] != 0)
+                d["is_hardlinked"] = is_hl
+                if not is_hl:
+                    reclaimable += d.get("size_bytes", 0)
+
+            duplicate_groups.append({
+                "key": master["norm_key"],
+                "title": master["title"],
+                "artist": master["artist"],
+                "match_reason": reasons.get(root_idx, "Metadata + Duration Match"),
+                "master": master,
+                "duplicates": dups,
+                "reclaimable_bytes": reclaimable,
+            })
+
+        duplicate_groups.sort(key=lambda g: g["reclaimable_bytes"], reverse=True)
+        return duplicate_groups
+
+    def merge_library_duplicates(
+        self,
+        duplicate_groups: List[Dict[str, Any]],
+        mode: str = "hardlink"
+    ) -> Dict[str, Any]:
+        """
+        Consolidates duplicate audio files across the library while keeping all SQLite archive
+        records and .m3u8 playlists 100% intact.
+        Modes:
+        - 'hardlink': Replaces duplicate files of the same format with NTFS hard links to the master file
+                      (zero disk space used by duplicates, files stay in both folders), or re-links DB records
+                      if formats differ.
+        - 'merge': Deletes redundant duplicate files, re-links all DB records (downloaded_tracks &
+                   saved_playlist_tracks) to the master file, and regenerates all .m3u8 playlists.
+        """
+        stats = {
+            "groups_processed": 0,
+            "files_merged": 0,
+            "hardlinked": 0,
+            "reclaimed_bytes": 0,
+            "errors": 0,
+        }
+        if not duplicate_groups:
+            return stats
+
+        for grp in duplicate_groups:
+            master = grp.get("master") or {}
+            master_fp = normalize_path(master.get("file_path", ""))
+            master_badge = master.get("quality_badge", "")
+            if not master_fp or not os.path.isfile(master_fp):
+                continue
+
+            master_ext = os.path.splitext(master_fp)[1].lower()
+            grp_touched = False
+
+            for dup in grp.get("duplicates", []):
+                dup_fp = normalize_path(dup.get("file_path", ""))
+                if not dup_fp or dup_fp.lower() == master_fp.lower() or not os.path.isfile(dup_fp):
+                    continue
+                if dup.get("is_hardlinked"):
+                    continue
+
+                dup_size = dup.get("size_bytes") or os.path.getsize(dup_fp)
+                dup_ext = os.path.splitext(dup_fp)[1].lower()
+
+                try:
+                    if mode == "hardlink" and dup_ext == master_ext:
+                        # Replace dup_fp with an atomic NTFS hard link to master_fp
+                        tmp_bak = f"{dup_fp}.hl_bak"
+                        os.replace(dup_fp, tmp_bak)
+                        try:
+                            os.link(master_fp, dup_fp)
+                            os.remove(tmp_bak)
+                            stats["hardlinked"] += 1
+                            stats["files_merged"] += 1
+                            stats["reclaimed_bytes"] += dup_size
+                            grp_touched = True
+                            continue
+                        except Exception:
+                            # Rollback if cross-volume or filesystem doesn't support hardlinks; fall through to DB merge
+                            if os.path.exists(tmp_bak) and not os.path.exists(dup_fp):
+                                os.replace(tmp_bak, dup_fp)
+
+                    # Clean Merge: re-point all DB references from dup_fp -> master_fp and delete dup_fp
+                    with self.connection() as conn:
+                        with conn:
+                            conn.execute(
+                                "UPDATE downloaded_tracks SET file_path = ?, quality_badge = CASE WHEN ? != '' THEN ? ELSE quality_badge END WHERE file_path = ? COLLATE NOCASE",
+                                (master_fp, master_badge, master_badge, dup_fp)
+                            )
+                            conn.execute(
+                                "UPDATE saved_playlist_tracks SET file_path = ?, quality_badge = CASE WHEN ? != '' THEN ? ELSE quality_badge END WHERE file_path = ? COLLATE NOCASE",
+                                (master_fp, master_badge, master_badge, dup_fp)
+                            )
+                            for sid in dup.get("spotify_ids", []):
+                                conn.execute(
+                                    "UPDATE downloaded_tracks SET file_path = ? WHERE spotify_id = ?",
+                                    (master_fp, sid)
+                                )
+                                conn.execute(
+                                    "UPDATE saved_playlist_tracks SET file_path = ?, status = 'downloaded' WHERE spotify_id = ?",
+                                    (master_fp, sid)
+                                )
+                    try:
+                        os.remove(dup_fp)
+                        stats["files_merged"] += 1
+                        stats["reclaimed_bytes"] += dup_size
+                        grp_touched = True
+                    except Exception as e_rm:
+                        logger.debug(f"Could not delete merged duplicate {dup_fp}: {e_rm}")
+                        stats["errors"] += 1
+                except Exception as e:
+                    logger.warning(f"Error merging duplicate {dup_fp} -> {master_fp}: {e}")
+                    stats["errors"] += 1
+
+            if grp_touched:
+                stats["groups_processed"] += 1
+
+        # Refresh all .m3u8 playlist files so every playlist points to the consolidated paths
+        try:
+            self.sync_all_playlist_m3u8_files()
+        except Exception:
+            pass
+
+        return stats
+
+    def scan_library_spectrum(
+        self,
+        root_dir: str = "",
+        max_workers: int = 6,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Batch-scans downloaded tracks in the library using ultrasonic spectrum analysis
+        to identify upscaled / fake-bitrate transcodes (< 16.8 kHz cutoff).
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from core.utils import inspect_audio_spectrum
+
+        if not root_dir:
+            root_dir = config.get("download.output_dir", "") or str(get_default_download_dir())
+            if not os.path.isabs(root_dir):
+                root_dir = os.path.normpath(os.path.join(str(get_default_download_dir()), root_dir))
+
+        audio_files: List[str] = []
+        if os.path.isdir(root_dir):
+            for root, _dirs, files in os.walk(root_dir):
+                if os.path.basename(root).lower() in ("lyrics", "cache", "logs", "bin", "eq_preview", "spectrograms"):
+                    continue
+                for fname in files:
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in (".flac", ".mp3", ".opus", ".m4a", ".ogg") and not fname.endswith(".part"):
+                        audio_files.append(os.path.join(root, fname))
+
+        total = len(audio_files)
+        results: List[Dict[str, Any]] = []
+        if total == 0:
+            return results
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+            futs = {pool.submit(inspect_audio_spectrum, fp, False): fp for fp in audio_files}
+            for fut in as_completed(futs):
+                completed += 1
+                fp = futs[fut]
+                bname = os.path.basename(fp)
+                if progress_callback:
+                    progress_callback(completed, total, f"Inspecting {bname}")
+                try:
+                    res = fut.result()
+                    if res:
+                        meta = self.get_track_by_path(fp) or {}
+                        res["title"] = meta.get("title") or os.path.splitext(bname)[0]
+                        res["artist"] = meta.get("artist") or ""
+                        res["spotify_id"] = meta.get("spotify_id") or ""
+                        results.append(res)
+                except Exception:
+                    pass
+
+        results.sort(key=lambda r: (0 if r.get("verdict") == "upscaled" else (1 if r.get("verdict") == "good" else 2), r.get("cutoff_khz", 20.0)))
+        return results
+
 
 

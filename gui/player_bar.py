@@ -4,7 +4,7 @@ import random
 import logging
 from typing import Optional, List, Tuple, Any
 
-from PyQt6.QtCore import Qt, QUrl, QByteArray, QPoint, QTimer
+from PyQt6.QtCore import Qt, QUrl, QByteArray, QPoint, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QIcon, QKeySequence, QShortcut
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
@@ -56,6 +56,16 @@ SVG_REPEAT_ONE = (
     '<svg viewBox="0 0 24 24">'
     '<path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>'
     '<text x="12" y="14.5" font-size="6.5" font-family="Segoe UI, sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle">1</text>'
+    '</svg>'
+)
+SVG_LYRICS = (
+    '<svg viewBox="0 0 24 24">'
+    '<path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>'
+    '</svg>'
+)
+SVG_EQ = (
+    '<svg viewBox="0 0 24 24">'
+    '<path fill="currentColor" d="M7 6h2v8H7V6zm0 10h2v2H7v-2zm4-10h2v2h-2V6zm0 4h2v8h-2v-8zm4-4h2v5h-2V6zm0 7h2v5h-2v-5z"/>'
     '</svg>'
 )
 
@@ -110,6 +120,8 @@ class MiniPlayerBar(QFrame):
     - Smart volume memory and instant mute/unmute.
     """
 
+    sig_eq_preview_ready = pyqtSignal(str, str, int, bool, object)
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setObjectName("mini_player_bar")
@@ -121,6 +133,7 @@ class MiniPlayerBar(QFrame):
         self.playlist: List[Any] = []
         self.current_index: int = -1
         self.lyrics_timeline: List[Tuple[int, str]] = []
+        self.lyrics_are_synced: bool = True
         self.last_lyric_idx: int = -1
         self._user_seeking: bool = False
         try:
@@ -266,12 +279,18 @@ class MiniPlayerBar(QFrame):
 
         self.active_lyric_label = QLabel("♪ Flacify High-Fidelity Audio ♪", self)
         self.active_lyric_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.active_lyric_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.active_lyric_label.setToolTip("Click to open Live Synchronized Karaoke Lyrics Drawer")
+        self.active_lyric_label.mousePressEvent = lambda e: self.open_lyrics_drawer() if e.button() == Qt.MouseButton.LeftButton else None
         self.active_lyric_label.setStyleSheet("""
             QLabel {
                 color: #1ED760;
                 font-size: 12px;
                 font-weight: 600;
                 background: transparent;
+            }
+            QLabel:hover {
+                color: #4ADE80;
             }
         """)
 
@@ -387,6 +406,18 @@ class MiniPlayerBar(QFrame):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
+        self.lyrics_btn = ToolButton(make_svg_icon(SVG_LYRICS, color="#CCCCCC"), self)
+        self.lyrics_btn.setToolTip("Open Synchronized Karaoke Lyrics Drawer")
+        self.lyrics_btn.setFixedSize(28, 28)
+        self.lyrics_btn.clicked.connect(self.open_lyrics_drawer)
+
+        self.eq_btn = ToolButton(make_svg_icon(SVG_EQ, color="#CCCCCC"), self)
+        self.eq_btn.setToolTip("10-Band Equalizer & Bass Boost")
+        self.eq_btn.setFixedSize(28, 28)
+        self.eq_btn.clicked.connect(self.open_equalizer_dialog)
+        self._update_eq_button_state()
+        self.sig_eq_preview_ready.connect(self._on_eq_preview_ready)
+
         self.device_btn = ToolButton(FluentIcon.HEADPHONE, self)
         self.device_btn.setFixedSize(28, 28)
         self.device_btn.clicked.connect(self._show_device_menu)
@@ -414,6 +445,8 @@ class MiniPlayerBar(QFrame):
         self.close_btn.setFixedSize(28, 28)
         self.close_btn.clicked.connect(self.stop_and_hide)
 
+        right_layout.addWidget(self.lyrics_btn)
+        right_layout.addWidget(self.eq_btn)
         right_layout.addWidget(self.device_btn)
         right_layout.addWidget(self.volume_btn)
         right_layout.addWidget(self.volume_slider)
@@ -698,12 +731,14 @@ class MiniPlayerBar(QFrame):
         # Load cover artwork
         self._load_cover(file_path, track)
 
-        # Parse synchronized LRC lyrics
+        # Parse synchronized LRC or embedded lyrics
         self._load_lyrics(file_path, track)
 
-        # Set media source and play
+        # Set media source and play (and apply live 10-band EQ if enabled)
         self.player.setSource(QUrl.fromLocalFile(file_path))
         self.player.play()
+        if config.get("ui.eq_enabled", False):
+            self.apply_live_equalizer()
 
         self.setVisible(True)
 
@@ -793,8 +828,9 @@ class MiniPlayerBar(QFrame):
         self.cover_label.setPixmap(rounded)
 
     def _load_lyrics(self, file_path: str, track: Optional[TrackMetadata]):
-        """Parses companion .lrc file for live CRLF/LF synchronized line timestamps."""
+        """Parses companion .lrc file or embedded lyrics tags for live synchronized karaoke timestamps."""
         self.lyrics_timeline.clear()
+        self.lyrics_are_synced = True
         self.last_lyric_idx = -1
 
         base, _ = os.path.splitext(file_path)
@@ -814,6 +850,13 @@ class MiniPlayerBar(QFrame):
                     pass
 
         if not lrc_text:
+            try:
+                from core.utils import extract_embedded_lyrics
+                lrc_text = extract_embedded_lyrics(file_path)
+            except Exception:
+                lrc_text = ""
+
+        if not lrc_text:
             title_text = track.title if track else os.path.splitext(os.path.basename(file_path))[0]
             artist_text = track.artist_str if track else ""
             if artist_text:
@@ -827,9 +870,12 @@ class MiniPlayerBar(QFrame):
         # Parse CRLF and LF lines: [mm:ss.xx] Lyric text
         pattern = re.compile(r'\[(\d{1,2}):(\d{2})(?:\.(\d{2,3}))?\](.*)')
         parsed_entries: List[Tuple[int, str]] = []
+        plain_lines: List[str] = []
 
         for line in lrc_text.splitlines():
             line = line.strip()
+            if not line:
+                continue
             m = pattern.match(line)
             if m:
                 mins = int(m.group(1))
@@ -840,9 +886,18 @@ class MiniPlayerBar(QFrame):
                 lyric_text = m.group(4).strip()
                 if lyric_text:
                     parsed_entries.append((total_ms, lyric_text))
+            elif not line.startswith("["):
+                plain_lines.append(line)
 
-        parsed_entries.sort(key=lambda x: x[0])
-        self.lyrics_timeline = parsed_entries
+        if parsed_entries:
+            parsed_entries.sort(key=lambda x: x[0])
+            self.lyrics_timeline = parsed_entries
+            self.lyrics_are_synced = True
+        elif plain_lines:
+            self.lyrics_are_synced = False
+            dur_ms = (getattr(track, "duration_ms", 0) if track else 0) or 180000
+            step = max(2500, dur_ms // max(1, len(plain_lines) + 1))
+            self.lyrics_timeline = [(i * step, txt) for i, txt in enumerate(plain_lines)]
 
         if self.lyrics_timeline:
             self.active_lyric_label.setText(self.lyrics_timeline[0][1])
@@ -856,6 +911,80 @@ class MiniPlayerBar(QFrame):
             self.active_lyric_label.setText("♪ Synchronized Karaoke Lyrics ♪")
             self.next_lyric_label.setText("")
             self.next_lyric_label.setVisible(False)
+
+    def open_lyrics_drawer(self):
+        """Opens the built-in Synchronized Karaoke Lyrics Drawer synced to MiniPlayerBar."""
+        from gui.dialogs.player_panels import KaraokeLyricsDrawer
+        dlg = KaraokeLyricsDrawer(self, self.window() or self)
+        dlg.exec()
+
+    def open_equalizer_dialog(self):
+        """Opens the 10-Band Equalizer & Bass Boost Studio panel."""
+        from gui.dialogs.player_panels import EqualizerDialog
+        dlg = EqualizerDialog(self, self.window() or self)
+        dlg.exec()
+
+    def _update_eq_button_state(self):
+        if not hasattr(self, "eq_btn"):
+            return
+        eq_on = bool(config.get("ui.eq_enabled", False))
+        preset = str(config.get("ui.eq_preset", "Flat (Default)"))
+        if eq_on:
+            self.eq_btn.setIcon(make_svg_icon(SVG_EQ, color="#1ED760"))
+            self.eq_btn.setToolTip(f"10-Band Equalizer: ON ({preset})")
+        else:
+            self.eq_btn.setIcon(make_svg_icon(SVG_EQ, color="#CCCCCC"))
+            self.eq_btn.setToolTip("10-Band Equalizer & Bass Boost: Off")
+
+    def apply_live_equalizer(self, on_done=None):
+        """Renders and hot-swaps the active 10-Band EQ curve into QMediaPlayer without losing playback position."""
+        self._update_eq_button_state()
+        fp = self.current_file_path
+        if not fp or not os.path.isfile(fp):
+            if on_done:
+                on_done()
+            return
+
+        eq_on = bool(config.get("ui.eq_enabled", False))
+        pos_ms = self.player.position()
+        was_playing = (self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState)
+
+        if not eq_on:
+            self.player.setSource(QUrl.fromLocalFile(fp))
+            if pos_ms > 0:
+                self.player.setPosition(pos_ms)
+            if was_playing:
+                self.player.play()
+            if on_done:
+                on_done()
+            return
+
+        bands = list(config.get("ui.eq_bands", [0.0] * 10) or [0.0] * 10)
+        preamp = float(config.get("ui.eq_preamp", 0.0) or 0.0)
+        bass = float(config.get("ui.eq_bass_boost", 0.0) or 0.0)
+
+        import threading
+        def worker():
+            from core.utils import render_equalizer_preview
+            preview_p = render_equalizer_preview(fp, bands, preamp_db=preamp, bass_boost_db=bass) or fp
+            self.sig_eq_preview_ready.emit(fp, preview_p, pos_ms, was_playing, on_done)
+
+        threading.Thread(target=worker, daemon=True, name="LiveEQPreviewWorker").start()
+
+    def _on_eq_preview_ready(self, orig_fp: str, preview_fp: str, fallback_pos_ms: int, was_playing: bool, on_done):
+        if orig_fp != self.current_file_path or not os.path.isfile(preview_fp):
+            if callable(on_done):
+                on_done()
+            return
+        cur_pos = self.player.position() or fallback_pos_ms
+        cur_playing = (self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState) or was_playing
+        self.player.setSource(QUrl.fromLocalFile(preview_fp))
+        if cur_pos > 0:
+            self.player.setPosition(cur_pos)
+        if cur_playing:
+            self.player.play()
+        if callable(on_done):
+            on_done()
 
     # -------------------------------------------------------------
     # Position & State Handlers

@@ -340,6 +340,7 @@ class SavedPlaylistCard(CardWidget):
         on_edit=None,
         on_export=None,
         on_export_m3u=None,
+        on_toggle_watch=None,
         parent=None
     ):
         super().__init__(parent)
@@ -350,6 +351,7 @@ class SavedPlaylistCard(CardWidget):
         self.on_edit = on_edit
         self.on_export = on_export
         self.on_export_m3u = on_export_m3u
+        self.on_toggle_watch = on_toggle_watch
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_card_context_menu)
@@ -394,9 +396,31 @@ class SavedPlaylistCard(CardWidget):
         down = playlist_data.get("downloaded_count") or 0
         pend = playlist_data.get("pending_count") or (tot - down)
         pct = playlist_data.get("progress_percent") or (round(down / tot * 100.0, 1) if tot > 0 else 0.0)
+        is_watched = bool(playlist_data.get("auto_sync"))
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
 
         self.title_label = StrongBodyLabel(name, self)
         self.title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #FFFFFF;")
+        title_row.addWidget(self.title_label)
+
+        self.watch_badge = QLabel("⚡ Auto-Sync", self)
+        self.watch_badge.setStyleSheet("""
+            QLabel {
+                background-color: rgba(29, 185, 84, 0.20);
+                color: #1ED760;
+                font-size: 10px;
+                font-weight: 700;
+                padding: 1px 6px;
+                border-radius: 4px;
+                border: 1px solid rgba(29, 185, 84, 0.40);
+            }
+        """)
+        self.watch_badge.setVisible(is_watched)
+        title_row.addWidget(self.watch_badge)
+        title_row.addStretch(1)
 
         status_text = f"{tot} tracks  •  {down} downloaded  •  {pend} pending ({pct}%)"
         self.meta_label = CaptionLabel(status_text, self)
@@ -414,7 +438,7 @@ class SavedPlaylistCard(CardWidget):
             }
         """)
 
-        info_layout.addWidget(self.title_label)
+        info_layout.addLayout(title_row)
         info_layout.addWidget(self.meta_label)
         info_layout.addWidget(self.progress_bar)
         layout.addLayout(info_layout, 1)
@@ -426,6 +450,15 @@ class SavedPlaylistCard(CardWidget):
         self.browse_btn = PrimaryPushButton(FluentIcon.CHEVRON_RIGHT, "Browse & Download", self)
         self.browse_btn.setFixedHeight(30)
         self.browse_btn.clicked.connect(self._handle_open)
+
+        self.watch_btn = ToolButton(FluentIcon.PIN, self)
+        self.watch_btn.setToolTip(
+            "Auto-Sync (Watch Playlist): ON — Click to unpin"
+            if is_watched else "Pin Playlist for Scheduled Auto-Sync ('Watch Playlist')"
+        )
+        if is_watched:
+            self.watch_btn.setStyleSheet("ToolButton { background-color: rgba(29, 185, 84, 0.22); border: 1px solid #1ED760; border-radius: 5px; }")
+        self.watch_btn.clicked.connect(self._handle_toggle_watch)
 
         self.sync_btn = ToolButton(FluentIcon.SYNC, self)
         self.sync_btn.setToolTip("Sync Playlist (Check for new/removed tracks)")
@@ -444,6 +477,7 @@ class SavedPlaylistCard(CardWidget):
         self.delete_btn.clicked.connect(self._handle_delete)
 
         action_layout.addWidget(self.browse_btn)
+        action_layout.addWidget(self.watch_btn)
         action_layout.addWidget(self.sync_btn)
         action_layout.addWidget(self.edit_btn)
         action_layout.addWidget(self.copy_btn)
@@ -516,6 +550,10 @@ class SavedPlaylistCard(CardWidget):
         if self.on_export_m3u:
             self.on_export_m3u(self.data)
 
+    def _handle_toggle_watch(self):
+        if self.on_toggle_watch:
+            self.on_toggle_watch(self.data)
+
     def _show_card_context_menu(self, pos):
         menu = QMenu(self)
         menu.setStyleSheet("""
@@ -538,6 +576,8 @@ class SavedPlaylistCard(CardWidget):
         act_open = menu.addAction("Browse & Download Tracks")
         act_edit = menu.addAction("Rename / Edit Playlist...")
         act_sync = menu.addAction("Sync Playlist")
+        is_watched = bool(self.data.get("auto_sync"))
+        act_watch = menu.addAction("Disable Auto-Sync (Unwatch)" if is_watched else "Enable Auto-Sync (Watch Playlist)")
         menu.addSeparator()
         act_export_m3u = menu.addAction("Export Playlist File (.m3u8)...")
         act_export = menu.addAction("Export Songs to Device / Folder...")
@@ -556,6 +596,8 @@ class SavedPlaylistCard(CardWidget):
             self._handle_edit()
         elif action == act_sync:
             self._handle_sync()
+        elif action == act_watch:
+            self._handle_toggle_watch()
         elif action == act_export_m3u:
             self._handle_export_m3u()
         elif action == act_export:
@@ -615,6 +657,13 @@ class PlaylistsView(QWidget):
         self._init_ui()
         self._connect_signals()
 
+        # Scheduled Auto-Sync ("Watch Playlists") Timer & Startup Check
+        self._auto_sync_timer = QTimer(self)
+        self._auto_sync_timer.timeout.connect(lambda: self._run_watched_playlists_sync(is_startup=False))
+        self._apply_auto_sync_schedule()
+        if bool(config.get("playlists.auto_sync_on_startup", True)):
+            QTimer.singleShot(5000, lambda: self._run_watched_playlists_sync(is_startup=True))
+
         # Load initial saved playlists
         self.reload_playlists()
 
@@ -668,10 +717,26 @@ class PlaylistsView(QWidget):
         self.sync_all_btn.setToolTip("Check all saved playlists for newly added songs online")
         self.sync_all_btn.clicked.connect(self._sync_all_playlists)
 
+        self.auto_sync_combo = ComboBox(self)
+        self.auto_sync_combo.setFixedWidth(185)
+        self.auto_sync_combo.setToolTip("Configure scheduled Auto-Sync interval for pinned ('Watched') playlists")
+        self.auto_sync_combo.addItems([
+            "Watch Sync: Every 6h",
+            "Watch Sync: Every 1h",
+            "Watch Sync: Every 3h",
+            "Watch Sync: Every 12h",
+            "Watch Sync: Every 24h",
+            "Watch Sync: Startup Only",
+            "Watch Sync: Manual Only",
+        ])
+        self._init_auto_sync_combo_selection()
+        self.auto_sync_combo.currentIndexChanged.connect(self._on_auto_sync_combo_changed)
+
         input_layout.addWidget(self.url_input, 1)
         input_layout.addWidget(self.paste_btn)
         input_layout.addWidget(self.save_btn)
         input_layout.addWidget(self.sync_all_btn)
+        input_layout.addWidget(self.auto_sync_combo)
         list_layout.addWidget(input_container)
 
         # 2b. Spotify API Mode Banner
@@ -806,6 +871,11 @@ class PlaylistsView(QWidget):
         banner_layout.addLayout(detail_info_layout, 1)
 
         # Playlist-level Action Buttons
+        self.detail_watch_btn = PushButton(FluentIcon.PIN, "Auto-Sync", self.banner_card)
+        self.detail_watch_btn.setFixedHeight(30)
+        self.detail_watch_btn.setToolTip("Pin this playlist for automatic background delta sync & downloading")
+        self.detail_watch_btn.clicked.connect(self._handle_detail_toggle_watch)
+
         self.detail_sync_btn = PushButton(FluentIcon.SYNC, "Sync", self.banner_card)
         self.detail_sync_btn.setFixedHeight(30)
         self.detail_sync_btn.setToolTip("Check for newly added or removed songs from online source")
@@ -831,6 +901,7 @@ class PlaylistsView(QWidget):
         self.export_songs_btn.setToolTip("Export downloaded songs from this playlist to an external device, USB drive, or folder")
         self.export_songs_btn.clicked.connect(self._on_export_songs_clicked)
 
+        banner_layout.addWidget(self.detail_watch_btn)
         banner_layout.addWidget(self.detail_sync_btn)
         banner_layout.addWidget(self.detail_edit_btn)
         banner_layout.addWidget(self.open_folder_btn)
@@ -1406,9 +1477,153 @@ class PlaylistsView(QWidget):
                 on_edit=self._edit_playlist,
                 on_export=self._export_saved_playlist,
                 on_export_m3u=self._export_saved_playlist_m3u8_card,
+                on_toggle_watch=self._toggle_playlist_watch,
                 parent=self.playlists_container
             )
             self.playlists_layout.insertWidget(self.playlists_layout.count() - 1, card)
+
+    def _init_auto_sync_combo_selection(self):
+        startup = bool(config.get("playlists.auto_sync_on_startup", True))
+        hrs = int(config.get("playlists.auto_sync_interval_hours", 6) or 0)
+        map_hrs = {6: 0, 1: 1, 3: 2, 12: 3, 24: 4}
+        if not startup and hrs <= 0:
+            self.auto_sync_combo.setCurrentIndex(6)
+        elif hrs <= 0:
+            self.auto_sync_combo.setCurrentIndex(5)
+        else:
+            self.auto_sync_combo.setCurrentIndex(map_hrs.get(hrs, 0))
+
+    def _on_auto_sync_combo_changed(self, idx: int):
+        idx_map = {
+            0: (True, 6),
+            1: (True, 1),
+            2: (True, 3),
+            3: (True, 12),
+            4: (True, 24),
+            5: (True, 0),
+            6: (False, 0),
+        }
+        startup, hrs = idx_map.get(idx, (True, 6))
+        config.set("playlists.auto_sync_on_startup", startup, auto_save=False)
+        config.set("playlists.auto_sync_interval_hours", hrs, auto_save=True)
+        self._apply_auto_sync_schedule()
+
+    def _apply_auto_sync_schedule(self):
+        if not hasattr(self, "_auto_sync_timer"):
+            return
+        hrs = int(config.get("playlists.auto_sync_interval_hours", 6) or 0)
+        if hrs > 0:
+            self._auto_sync_timer.start(hrs * 3600 * 1000)
+        else:
+            self._auto_sync_timer.stop()
+
+    def _toggle_playlist_watch(self, playlist_data: Dict[str, Any]):
+        if not playlist_data:
+            return
+        pl_id = playlist_data.get("id")
+        if not pl_id:
+            return
+        new_state = not bool(playlist_data.get("auto_sync"))
+        self.archive.set_playlist_auto_sync(pl_id, new_state)
+        pl_name = playlist_data.get("name", "Playlist")
+        if new_state:
+            InfoBar.success(
+                title="Auto-Sync Enabled (Watched)",
+                content=f"'{pl_name}' is now pinned for automatic delta sync & downloading.",
+                duration=3500,
+                parent=self
+            )
+        else:
+            InfoBar.info(
+                title="Auto-Sync Disabled",
+                content=f"Unpinned '{pl_name}' from scheduled auto-sync.",
+                duration=3000,
+                parent=self
+            )
+        self.reload_playlists()
+        if str(self.current_playlist_id) == str(pl_id):
+            updated = self.archive.get_saved_playlist(pl_id)
+            if updated:
+                self.current_playlist_data = updated
+                self._update_detail_watch_btn()
+
+    def _handle_detail_toggle_watch(self):
+        if self.current_playlist_data:
+            self._toggle_playlist_watch(self.current_playlist_data)
+
+    def _update_detail_watch_btn(self):
+        if not hasattr(self, "detail_watch_btn") or not self.current_playlist_data:
+            return
+        watched = bool(self.current_playlist_data.get("auto_sync"))
+        if watched:
+            self.detail_watch_btn.setText("⚡ Auto-Sync: ON")
+            self.detail_watch_btn.setStyleSheet(PRESET_ACTIVE_STYLE)
+        else:
+            self.detail_watch_btn.setText("Auto-Sync: Off")
+            self.detail_watch_btn.setStyleSheet("")
+
+    def _run_watched_playlists_sync(self, is_startup: bool = False):
+        """Background scheduled runner that checks all pinned ('Watched') playlists for new delta songs on Spotify."""
+        if getattr(self, "_watched_sync_running", False):
+            return
+        watched = self.archive.get_watched_playlists()
+        if not watched:
+            return
+
+        self._watched_sync_running = True
+
+        def worker():
+            try:
+                total_added = 0
+                all_delta_tracks = []
+                for pl in watched:
+                    pl_id = pl["id"]
+                    pl_url = pl.get("spotify_url", "")
+                    if not pl_url:
+                        continue
+                    try:
+                        if SpotifyClient.parse_url(pl_url):
+                            self.spotify_client.update_credentials(
+                                client_id=config.get("spotify.client_id", ""),
+                                client_secret=config.get("spotify.client_secret", "")
+                            )
+                            tracks = self.spotify_client.resolve(pl_url)
+                        else:
+                            ytdlp_engine = getattr(self.qm.engine, "ytdlp", None)
+                            if not ytdlp_engine:
+                                from core.ytdlp_engine import YtdlpEngine
+                                ytdlp_engine = YtdlpEngine()
+                            tracks = ytdlp_engine.extract_from_url_or_search(pl_url)
+                        if tracks:
+                            res = self.archive.sync_saved_playlist(pl_id, tracks)
+                            added = res.get("added", 0)
+                            deltas = res.get("delta_tracks", [])
+                            if added > 0 and deltas:
+                                total_added += added
+                                if bool(config.get("playlists.auto_download_synced_tracks", True)):
+                                    self.archive.mark_saved_tracks_queued(pl_id, [t.id for t in deltas])
+                                    all_delta_tracks.extend(deltas)
+                    except Exception as e_pl:
+                        logger.debug(f"Auto-Sync error on watched playlist {pl_id}: {e_pl}")
+
+                def on_done():
+                    self._watched_sync_running = False
+                    if total_added > 0:
+                        if all_delta_tracks:
+                            self.qm.enqueue(all_delta_tracks)
+                            self.qm.start_all()
+                        self.reload_playlists()
+                        InfoBar.success(
+                            title="Watched Playlists Auto-Synced",
+                            content=f"Discovered and queued {total_added} new track(s) across {len(watched)} watched playlist(s)!",
+                            duration=5000,
+                            parent=self
+                        )
+                QTimer.singleShot(0, lambda: safe_invoke(on_done))
+            except Exception:
+                self._watched_sync_running = False
+
+        threading.Thread(target=worker, daemon=True, name="WatchedPlaylistsAutoSync").start()
 
     def _export_saved_playlist(self, playlist_data: Dict[str, Any]):
         if not playlist_data:
@@ -1716,6 +1931,7 @@ class PlaylistsView(QWidget):
         if fresh_data:
             playlist_data = fresh_data
         self.current_playlist_data = playlist_data
+        self._update_detail_watch_btn()
 
         # Update Header Banner
         self.detail_title.setText(playlist_data.get("name", "Playlist"))
@@ -2223,9 +2439,11 @@ class PlaylistsView(QWidget):
 
         act_play = None
         act_reveal = None
+        act_spectrum = None
         if file_exists:
             act_play = menu.addAction("Play Track")
             act_reveal = menu.addAction("Reveal in File Explorer")
+            act_spectrum = menu.addAction("Inspect Audio Spectrum & True Bitrate...")
             menu.addSeparator()
 
         act_download = None
@@ -2449,6 +2667,30 @@ class PlaylistsView(QWidget):
                     duration=3000,
                     parent=self
                 )
+        elif act_spectrum and action == act_spectrum:
+            if item.output_path and os.path.isfile(item.output_path):
+                from gui.dialogs.spectrum_dialog import AudioSpectrumDialog
+                def _upgrade_from_playlist(fp, tr):
+                    if fp and os.path.exists(fp):
+                        try:
+                            os.remove(fp)
+                        except Exception:
+                            pass
+                    self.archive.remove_downloaded_track(tr.id, playlist_id=self.current_playlist_id)
+                    tr.preferred_engine = "auto"
+                    if self.current_playlist_data:
+                        tr.collection_name = self.current_playlist_data.get("name", "Playlist")
+                        tr.collection_type = "playlist"
+                        tr.collection_cover_url = self.current_playlist_data.get("cover_url", "") or ""
+                    self.archive.mark_saved_tracks_queued(self.current_playlist_id, [tr.id])
+                    self.qm.enqueue([tr])
+                    self.qm.start_all()
+                    item.status = "Queued"
+                    self.model.update_status(tr.id, "Queued")
+                    self._refresh_detail_header()
+                    InfoBar.info("Upgrading Track", f"Re-downloading '{tr.title}' in highest available quality...", duration=4000, parent=self)
+                dlg = AudioSpectrumDialog(item.output_path, track=item.track, on_upgrade_callback=_upgrade_from_playlist, parent=self.window() or self)
+                dlg.exec()
         elif act_reset and action == act_reset:
             self.archive.update_saved_track_status(self.current_playlist_id, item.track.id, "pending")
             item.status = "Pending"

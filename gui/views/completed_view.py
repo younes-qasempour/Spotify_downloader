@@ -329,6 +329,18 @@ class CompletedView(QWidget):
         self.genre_combo.currentIndexChanged.connect(self._on_genre_changed)
         nav_row.addWidget(self.genre_combo)
 
+        self.spectrum_btn = PushButton(FluentIcon.SPEED_HIGH, "Spectrum Audit", self)
+        self.spectrum_btn.setFixedHeight(30)
+        self.spectrum_btn.setToolTip("Scan library for fake bitrates / upscaled transcodes and inspect audio spectrum")
+        self.spectrum_btn.clicked.connect(self._open_spectrum_scanner)
+        nav_row.addWidget(self.spectrum_btn)
+
+        self.dedup_btn = PushButton(FluentIcon.LINK, "Deduplicate", self)
+        self.dedup_btn.setFixedHeight(30)
+        self.dedup_btn.setToolTip("Smart Duplicate & Acoustic Fingerprint Merger (Hard-Link or Clean Merge)")
+        self.dedup_btn.clicked.connect(self._open_duplicate_merger)
+        nav_row.addWidget(self.dedup_btn)
+
         self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Downloads", self)
         self.open_folder_btn.setFixedHeight(30)
         self.open_folder_btn.setToolTip("Open local download directory in Windows Explorer")
@@ -1117,6 +1129,7 @@ class CompletedView(QWidget):
 
         m3u_act = menu.addAction("Export Playlist (.m3u8)...")
         details_act = menu.addAction("View Metadata & Genres")
+        spectrum_act = menu.addAction("Inspect Audio Spectrum & True Bitrate...")
         boost_vol_act = menu.addAction("Boost & Balance Track Volume")
         rg_act = menu.addAction("Calculate ReplayGain 2.0")
         menu.addSeparator()
@@ -1190,6 +1203,11 @@ class CompletedView(QWidget):
             self._export_m3u_playlist()
         elif action == details_act:
             self._show_track_details_dialog(item)
+        elif action == spectrum_act:
+            if item.output_path and os.path.isfile(item.output_path):
+                self._inspect_track_spectrum(item)
+            else:
+                InfoBar.warning("File Missing", "The audio file was not found on disk.", parent=self)
         elif action == boost_vol_act:
             if item.output_path and os.path.isfile(item.output_path):
                 self._boost_track_volume_single(item)
@@ -1204,6 +1222,74 @@ class CompletedView(QWidget):
             self.archive.delete_track(item.track.id)
             self.reload_all()
             InfoBar.info("Removed", f"Removed '{item.track.title}' from archive.", duration=2500, parent=self)
+
+    def _inspect_track_spectrum(self, item: QueueItem):
+        from gui.dialogs.spectrum_dialog import AudioSpectrumDialog
+
+        def _upgrade_single(fp, tr):
+            if fp and os.path.exists(fp):
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
+            self.archive.remove_downloaded_track(tr.id)
+            tr.preferred_engine = "auto"
+            qm = self.qm or getattr(self.window(), "queue_manager", None)
+            if qm:
+                qm.enqueue([tr])
+                qm.start_all()
+            self.reload_all()
+            InfoBar.info("Upgrading Track", f"Re-downloading '{tr.title}' in highest available quality...", duration=4000, parent=self)
+
+        dlg = AudioSpectrumDialog(
+            item.output_path,
+            track=item.track,
+            on_upgrade_callback=_upgrade_single,
+            parent=self.window() or self
+        )
+        dlg.exec()
+
+    def _open_spectrum_scanner(self):
+        from gui.dialogs.spectrum_dialog import BatchSpectrumScannerDialog
+
+        def _upgrade_batch(tracks_to_upgrade):
+            qm = self.qm or getattr(self.window(), "queue_manager", None)
+            if not qm or not tracks_to_upgrade:
+                return
+            for tr in tracks_to_upgrade:
+                row = self.archive.find_track(spotify_id=tr.id)
+                if row and row.get("file_path") and os.path.exists(row["file_path"]):
+                    try:
+                        os.remove(row["file_path"])
+                    except Exception:
+                        pass
+                self.archive.remove_downloaded_track(tr.id)
+                tr.preferred_engine = "auto"
+            qm.enqueue(tracks_to_upgrade)
+            qm.start_all()
+            self.reload_all()
+            InfoBar.success(
+                "Upgrading Tracks",
+                f"Queued {len(tracks_to_upgrade)} track(s) for high-bitrate re-download.",
+                duration=4500,
+                parent=self
+            )
+
+        dlg = BatchSpectrumScannerDialog(
+            self.archive,
+            on_upgrade_tracks_callback=_upgrade_batch,
+            parent=self.window() or self
+        )
+        dlg.exec()
+
+    def _open_duplicate_merger(self):
+        from gui.dialogs.duplicate_merger_dialog import DuplicateMergerDialog
+        dlg = DuplicateMergerDialog(
+            self.archive,
+            on_merged_callback=self.reload_all,
+            parent=self.window() or self
+        )
+        dlg.exec()
 
     def _boost_track_volume_single(self, item: QueueItem):
         """Boosts and balances loudness on a single track using EBU R128 + lookahead limiter."""

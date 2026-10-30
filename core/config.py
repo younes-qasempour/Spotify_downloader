@@ -84,6 +84,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "theme": "Dark",
         "clipboard_auto_detect": True,
         "player_volume": 100,
+        "eq_enabled": False,
+        "eq_preset": "Flat (Default)",
+        "eq_preamp": 0.0,
+        "eq_bass_boost": 0.0,
+        "eq_bands": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    },
+    "playlists": {
+        "auto_sync_on_startup": True,
+        "auto_sync_interval_hours": 6,
+        "auto_download_synced_tracks": True,
     },
 }
 

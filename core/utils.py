@@ -944,3 +944,648 @@ def normalize_special_unicode(text: str) -> str:
     # Non-breaking space & zero-width space
     t = t.replace('\u00a0', ' ').replace('\u200b', '')
     return t
+
+
+# -------------------------------------------------------------------------
+# Embedded Lyrics Extraction, 10-Band Equalizer, Audio Spectrum & Fingerprinting
+# -------------------------------------------------------------------------
+
+def extract_embedded_lyrics(file_path: str) -> str:
+    """
+    Extracts synchronized ([mm:ss.xx]) or plain text lyrics directly from an audio file's
+    embedded metadata tags (MP3 SYLT/USLT/TXXX, FLAC/Opus/Ogg LYRICS/UNSYNCEDLYRICS, M4A ©lyr).
+    Returns the lyrics text or empty string if none are embedded.
+    """
+    if not file_path or not os.path.isfile(file_path):
+        return ""
+    ext = os.path.splitext(file_path)[1].lower()
+    try:
+        if ext == ".mp3":
+            from mutagen.id3 import ID3
+            tags = ID3(file_path)
+            # 1. Prefer USLT / TXXX:LYRICS if it already contains [mm:ss.xx] LRC lines
+            for key, frame in tags.items():
+                if key.startswith("USLT") or key.upper() == "TXXX:LYRICS":
+                    txt = getattr(frame, "text", "")
+                    if isinstance(txt, list):
+                        txt = "\n".join(str(x) for x in txt)
+                    txt = str(txt or "").strip()
+                    if txt and re.search(r'\[\d{1,2}:\d{2}', txt):
+                        return txt
+            # 2. Check SYLT (binary synchronized lyrics frame)
+            for key, frame in tags.items():
+                if key.startswith("SYLT") and getattr(frame, "text", None):
+                    lines = []
+                    for item in frame.text:
+                        if isinstance(item, tuple) and len(item) == 2:
+                            line_str, ts_ms = item[0], int(item[1])
+                            mins = ts_ms // 60000
+                            secs = (ts_ms % 60000) // 1000
+                            centis = (ts_ms % 1000) // 10
+                            lines.append(f"[{mins:02d}:{secs:02d}.{centis:02d}] {line_str}")
+                    if lines:
+                        return "\n".join(lines)
+            # 3. Fallback to plain USLT text
+            for key, frame in tags.items():
+                if key.startswith("USLT"):
+                    txt = str(getattr(frame, "text", "") or "").strip()
+                    if txt:
+                        return txt
+        elif ext in (".flac", ".opus", ".ogg"):
+            import mutagen
+            audio = mutagen.File(file_path)
+            if audio and audio.tags:
+                for k in ("LYRICS", "lyrics", "SYNCEDLYRICS", "UNSYNCEDLYRICS", "unsyncedlyrics"):
+                    if k in audio.tags and audio.tags[k]:
+                        val = audio.tags[k]
+                        txt = val[0] if isinstance(val, list) else str(val)
+                        if txt and txt.strip():
+                            return txt.strip()
+        elif ext == ".m4a":
+            from mutagen.mp4 import MP4
+            audio = MP4(file_path)
+            if audio.tags and "\xa9lyr" in audio.tags and audio.tags["\xa9lyr"]:
+                txt = str(audio.tags["\xa9lyr"][0] or "").strip()
+                if txt:
+                    return txt
+    except Exception as e:
+        logger.debug(f"Could not extract embedded lyrics from {file_path}: {e}")
+    return ""
+
+
+EQ_FREQUENCIES: list[int] = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+
+EQ_PRESETS: dict[str, dict[str, object]] = {
+    "Flat (Default)": {
+        "preamp": 0.0,
+        "bass_boost": 0.0,
+        "bands": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    },
+    "Bass Boost": {
+        "preamp": 0.0,
+        "bass_boost": 4.5,
+        "bands": [6.5, 5.5, 4.0, 1.5, 0.0, 0.0, 0.5, 1.0, 1.5, 1.5],
+    },
+    "Mega Bass & Sub": {
+        "preamp": -1.0,
+        "bass_boost": 7.5,
+        "bands": [8.5, 7.5, 5.5, 2.0, -0.5, 0.0, 1.0, 2.0, 2.5, 2.0],
+    },
+    "Treble & Air Boost": {
+        "preamp": 0.0,
+        "bass_boost": 0.0,
+        "bands": [0.0, 0.0, 0.0, 0.0, 0.5, 1.5, 3.0, 4.5, 6.0, 6.5],
+    },
+    "Vocal Presence": {
+        "preamp": 0.5,
+        "bass_boost": 0.0,
+        "bands": [-2.0, -1.5, -0.5, 1.5, 3.5, 4.5, 4.0, 2.5, 1.0, 0.0],
+    },
+    "Rock / Metal": {
+        "preamp": 0.0,
+        "bass_boost": 2.5,
+        "bands": [4.5, 3.5, 2.0, -1.0, -1.5, 0.5, 2.5, 4.0, 4.5, 4.5],
+    },
+    "Electronic / EDM": {
+        "preamp": 0.0,
+        "bass_boost": 5.0,
+        "bands": [6.0, 5.0, 2.5, 0.0, -1.5, 0.5, 2.0, 3.5, 5.0, 5.5],
+    },
+    "Hip-Hop / Trap": {
+        "preamp": 0.0,
+        "bass_boost": 6.0,
+        "bands": [7.0, 6.0, 3.5, 1.0, -1.0, -0.5, 1.5, 2.5, 3.5, 4.0],
+    },
+    "Acoustic / Warm": {
+        "preamp": 0.5,
+        "bass_boost": 1.5,
+        "bands": [3.5, 3.0, 2.0, 1.0, 1.5, 1.5, 2.5, 3.0, 2.5, 2.0],
+    },
+    "Classical / Orchestral": {
+        "preamp": 1.0,
+        "bass_boost": 1.0,
+        "bands": [3.5, 2.5, 1.5, 0.5, 0.0, 0.0, 1.0, 2.0, 3.0, 3.5],
+    },
+    "V-Shape (Loudness)": {
+        "preamp": 0.0,
+        "bass_boost": 4.0,
+        "bands": [5.5, 4.5, 2.5, -1.0, -2.0, -1.0, 1.5, 3.5, 5.0, 5.5],
+    },
+    "Night Mode (Soft Dynamics)": {
+        "preamp": 1.5,
+        "bass_boost": -2.0,
+        "bands": [-3.5, -2.5, -1.0, 1.0, 2.0, 2.5, 1.5, 0.0, -1.5, -2.5],
+    },
+}
+
+
+def build_equalizer_af_filter(
+    bands: list[float] | dict,
+    preamp_db: float = 0.0,
+    bass_boost_db: float = 0.0
+) -> str:
+    """
+    Constructs a studio-grade FFmpeg audio filter graph for the 10-Band Equalizer & Bass Boost,
+    followed by a 5ms lookahead brickwall peak limiter so heavy bass boosts never clip.
+    """
+    if isinstance(bands, dict):
+        if preamp_db == 0.0 and "preamp" in bands:
+            preamp_db = float(bands.get("preamp", 0.0))
+        if bass_boost_db == 0.0 and "bass_boost" in bands:
+            bass_boost_db = float(bands.get("bass_boost", 0.0))
+        bands = bands.get("bands", [0.0] * 10)
+    chain = []
+    if abs(preamp_db) >= 0.1:
+        chain.append(f"volume={preamp_db:.2f}dB")
+    if abs(bass_boost_db) >= 0.1:
+        chain.append(f"bass=g={bass_boost_db:.2f}:f=85:w=0.6")
+    for idx, freq in enumerate(EQ_FREQUENCIES):
+        gain = float(bands[idx]) if idx < len(bands) else 0.0
+        if abs(gain) >= 0.1:
+            chain.append(f"equalizer=f={freq}:t=o:w=1.0:g={gain:.2f}")
+    if not chain:
+        return "anull"
+    chain.append("alimiter=limit=0.95:attack=5:release=50:level=false")
+    return ",".join(chain)
+
+
+def render_equalizer_preview(
+    file_path: str,
+    bands: list[float],
+    preamp_db: float = 0.0,
+    bass_boost_db: float = 0.0
+) -> Optional[str]:
+    """
+    Renders a fast cached EQ preview stream in <cache_dir>/eq_preview/ for live playback in MiniPlayerBar.
+    Returns the path to the rendered preview file, or the original file_path if EQ is flat.
+    """
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    af_filter = build_equalizer_af_filter(bands, preamp_db, bass_boost_db)
+    if af_filter == "anull":
+        return file_path
+
+    ffmpeg_bin = ensure_ffmpeg()
+    if not ffmpeg_bin:
+        return file_path
+
+    import hashlib
+    from core.paths import get_cache_dir
+    eq_dir = os.path.join(str(get_cache_dir()), "eq_preview")
+    os.makedirs(eq_dir, exist_ok=True)
+
+    try:
+        mtime = int(os.path.getmtime(file_path))
+    except Exception:
+        mtime = 0
+    key_str = f"{os.path.abspath(file_path)}|{mtime}|{af_filter}"
+    digest = hashlib.sha1(key_str.encode("utf-8")).hexdigest()[:16]
+    out_path = os.path.join(eq_dir, f"eq_{digest}.mp3")
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 16 * 1024:
+        return out_path
+
+    # Clean old cached preview files (> 12 files) so cache stays tiny
+    try:
+        existing = sorted(
+            [os.path.join(eq_dir, f) for f in os.listdir(eq_dir) if f.startswith("eq_")],
+            key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0
+        )
+        while len(existing) >= 12:
+            old_f = existing.pop(0)
+            try:
+                os.remove(old_f)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    temp_out = f"{out_path}.tmp.mp3"
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-nostats",
+        "-i", file_path,
+        "-af", af_filter,
+        "-map", "0:a:0",
+        "-c:a", "libmp3lame",
+        "-b:a", "320k",
+        "-q:a", "2",
+        temp_out
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, creationflags=flags)
+        if proc.returncode == 0 and os.path.isfile(temp_out) and os.path.getsize(temp_out) > 16 * 1024:
+            os.replace(temp_out, out_path)
+            return out_path
+    except Exception as e:
+        logger.debug(f"EQ preview render failed: {e}")
+    finally:
+        if os.path.exists(temp_out):
+            try:
+                os.remove(temp_out)
+            except Exception:
+                pass
+    return file_path
+
+
+def apply_equalizer_to_file(
+    file_path: str,
+    bands: list[float],
+    preamp_db: float = 0.0,
+    bass_boost_db: float = 0.0
+) -> bool:
+    """
+    Permanently applies the 10-Band Equalizer & Bass Boost curve to an audio file on disk
+    while preserving 100% of embedded cover art, synchronized lyrics, genres, and metadata tags.
+    """
+    if not file_path or not os.path.isfile(file_path):
+        return False
+    af_filter = build_equalizer_af_filter(bands, preamp_db, bass_boost_db)
+    if af_filter == "anull":
+        return True
+
+    ffmpeg_bin = ensure_ffmpeg()
+    if not ffmpeg_bin:
+        return False
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in (".flac", ".mp3", ".opus", ".ogg", ".m4a"):
+        return False
+
+    # Snapshot metadata & artwork
+    saved_id3 = None
+    saved_flac_tags = None
+    saved_flac_pics = None
+    saved_ogg_tags = None
+    saved_mp4_tags = None
+    try:
+        if ext == ".mp3":
+            from mutagen.id3 import ID3
+            try:
+                saved_id3 = ID3(file_path)
+            except Exception:
+                saved_id3 = None
+        elif ext == ".flac":
+            from mutagen.flac import FLAC
+            orig_flac = FLAC(file_path)
+            saved_flac_tags = dict(orig_flac.tags) if orig_flac.tags else {}
+            saved_flac_pics = list(orig_flac.pictures)
+        elif ext in (".opus", ".ogg"):
+            import mutagen
+            orig_ogg = mutagen.File(file_path)
+            if orig_ogg and orig_ogg.tags:
+                saved_ogg_tags = dict(orig_ogg.tags)
+        elif ext == ".m4a":
+            from mutagen.mp4 import MP4
+            orig_mp4 = MP4(file_path)
+            if orig_mp4.tags:
+                saved_mp4_tags = dict(orig_mp4.tags)
+    except Exception:
+        pass
+
+    codec_args = []
+    if ext == ".flac":
+        codec_args = ["-map", "0:a:0", "-c:a", "flac", "-compression_level", "8"]
+    elif ext == ".mp3":
+        codec_args = ["-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", "320k", "-q:a", "0"]
+    elif ext == ".opus":
+        codec_args = ["-map", "0:a:0", "-c:a", "libopus", "-b:a", "192k", "-vbr", "on", "-compression_level", "10"]
+    elif ext == ".ogg":
+        codec_args = ["-map", "0:a:0", "-c:a", "libvorbis", "-q:a", "9"]
+    elif ext == ".m4a":
+        codec_args = ["-map", "0:a:0", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart"]
+
+    temp_out = f"{file_path}.eq_tmp{ext}"
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-nostats",
+        "-i", file_path,
+        "-af", af_filter,
+        *codec_args,
+        temp_out
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, creationflags=flags)
+        if proc.returncode != 0 or not os.path.isfile(temp_out) or os.path.getsize(temp_out) < 32 * 1024:
+            if os.path.exists(temp_out):
+                try:
+                    os.remove(temp_out)
+                except Exception:
+                    pass
+            return False
+
+        os.replace(temp_out, file_path)
+
+        # Restore tags & cover art
+        try:
+            if ext == ".mp3" and saved_id3 is not None:
+                saved_id3.save(file_path, v2_version=3)
+            elif ext == ".flac" and saved_flac_tags is not None:
+                from mutagen.flac import FLAC
+                new_flac = FLAC(file_path)
+                for k, v in saved_flac_tags.items():
+                    new_flac[k] = v
+                if saved_flac_pics:
+                    new_flac.clear_pictures()
+                    for pic in saved_flac_pics:
+                        new_flac.add_picture(pic)
+                new_flac.save()
+            elif ext in (".opus", ".ogg") and saved_ogg_tags is not None:
+                import mutagen
+                new_ogg = mutagen.File(file_path)
+                if new_ogg is not None:
+                    for k, v in saved_ogg_tags.items():
+                        new_ogg[k] = v
+                    new_ogg.save()
+            elif ext == ".m4a" and saved_mp4_tags is not None:
+                from mutagen.mp4 import MP4
+                new_mp4 = MP4(file_path)
+                if new_mp4.tags is None:
+                    new_mp4.add_tags()
+                for k, v in saved_mp4_tags.items():
+                    new_mp4.tags[k] = v
+                new_mp4.save()
+        except Exception as e_rest:
+            logger.debug(f"Metadata restore note after EQ apply: {e_rest}")
+        return True
+    except Exception as e:
+        if os.path.exists(temp_out):
+            try:
+                os.remove(temp_out)
+            except Exception:
+                pass
+        logger.debug(f"Failed applying EQ to file {file_path}: {e}")
+        return False
+
+
+def inspect_audio_spectrum(file_path: str, generate_spectrogram: bool = True) -> Optional[dict]:
+    """
+    Analyzes an audio file's true ultrasonic frequency cutoff and spectral energy distribution
+    to detect whether a file is true Lossless / 320 kbps or an upscaled/transcoded low-bitrate stream.
+    Optionally renders a visual RGB spectrogram image via FFmpeg `showspectrumpic`.
+    """
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    ffmpeg_bin = ensure_ffmpeg()
+    if not ffmpeg_bin:
+        return None
+
+    import array
+    import hashlib
+    import math
+    import mutagen
+    from core.paths import get_cache_dir
+
+    ext = os.path.splitext(file_path)[1].lower()
+    sample_rate = 44100
+    channels = 2
+    bitrate_kbps = 0
+    duration_sec = 0.0
+    bits_per_sample = 16
+    codec_name = ext.lstrip(".").upper()
+
+    try:
+        m = mutagen.File(file_path)
+        if m and m.info:
+            sample_rate = getattr(m.info, "sample_rate", 44100) or 44100
+            channels = getattr(m.info, "channels", 2) or 2
+            duration_sec = float(getattr(m.info, "length", 0.0) or 0.0)
+            bits_per_sample = getattr(m.info, "bits_per_sample", 16) or 16
+            br = getattr(m.info, "bitrate", 0) or 0
+            if br > 0:
+                bitrate_kbps = int(round(br / 1000.0))
+            elif duration_sec > 0:
+                bitrate_kbps = int(round((os.path.getsize(file_path) * 8) / (duration_sec * 1000.0)))
+    except Exception:
+        pass
+
+    # Decode a 10-second representative slice from the core of the song at 44,100 Hz mono s16le
+    start_sec = max(0.0, (duration_sec * 0.35) if duration_sec > 25.0 else 0.0)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    cmd = [
+        ffmpeg_bin,
+        "-nostats",
+        "-ss", f"{start_sec:.1f}",
+        "-t", "10",
+        "-i", file_path,
+        "-vn",
+        "-ac", "1",
+        "-ar", "44100",
+        "-f", "s16le",
+        "-"
+    ]
+    probe_freqs = [2000, 4000, 8000, 12000, 14000, 15000, 16000, 17000, 18000, 19000, 19800, 20500, 21200]
+    band_db: dict[int, float] = {f: -95.0 for f in probe_freqs}
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=25, creationflags=flags)
+        pcm_bytes = proc.stdout or b""
+        if len(pcm_bytes) >= 4096:
+            samples = array.array("h")
+            samples.frombytes(pcm_bytes[: (len(pcm_bytes) // 2) * 2])
+            # Analyze up to 45 windows of N=1024 samples spaced across the 10-second slice using Goertzel
+            n_win = 1024
+            total_samples = len(samples)
+            num_windows = min(45, max(1, total_samples // n_win))
+            stride = max(n_win, (total_samples - n_win) // max(1, num_windows))
+
+            accum_power = {f: 0.0 for f in probe_freqs}
+            coeffs = {}
+            for f in probe_freqs:
+                k = int(round((n_win * f) / 44100.0))
+                omega = (2.0 * math.pi * k) / n_win
+                coeffs[f] = 2.0 * math.cos(omega)
+
+            valid_wins = 0
+            for w_idx in range(num_windows):
+                offset = w_idx * stride
+                if offset + n_win > total_samples:
+                    break
+                win_slice = samples[offset: offset + n_win]
+                # Skip silent windows
+                peak_s = max(abs(win_slice[0]), abs(win_slice[n_win // 2]), abs(win_slice[-1]))
+                if peak_s < 150:
+                    continue
+                valid_wins += 1
+                for f in probe_freqs:
+                    c = coeffs[f]
+                    s1 = 0.0
+                    s2 = 0.0
+                    for x in win_slice:
+                        s0 = (x / 32768.0) + c * s1 - s2
+                        s2 = s1
+                        s1 = s0
+                    power = max(1e-12, (s1 * s1 + s2 * s2 - c * s1 * s2) / (n_win * n_win))
+                    accum_power[f] += power
+
+            if valid_wins > 0:
+                for f in probe_freqs:
+                    avg_p = accum_power[f] / valid_wins
+                    band_db[f] = round(max(-95.0, 10.0 * math.log10(max(1e-10, avg_p))), 1)
+    except Exception as e:
+        logger.debug(f"Spectrum Goertzel probe note for {file_path}: {e}")
+
+    # Determine effective ultrasonic cutoff frequency (kHz) relative to mid-band reference (2-8 kHz)
+    mid_ref_db = max(band_db.get(2000, -50.0), band_db.get(4000, -50.0), band_db.get(8000, -50.0))
+    threshold_db = max(-78.0, mid_ref_db - 44.0)
+
+    cutoff_hz = 12000
+    for f in probe_freqs:
+        if f >= 12000 and band_db.get(f, -95.0) >= threshold_db:
+            cutoff_hz = f
+    cutoff_khz = round(cutoff_hz / 1000.0, 1)
+
+    # Evaluate true quality verdict vs container claims
+    is_lossless_container = ext in (".flac", ".wav")
+    if cutoff_khz >= 19.8:
+        verdict = "authentic"
+        verdict_title = "Authentic Lossless / 320 kbps Master" if is_lossless_container or bitrate_kbps >= 280 else "Authentic Full-Spectrum Audio"
+        estimated_true_kbps = bitrate_kbps if bitrate_kbps >= 256 else 320
+    elif cutoff_khz >= 18.5:
+        verdict = "authentic" if not is_lossless_container else "good"
+        verdict_title = "True High-Fidelity (256–320 kbps / Opus Fullband)"
+        estimated_true_kbps = max(256, min(320, bitrate_kbps or 256))
+    elif cutoff_khz >= 16.8:
+        verdict = "upscaled" if (is_lossless_container or bitrate_kbps >= 300) else "good"
+        verdict_title = "Medium-High Bitrate (160–192 kbps Transcode)" if verdict == "upscaled" else "Standard High Quality (192 kbps)"
+        estimated_true_kbps = 192
+    else:
+        verdict = "upscaled"
+        verdict_title = f"Upscaled / Low-Bitrate Transcode (~128 kbps shelf at {cutoff_khz} kHz)"
+        estimated_true_kbps = 128
+
+    spectrogram_path = ""
+    if generate_spectrogram:
+        try:
+            spec_dir = os.path.join(str(get_cache_dir()), "spectrograms")
+            os.makedirs(spec_dir, exist_ok=True)
+            digest = hashlib.sha1(f"{os.path.abspath(file_path)}|{os.path.getsize(file_path)}".encode("utf-8")).hexdigest()[:16]
+            spec_out = os.path.join(spec_dir, f"spec_{digest}.png")
+            if not (os.path.isfile(spec_out) and os.path.getsize(spec_out) > 2048):
+                spec_cmd = [
+                    ffmpeg_bin,
+                    "-y",
+                    "-nostats",
+                    "-ss", f"{start_sec:.1f}",
+                    "-t", "30",
+                    "-i", file_path,
+                    "-lavfi", "showspectrumpic=s=640x220:mode=combined:color=fire:scale=lin:legend=1",
+                    "-frames:v", "1",
+                    spec_out
+                ]
+                subprocess.run(spec_cmd, capture_output=True, timeout=25, creationflags=flags)
+            if os.path.isfile(spec_out) and os.path.getsize(spec_out) > 2048:
+                spectrogram_path = spec_out
+        except Exception as e_spec:
+            logger.debug(f"Could not generate spectrogram image for {file_path}: {e_spec}")
+
+    return {
+        "file_path": file_path,
+        "codec": codec_name,
+        "sample_rate": sample_rate,
+        "channels": channels,
+        "bits_per_sample": bits_per_sample,
+        "container_bitrate_kbps": bitrate_kbps,
+        "estimated_true_kbps": estimated_true_kbps,
+        "duration_sec": round(duration_sec, 1),
+        "cutoff_khz": cutoff_khz,
+        "verdict": verdict,  # "authentic", "good", "upscaled"
+        "verdict_title": verdict_title,
+        "band_db": band_db,
+        "spectrogram_path": spectrogram_path,
+    }
+
+
+def compute_acoustic_fingerprint(file_path: str) -> Optional[str]:
+    """
+    Computes a volume-normalized 64-bit acoustic energy & zero-crossing envelope fingerprint
+    from the core 20 seconds of an audio file so identical recordings across Single/Album
+    releases or formats can be matched even when tags or loudness differ.
+    """
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    ffmpeg_bin = ensure_ffmpeg()
+    if not ffmpeg_bin:
+        return None
+
+    import array
+    import math
+    import mutagen
+
+    duration_sec = 0.0
+    try:
+        m = mutagen.File(file_path)
+        if m and m.info:
+            duration_sec = float(getattr(m.info, "length", 0.0) or 0.0)
+    except Exception:
+        pass
+
+    start_sec = 15.0 if duration_sec > 45.0 else 0.0
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    cmd = [
+        ffmpeg_bin,
+        "-nostats",
+        "-ss", f"{start_sec:.1f}",
+        "-t", "20",
+        "-i", file_path,
+        "-vn",
+        "-ac", "1",
+        "-ar", "8000",
+        "-f", "s16le",
+        "-"
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=20, creationflags=flags)
+        pcm = proc.stdout or b""
+        if len(pcm) < 8000:
+            return None
+        samples = array.array("h")
+        samples.frombytes(pcm[: (len(pcm) // 2) * 2])
+        n_buckets = 33
+        bucket_len = len(samples) // n_buckets
+        if bucket_len < 100:
+            return None
+
+        rms_vals = []
+        zcr_vals = []
+        for b in range(n_buckets):
+            chunk = samples[b * bucket_len: (b + 1) * bucket_len]
+            sq_sum = 0.0
+            zc = 0
+            prev = chunk[0]
+            for s in chunk:
+                sq_sum += float(s) * float(s)
+                if (s >= 0 and prev < 0) or (s < 0 and prev >= 0):
+                    zc += 1
+                prev = s
+            rms_vals.append(math.sqrt(sq_sum / bucket_len))
+            zcr_vals.append(zc / float(bucket_len))
+
+        # Differential bit encoding across adjacent buckets (32 bits RMS slope + 32 bits ZCR slope = 64-bit hex)
+        bits = 0
+        for i in range(32):
+            if rms_vals[i + 1] >= rms_vals[i]:
+                bits |= (1 << i)
+            if zcr_vals[i + 1] >= zcr_vals[i]:
+                bits |= (1 << (32 + i))
+        return f"{bits:016x}"
+    except Exception as e:
+        logger.debug(f"Acoustic fingerprint failed for {file_path}: {e}")
+        return None
+
+
+def fingerprint_similarity(fp1: str, fp2: str) -> float:
+    """Returns normalized Hamming similarity (0.0 to 1.0) between two 64-bit hex acoustic fingerprints."""
+    if not fp1 or not fp2 or len(fp1) != 16 or len(fp2) != 16:
+        return 0.0
+    try:
+        v1 = int(fp1, 16)
+        v2 = int(fp2, 16)
+        xor_bits = bin(v1 ^ v2).count("1")
+        return 1.0 - (xor_bits / 64.0)
+    except Exception:
+        return 0.0
+

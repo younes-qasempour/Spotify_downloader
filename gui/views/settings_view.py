@@ -1224,6 +1224,20 @@ class SettingsView(QScrollArea):
         btn_row.addStretch(1)
         maint_layout.addLayout(btn_row)
 
+        btn_row2 = QHBoxLayout()
+        btn_row2.setSpacing(10)
+
+        self.spectrum_audit_btn = PushButton(FluentIcon.SPEED_HIGH, "Scan Library for Fake Bitrates (Spectrum Audit)", maint_card)
+        self.spectrum_audit_btn.clicked.connect(self._open_spectrum_audit)
+
+        self.dedup_lib_btn = PushButton(FluentIcon.LINK, "Smart Duplicate & Fingerprint Merger", maint_card)
+        self.dedup_lib_btn.clicked.connect(self._open_duplicate_merger)
+
+        btn_row2.addWidget(self.spectrum_audit_btn)
+        btn_row2.addWidget(self.dedup_lib_btn)
+        btn_row2.addStretch(1)
+        maint_layout.addLayout(btn_row2)
+
         self.maint_status_label = CaptionLabel("", maint_card)
         self.maint_status_label.setStyleSheet("font-size: 11px;")
         self.maint_status_label.setWordWrap(True)
@@ -1970,4 +1984,44 @@ class SettingsView(QScrollArea):
             InfoBar.success("Library Volume Boosted & Balanced", msg, duration=6000, parent=self)
         else:
             InfoBar.error("Volume Normalization Error", f"Failed to normalize library volume: {msg}", duration=5000, parent=self)
+
+    def _open_spectrum_audit(self):
+        from core.archive import ArchiveManager
+        from gui.dialogs.spectrum_dialog import BatchSpectrumScannerDialog
+
+        arc = ArchiveManager()
+
+        def _upgrade_tracks(tracks_to_upgrade):
+            qm = self.qm or getattr(self.window(), "queue_manager", None)
+            if not qm or not tracks_to_upgrade:
+                return
+            for tr in tracks_to_upgrade:
+                row = arc.find_track(spotify_id=tr.id)
+                if row and row.get("file_path") and os.path.exists(row["file_path"]):
+                    try:
+                        os.remove(row["file_path"])
+                    except Exception:
+                        pass
+                arc.remove_downloaded_track(tr.id)
+                tr.preferred_engine = "auto"
+            qm.enqueue(tracks_to_upgrade)
+            qm.start_all()
+            InfoBar.success(
+                "Upgrading Tracks",
+                f"Queued {len(tracks_to_upgrade)} track(s) for high-bitrate re-download.",
+                duration=4500,
+                parent=self
+            )
+
+        dlg = BatchSpectrumScannerDialog(arc, on_upgrade_tracks_callback=_upgrade_tracks, parent=self.window() or self)
+        dlg.exec()
+
+    def _open_duplicate_merger(self):
+        from core.archive import ArchiveManager
+        from gui.dialogs.duplicate_merger_dialog import DuplicateMergerDialog
+
+        arc = ArchiveManager()
+        dlg = DuplicateMergerDialog(arc, parent=self.window() or self)
+        dlg.exec()
+
 
