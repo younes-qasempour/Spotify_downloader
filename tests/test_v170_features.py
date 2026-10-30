@@ -251,13 +251,14 @@ class TestV170Features(unittest.TestCase):
         self.assertTrue(hasattr(player_bar, "eq_btn"))
 
         drawer = KaraokeLyricsDrawer(player_bar)
+        self.assertTrue(hasattr(drawer, "translate_off_btn"))
         self.assertTrue(hasattr(drawer, "translate_en_btn"))
         self.assertTrue(hasattr(drawer, "translate_fa_btn"))
         drawer.set_track_info(
             "Test Song",
             "Test Artist",
-            [(1000, "Bonjour le monde"), (4000, "La musique est belle")],
-            "Bonjour le monde\nLa musique est belle",
+            [(1000, "Bonjour le monde"), (4000, "Yeah, yeah")],
+            "Bonjour le monde\nYeah, yeah",
             has_synced=True,
         )
         drawer.update_active_line(1)
@@ -265,17 +266,20 @@ class TestV170Features(unittest.TestCase):
 
         # Verify bilingual translation display on LyricLineRow (English & Persian)
         drawer.current_trans_lang = "en"
-        drawer._on_translation_ready("en", ["Hello world", "Music is beautiful"])
+        drawer._on_translation_ready("en", ["Hello world", "Yeah, yeah"])
         self.assertEqual(drawer.line_widgets[0].translated_text, "Hello world")
         self.assertFalse(drawer.line_widgets[0].trans_lbl.isHidden())
+        # Same-language line ("Yeah, yeah" -> "Yeah, yeah") should hide redundant subtitle
+        self.assertTrue(drawer.line_widgets[1].trans_lbl.isHidden())
 
         drawer.current_trans_lang = "fa"
-        drawer._on_translation_ready("fa", ["سلام دنیا", "موسیقی زیباست"])
-        self.assertEqual(drawer.line_widgets[1].translated_text, "موسیقی زیباست")
-        self.assertIn("موسیقی زیباست", drawer.line_widgets[1].trans_lbl.text())
+        drawer._on_translation_ready("fa", ["سلام دنیا", "آره، آره"])
+        self.assertEqual(drawer.line_widgets[1].translated_text, "آره، آره")
+        self.assertIn("آره، آره", drawer.line_widgets[1].trans_lbl.text())
 
-        # Verify LyricsEngine.translate_lyrics deduplication & batching
+        # Verify LyricsEngine.translate_lyrics deduplication, batching & sanitization
         eng = LyricsEngine()
+        self.assertEqual(eng._sanitize_translated_line("PLEASE SELECT TWO DISTINCT LANGUAGES", "Yeah, yeah"), "Yeah, yeah")
         with patch.object(eng, "_translate_batch_gtx", return_value=["سلام دنیا", "موسیقی زیباست"]):
             res_fa = eng.translate_lyrics(
                 ["Bonjour le monde", "♪ Instrumental ♪", "La musique est belle", "Bonjour le monde"],

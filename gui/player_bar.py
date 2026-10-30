@@ -5,10 +5,10 @@ import logging
 from typing import Optional, List, Tuple, Any
 
 from PyQt6.QtCore import Qt, QUrl, QByteArray, QPoint, QTimer, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QIcon, QKeySequence, QShortcut
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QIcon, QKeySequence, QShortcut, QColor
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame, QMenu, QPushButton
 )
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QAudioDevice
 from qfluentwidgets import (
@@ -30,6 +30,8 @@ logger = logging.getLogger("gui.player_bar")
 # -----------------------------------------------------------------------------
 SVG_PREV = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 6h2.2v12H6zm3.3 6L18 18V6z"/></svg>'
 SVG_NEXT = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 18l8.7-6L6 6v12zm9.8-12v12H18V6z"/></svg>'
+SVG_PLAY = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5.14v13.72L19 12 8 5.14z"/></svg>'
+SVG_PAUSE = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>'
 SVG_REWIND_10 = (
     '<svg viewBox="0 0 24 24">'
     '<path fill="currentColor" d="M12.5 3a9 9 0 0 0-6.36 2.64L4 3.5V9h5.5L7.22 6.72A7 7 0 1 1 5.5 12h-2a9 9 0 1 0 9-9z"/>'
@@ -126,7 +128,7 @@ class MiniPlayerBar(QFrame):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setObjectName("mini_player_bar")
-        self.setFixedHeight(72)
+        self.setFixedHeight(92)
 
         self.current_file_path: Optional[str] = None
         self.current_track: Optional[TrackMetadata] = None
@@ -191,30 +193,48 @@ class MiniPlayerBar(QFrame):
     def _init_ui(self):
         self.setStyleSheet("""
             QFrame#mini_player_bar {
-                background-color: #1a1a1a;
-                border-top: 1px solid rgba(255, 255, 255, 0.10);
+                background-color: #0B0B0B;
+                border-top: 1px solid rgba(255, 255, 255, 0.08);
             }
         """)
 
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(16, 4, 16, 4)
-        main_layout.setSpacing(14)
+        main_layout.setContentsMargins(16, 8, 16, 8)
+        main_layout.setSpacing(16)
+
+        # Shared borderless icon button style (Spotify Desktop aesthetic)
+        ghost_btn_style = """
+            ToolButton {
+                background-color: transparent;
+                border: none;
+                border-radius: 15px;
+            }
+            ToolButton:hover {
+                background-color: rgba(255, 255, 255, 0.09);
+            }
+            ToolButton:pressed {
+                background-color: rgba(255, 255, 255, 0.04);
+            }
+        """
 
         # -------------------------------------------------------------
-        # Left Section: Thumbnail, Title, Artist, Quality Badge
+        # Left Section: Now Playing Card (56x56 Art, Title, Artist, Badge)
         # -------------------------------------------------------------
-        left_layout = QHBoxLayout()
-        left_layout.setSpacing(10)
+        left_container = QWidget(self)
+        left_container.setFixedWidth(300)
+        left_container.setStyleSheet("background: transparent;")
+        left_layout = QHBoxLayout(left_container)
+        left_layout.setSpacing(12)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.cover_label = QLabel(self)
-        self.cover_label.setFixedSize(44, 44)
+        self.cover_label = QLabel(left_container)
+        self.cover_label.setFixedSize(56, 56)
         self.cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.cover_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.cover_label.setToolTip("Click to show file in Windows Explorer")
+        self.cover_label.setToolTip("Click to reveal audio file in Windows Explorer")
         self.cover_label.setStyleSheet("""
             QLabel {
-                background-color: #262626;
+                background-color: #1E1E1E;
                 border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 6px;
             }
@@ -226,32 +246,43 @@ class MiniPlayerBar(QFrame):
         left_layout.addWidget(self.cover_label)
 
         info_layout = QVBoxLayout()
-        info_layout.setSpacing(2)
+        info_layout.setSpacing(3)
         info_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        self.title_label = StrongBodyLabel("No track playing", self)
-        self.title_label.setStyleSheet("color: #FFFFFF; font-size: 13px; font-weight: 600;")
-        self.title_label.setMinimumWidth(160)
-        self.title_label.setMaximumWidth(340)
+        self.title_label = StrongBodyLabel("No track playing", left_container)
+        self.title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.title_label.setStyleSheet("""
+            QLabel {
+                color: #FFFFFF;
+                font-size: 13.5px;
+                font-weight: 700;
+                background: transparent;
+            }
+            QLabel:hover {
+                color: #1ED760;
+            }
+        """)
+        self.title_label.setMaximumWidth(230)
+        self.title_label.mousePressEvent = lambda e: self.open_lyrics_drawer() if e.button() == Qt.MouseButton.LeftButton else None
 
         meta_row = QHBoxLayout()
         meta_row.setSpacing(6)
         meta_row.setContentsMargins(0, 0, 0, 0)
 
-        self.artist_label = CaptionLabel("Ready", self)
-        self.artist_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
-        self.artist_label.setMaximumWidth(220)
+        self.artist_label = CaptionLabel("Ready", left_container)
+        self.artist_label.setStyleSheet("color: #B3B3B3; font-size: 11.5px; background: transparent;")
+        self.artist_label.setMaximumWidth(155)
 
-        self.badge_label = QLabel(self)
+        self.badge_label = QLabel(left_container)
         self.badge_label.setStyleSheet("""
             QLabel {
-                background-color: rgba(29, 185, 84, 0.18);
+                background-color: rgba(29, 185, 84, 0.16);
                 color: #1ED760;
-                font-size: 10px;
+                font-size: 9.5px;
                 font-weight: 700;
-                padding: 1px 6px;
+                padding: 1px 5px;
                 border-radius: 3px;
-                border: 1px solid rgba(29, 185, 84, 0.35);
+                border: 1px solid rgba(29, 185, 84, 0.30);
             }
         """)
         self.badge_label.setVisible(False)
@@ -262,125 +293,100 @@ class MiniPlayerBar(QFrame):
 
         info_layout.addWidget(self.title_label)
         info_layout.addLayout(meta_row)
-        left_layout.addLayout(info_layout)
+        left_layout.addLayout(info_layout, 1)
 
-        main_layout.addLayout(left_layout, 0)
+        main_layout.addWidget(left_container, 0)
 
         # -------------------------------------------------------------
-        # Center Section: Karaoke Banner + Controls + Seek Slider
+        # Center Section: Spotify 5-Button Transport + Seek Bar + Live Lyric Ticker
         # -------------------------------------------------------------
         center_layout = QVBoxLayout()
-        center_layout.setSpacing(2)
+        center_layout.setSpacing(3)
         center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # 1. Live Karaoke Banner (Active line & Next line)
-        karaoke_container = QHBoxLayout()
-        karaoke_container.setSpacing(8)
-        karaoke_container.setContentsMargins(0, 0, 0, 0)
-        karaoke_container.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.active_lyric_label = QLabel("♪ Flacify High-Fidelity Audio ♪", self)
-        self.active_lyric_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.active_lyric_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.active_lyric_label.setToolTip("Click to open Live Synchronized Karaoke Lyrics Drawer")
-        self.active_lyric_label.mousePressEvent = lambda e: self.open_lyrics_drawer() if e.button() == Qt.MouseButton.LeftButton else None
-        self.active_lyric_label.setStyleSheet("""
-            QLabel {
-                color: #1ED760;
-                font-size: 12px;
-                font-weight: 600;
-                background: transparent;
-            }
-            QLabel:hover {
-                color: #4ADE80;
-            }
-        """)
-
-        self.next_lyric_label = QLabel("", self)
-        self.next_lyric_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.next_lyric_label.setStyleSheet("""
-            QLabel {
-                color: #777777;
-                font-size: 11px;
-                font-style: italic;
-                background: transparent;
-            }
-        """)
-        self.next_lyric_label.setVisible(False)
-
-        karaoke_container.addWidget(self.active_lyric_label)
-        karaoke_container.addWidget(self.next_lyric_label)
-        center_layout.addLayout(karaoke_container)
-
-        # 2. Controls Row: Shuffle, Previous (|◀), Rewind 10s (↺10), Play/Pause, Forward 10s (↻10), Next (▶|), Repeat
+        # 1. Iconic 5-Button Spotify Transport Row: Shuffle, Previous, Play/Pause (White Circle), Next, Repeat
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        btn_row.setSpacing(14)
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Shuffle button
-        self.shuffle_btn = ToolButton(make_svg_icon(SVG_SHUFFLE, color="#888888"), self)
+        self.shuffle_btn = ToolButton(make_svg_icon(SVG_SHUFFLE, color="#B3B3B3", size=18), self)
         self.shuffle_btn.setToolTip("Shuffle: Off (Click to enable)")
-        self.shuffle_btn.setFixedSize(28, 28)
+        self.shuffle_btn.setFixedSize(30, 30)
+        self.shuffle_btn.setStyleSheet(ghost_btn_style)
         self.shuffle_btn.clicked.connect(self._toggle_shuffle)
 
-        # Previous Track (|◀)
-        self.prev_btn = ToolButton(make_svg_icon(SVG_PREV, color="#E0E0E0"), self)
+        self.prev_btn = ToolButton(make_svg_icon(SVG_PREV, color="#E5E5E5", size=20), self)
         self.prev_btn.setToolTip("Previous Track")
         self.prev_btn.setFixedSize(30, 30)
+        self.prev_btn.setStyleSheet(ghost_btn_style)
         self.prev_btn.clicked.connect(self.play_previous)
 
-        # Rewind 10 seconds (↺10)
+        # Hidden compatibility buttons for +/-10s (accessible via Left/Right arrow shortcuts)
         self.rewind_btn = ToolButton(make_svg_icon(SVG_REWIND_10, color="#CCCCCC"), self)
-        self.rewind_btn.setToolTip("Rewind 10 seconds")
-        self.rewind_btn.setFixedSize(26, 26)
+        self.rewind_btn.setVisible(False)
         self.rewind_btn.clicked.connect(lambda: self._seek_relative(-10000))
 
-        # Play / Pause
-        self.play_btn = ToolButton(FluentIcon.PLAY, self)
-        self.play_btn.setToolTip("Play / Pause (Space)")
-        self.play_btn.setFixedSize(36, 36)
-        self.play_btn.clicked.connect(self._toggle_play_pause)
-
-        # Forward 10 seconds (↻10)
         self.forward_btn = ToolButton(make_svg_icon(SVG_FORWARD_10, color="#CCCCCC"), self)
-        self.forward_btn.setToolTip("Forward 10 seconds")
-        self.forward_btn.setFixedSize(26, 26)
+        self.forward_btn.setVisible(False)
         self.forward_btn.clicked.connect(lambda: self._seek_relative(10000))
 
-        # Next Track (▶|)
-        self.next_btn = ToolButton(make_svg_icon(SVG_NEXT, color="#E0E0E0"), self)
+        # Signature Spotify Solid White Circular Play/Pause Button
+        self.play_btn = ToolButton(make_svg_icon(SVG_PLAY, color="#000000", size=20), self)
+        self.play_btn.setToolTip("Play / Pause (Space)")
+        self.play_btn.setFixedSize(34, 34)
+        self.play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.play_btn.setStyleSheet("""
+            ToolButton {
+                background-color: #FFFFFF;
+                border: none;
+                border-radius: 17px;
+            }
+            ToolButton:hover {
+                background-color: #1ED760;
+            }
+            ToolButton:pressed {
+                background-color: #1DB954;
+            }
+        """)
+        self.play_btn.clicked.connect(self._toggle_play_pause)
+
+        self.next_btn = ToolButton(make_svg_icon(SVG_NEXT, color="#E5E5E5", size=20), self)
         self.next_btn.setToolTip("Next Track")
         self.next_btn.setFixedSize(30, 30)
+        self.next_btn.setStyleSheet(ghost_btn_style)
         self.next_btn.clicked.connect(self.play_next)
 
-        # Repeat button (Off -> All -> One)
-        self.repeat_btn = ToolButton(make_svg_icon(SVG_REPEAT, color="#888888"), self)
+        self.repeat_btn = ToolButton(make_svg_icon(SVG_REPEAT, color="#B3B3B3", size=18), self)
         self.repeat_btn.setToolTip("Repeat: Off (Click to enable Repeat All)")
-        self.repeat_btn.setFixedSize(28, 28)
+        self.repeat_btn.setFixedSize(30, 30)
+        self.repeat_btn.setStyleSheet(ghost_btn_style)
         self.repeat_btn.clicked.connect(self._toggle_repeat)
 
         btn_row.addWidget(self.shuffle_btn)
         btn_row.addWidget(self.prev_btn)
-        btn_row.addWidget(self.rewind_btn)
         btn_row.addWidget(self.play_btn)
-        btn_row.addWidget(self.forward_btn)
         btn_row.addWidget(self.next_btn)
         btn_row.addWidget(self.repeat_btn)
         center_layout.addLayout(btn_row)
 
-        # 3. Seek Slider Row with Time Labels on both sides
+        # 2. Spotify Green Seek Slider Row with Time Labels on both sides
         seek_row = QHBoxLayout()
-        seek_row.setSpacing(8)
+        seek_row.setSpacing(10)
         seek_row.setContentsMargins(0, 0, 0, 0)
 
         self.curr_time_label = CaptionLabel("00:00", self)
-        self.curr_time_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
-        self.curr_time_label.setFixedWidth(38)
+        self.curr_time_label.setStyleSheet("color: #A7A7A7; font-size: 11px; font-family: 'Segoe UI', sans-serif;")
+        self.curr_time_label.setFixedWidth(36)
         self.curr_time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.seek_slider = PlayerSeekSlider(Qt.Orientation.Horizontal, self)
+        try:
+            self.seek_slider.setCustomColor(QColor("#1DB954"), QColor("#1ED760"))
+        except Exception:
+            pass
+        self.seek_slider.setFixedHeight(18)
         self.seek_slider.setRange(0, 1000)
         self.seek_slider.setValue(0)
         self.seek_slider.sliderPressed.connect(self._on_seek_started)
@@ -390,69 +396,127 @@ class MiniPlayerBar(QFrame):
         self.seek_slider.valueChanged.connect(self._on_slider_value_changed)
 
         self.total_time_label = CaptionLabel("00:00", self)
-        self.total_time_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
-        self.total_time_label.setFixedWidth(38)
+        self.total_time_label.setStyleSheet("color: #A7A7A7; font-size: 11px; font-family: 'Segoe UI', sans-serif;")
+        self.total_time_label.setFixedWidth(36)
         self.total_time_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         seek_row.addWidget(self.curr_time_label)
         seek_row.addWidget(self.seek_slider, 1)
         seek_row.addWidget(self.total_time_label)
-
         center_layout.addLayout(seek_row)
+
+        # 3. Unclipped Single-Line Live Karaoke & Translation Ticker
+        karaoke_container = QHBoxLayout()
+        karaoke_container.setSpacing(6)
+        karaoke_container.setContentsMargins(0, 0, 0, 0)
+        karaoke_container.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.active_lyric_label = QLabel("♪ Flacify High-Fidelity Audio ♪", self)
+        self.active_lyric_label.setFixedHeight(20)
+        self.active_lyric_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.active_lyric_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.active_lyric_label.setToolTip("Click to open Synchronized Karaoke Lyrics & Translation Studio")
+        self.active_lyric_label.mousePressEvent = lambda e: self.open_lyrics_drawer() if e.button() == Qt.MouseButton.LeftButton else None
+        self.active_lyric_label.setStyleSheet("""
+            QLabel {
+                color: #1ED760;
+                font-size: 12.5px;
+                font-weight: 600;
+                background: transparent;
+            }
+            QLabel:hover {
+                color: #4ADE80;
+            }
+        """)
+
+        self.next_lyric_label = QLabel("", self)
+        self.next_lyric_label.setFixedHeight(20)
+        self.next_lyric_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.next_lyric_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.next_lyric_label.mousePressEvent = lambda e: self.open_lyrics_drawer() if e.button() == Qt.MouseButton.LeftButton else None
+        self.next_lyric_label.setStyleSheet("""
+            QLabel {
+                color: #9CA3AF;
+                font-size: 12px;
+                font-weight: 500;
+                background: transparent;
+            }
+        """)
+        self.next_lyric_label.setVisible(False)
+
+        karaoke_container.addWidget(self.active_lyric_label)
+        karaoke_container.addWidget(self.next_lyric_label)
+        center_layout.addLayout(karaoke_container)
+
         main_layout.addLayout(center_layout, 1)
 
         # -------------------------------------------------------------
-        # Right Section: Volume & File Actions
+        # Right Section: Streamlined Spotify Utility Bar (Fixed 300px to balance Left)
         # -------------------------------------------------------------
-        right_layout = QHBoxLayout()
-        right_layout.setSpacing(8)
+        right_container = QWidget(self)
+        right_container.setFixedWidth(300)
+        right_container.setStyleSheet("background: transparent;")
+        right_layout = QHBoxLayout(right_container)
+        right_layout.setSpacing(6)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        right_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        right_layout.addStretch(1)
 
-        self.lyrics_btn = ToolButton(make_svg_icon(SVG_LYRICS, color="#CCCCCC"), self)
-        self.lyrics_btn.setToolTip("Open Synchronized Karaoke Lyrics Drawer")
-        self.lyrics_btn.setFixedSize(28, 28)
+        self.lyrics_btn = ToolButton(make_svg_icon(SVG_LYRICS, color="#B3B3B3", size=19), right_container)
+        self.lyrics_btn.setToolTip("Lyrics & Bilingual Translation Studio (English / فارسی)")
+        self.lyrics_btn.setFixedSize(30, 30)
+        self.lyrics_btn.setStyleSheet(ghost_btn_style)
         self.lyrics_btn.clicked.connect(self.open_lyrics_drawer)
 
-        self.translate_btn = ToolButton(FluentIcon.LANGUAGE, self)
+        self.translate_btn = ToolButton(FluentIcon.LANGUAGE, right_container)
         self.translate_btn.setToolTip("Translate Lyrics (English / Persian فارسی)")
-        self.translate_btn.setFixedSize(28, 28)
+        self.translate_btn.setFixedSize(30, 30)
+        self.translate_btn.setStyleSheet(ghost_btn_style)
         self.translate_btn.clicked.connect(self._show_translate_menu)
         self.sig_lyrics_translated.connect(self._on_bar_lyrics_translated)
         self._update_translate_btn_state()
 
-        self.eq_btn = ToolButton(make_svg_icon(SVG_EQ, color="#CCCCCC"), self)
+        self.eq_btn = ToolButton(make_svg_icon(SVG_EQ, color="#B3B3B3", size=19), right_container)
         self.eq_btn.setToolTip("10-Band Equalizer & Bass Boost")
-        self.eq_btn.setFixedSize(28, 28)
+        self.eq_btn.setFixedSize(30, 30)
+        self.eq_btn.setStyleSheet(ghost_btn_style)
         self.eq_btn.clicked.connect(self.open_equalizer_dialog)
         self._update_eq_button_state()
         self.sig_eq_preview_ready.connect(self._on_eq_preview_ready)
 
-        self.device_btn = ToolButton(FluentIcon.HEADPHONE, self)
-        self.device_btn.setFixedSize(28, 28)
+        self.device_btn = ToolButton(FluentIcon.HEADPHONE, right_container)
+        self.device_btn.setFixedSize(30, 30)
+        self.device_btn.setStyleSheet(ghost_btn_style)
         self.device_btn.clicked.connect(self._show_device_menu)
         self._update_device_btn_tooltip()
 
-        self.volume_btn = ToolButton(FluentIcon.VOLUME, self)
+        self.volume_btn = ToolButton(FluentIcon.VOLUME, right_container)
         self.volume_btn.setToolTip("Mute / Unmute")
-        self.volume_btn.setFixedSize(28, 28)
+        self.volume_btn.setFixedSize(30, 30)
+        self.volume_btn.setStyleSheet(ghost_btn_style)
         self.volume_btn.clicked.connect(self._toggle_mute)
 
-        self.volume_slider = Slider(Qt.Orientation.Horizontal, self)
+        self.volume_slider = Slider(Qt.Orientation.Horizontal, right_container)
+        try:
+            self.volume_slider.setCustomColor(QColor("#1DB954"), QColor("#1ED760"))
+        except Exception:
+            pass
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(int(self._saved_vol * 100))
-        self.volume_slider.setFixedWidth(75)
+        self.volume_slider.setFixedWidth(84)
+        self.volume_slider.setFixedHeight(18)
         self.volume_slider.setToolTip(f"Volume: {int(self._saved_vol * 100)}%")
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
 
-        self.folder_btn = ToolButton(FluentIcon.FOLDER, self)
-        self.folder_btn.setToolTip("Show in Explorer")
-        self.folder_btn.setFixedSize(28, 28)
+        # Keep folder_btn hidden for API compatibility (clicking album art reveals in Explorer)
+        self.folder_btn = ToolButton(FluentIcon.FOLDER, right_container)
+        self.folder_btn.setVisible(False)
         self.folder_btn.clicked.connect(self._open_in_explorer)
 
-        self.close_btn = ToolButton(FluentIcon.CLOSE, self)
+        self.close_btn = ToolButton(FluentIcon.CLOSE, right_container)
         self.close_btn.setToolTip("Stop & Close Player")
         self.close_btn.setFixedSize(28, 28)
+        self.close_btn.setStyleSheet(ghost_btn_style)
         self.close_btn.clicked.connect(self.stop_and_hide)
 
         right_layout.addWidget(self.lyrics_btn)
@@ -461,10 +525,9 @@ class MiniPlayerBar(QFrame):
         right_layout.addWidget(self.device_btn)
         right_layout.addWidget(self.volume_btn)
         right_layout.addWidget(self.volume_slider)
-        right_layout.addWidget(self.folder_btn)
         right_layout.addWidget(self.close_btn)
 
-        main_layout.addLayout(right_layout, 0)
+        main_layout.addWidget(right_container, 0)
 
         # -------------------------------------------------------------
         # Safe Keyboard Shortcuts (Scoped to Player Dock to avoid hijacking text input)
@@ -537,12 +600,12 @@ class MiniPlayerBar(QFrame):
     def _toggle_shuffle(self):
         self.shuffle_enabled = not self.shuffle_enabled
         if self.shuffle_enabled:
-            self.shuffle_btn.setIcon(make_svg_icon(SVG_SHUFFLE, color="#1ED760"))
+            self.shuffle_btn.setIcon(make_svg_icon(SVG_SHUFFLE, color="#1ED760", size=18))
             self.shuffle_btn.setToolTip("Shuffle: On (Click to disable)")
             self._unplayed_indices = [i for i in range(len(self.playlist)) if i != self.current_index]
             random.shuffle(self._unplayed_indices)
         else:
-            self.shuffle_btn.setIcon(make_svg_icon(SVG_SHUFFLE, color="#888888"))
+            self.shuffle_btn.setIcon(make_svg_icon(SVG_SHUFFLE, color="#B3B3B3", size=18))
             self.shuffle_btn.setToolTip("Shuffle: Off (Click to enable)")
             self._unplayed_indices.clear()
             self._shuffle_history.clear()
@@ -552,15 +615,15 @@ class MiniPlayerBar(QFrame):
         # Cycle: off -> all -> one -> off
         if self.repeat_mode == "off":
             self.repeat_mode = "all"
-            self.repeat_btn.setIcon(make_svg_icon(SVG_REPEAT, color="#1ED760"))
+            self.repeat_btn.setIcon(make_svg_icon(SVG_REPEAT, color="#1ED760", size=18))
             self.repeat_btn.setToolTip("Repeat: All Tracks (Click for Repeat One)")
         elif self.repeat_mode == "all":
             self.repeat_mode = "one"
-            self.repeat_btn.setIcon(make_svg_icon(SVG_REPEAT_ONE, color="#1ED760"))
+            self.repeat_btn.setIcon(make_svg_icon(SVG_REPEAT_ONE, color="#1ED760", size=18))
             self.repeat_btn.setToolTip("Repeat: Current Track (Click to disable)")
         else:
             self.repeat_mode = "off"
-            self.repeat_btn.setIcon(make_svg_icon(SVG_REPEAT, color="#888888"))
+            self.repeat_btn.setIcon(make_svg_icon(SVG_REPEAT, color="#B3B3B3", size=18))
             self.repeat_btn.setToolTip("Repeat: Off (Click to enable Repeat All)")
 
     def play_index(self, index: int):
@@ -815,7 +878,7 @@ class MiniPlayerBar(QFrame):
         self.cover_label.clear()
         icon_w = IconWidget(FluentIcon.MUSIC, self.cover_label)
         icon_w.setFixedSize(28, 28)
-        icon_w.move(11, 11)
+        icon_w.move(14, 14)
         icon_w.show()
 
     def _set_cover_pixmap(self, img_or_pix: Any):
@@ -826,13 +889,13 @@ class MiniPlayerBar(QFrame):
         else:
             img = img_or_pix
 
-        scaled = img.scaled(44, 44, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-        rounded = QPixmap(44, 44)
+        scaled = img.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+        rounded = QPixmap(56, 56)
         rounded.fill(Qt.GlobalColor.transparent)
         p = QPainter(rounded)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         path = QPainterPath()
-        path.addRoundedRect(0, 0, 44, 44, 6, 6)
+        path.addRoundedRect(0, 0, 56, 56, 6, 6)
         p.setClipPath(path)
         p.drawPixmap(0, 0, QPixmap.fromImage(scaled))
         p.end()
@@ -925,15 +988,41 @@ class MiniPlayerBar(QFrame):
         if not hasattr(self, "translate_btn"):
             return
         lang = getattr(self, "lyrics_translation_lang", "none")
+        active_ghost = """
+            ToolButton {
+                background-color: rgba(29, 185, 84, 0.18);
+                border: 1px solid rgba(29, 185, 84, 0.55);
+                border-radius: 15px;
+            }
+            ToolButton:hover {
+                background-color: rgba(29, 185, 84, 0.28);
+            }
+        """
+        normal_ghost = """
+            ToolButton {
+                background-color: transparent;
+                border: none;
+                border-radius: 15px;
+            }
+            ToolButton:hover {
+                background-color: rgba(255, 255, 255, 0.09);
+            }
+        """
         if lang == "en":
-            self.translate_btn.setStyleSheet("ToolButton { border: 1px solid #1ED760; background-color: rgba(29, 185, 84, 0.18); border-radius: 5px; }")
+            self.translate_btn.setStyleSheet(active_ghost)
             self.translate_btn.setToolTip("Lyrics Translation: English (Click to change)")
+            if hasattr(self, "lyrics_btn"):
+                self.lyrics_btn.setIcon(make_svg_icon(SVG_LYRICS, color="#1ED760", size=19))
         elif lang == "fa":
-            self.translate_btn.setStyleSheet("ToolButton { border: 1px solid #1ED760; background-color: rgba(29, 185, 84, 0.18); border-radius: 5px; }")
+            self.translate_btn.setStyleSheet(active_ghost)
             self.translate_btn.setToolTip("Lyrics Translation: Persian / فارسی (Click to change)")
+            if hasattr(self, "lyrics_btn"):
+                self.lyrics_btn.setIcon(make_svg_icon(SVG_LYRICS, color="#1ED760", size=19))
         else:
-            self.translate_btn.setStyleSheet("")
+            self.translate_btn.setStyleSheet(normal_ghost)
             self.translate_btn.setToolTip("Translate Lyrics (English / Persian فارسی)")
+            if hasattr(self, "lyrics_btn"):
+                self.lyrics_btn.setIcon(make_svg_icon(SVG_LYRICS, color="#B3B3B3", size=19))
 
     def _show_translate_menu(self):
         menu = QMenu(self)
@@ -1056,10 +1145,10 @@ class MiniPlayerBar(QFrame):
         eq_on = bool(config.get("ui.eq_enabled", False))
         preset = str(config.get("ui.eq_preset", "Flat (Default)"))
         if eq_on:
-            self.eq_btn.setIcon(make_svg_icon(SVG_EQ, color="#1ED760"))
+            self.eq_btn.setIcon(make_svg_icon(SVG_EQ, color="#1ED760", size=19))
             self.eq_btn.setToolTip(f"10-Band Equalizer: ON ({preset})")
         else:
-            self.eq_btn.setIcon(make_svg_icon(SVG_EQ, color="#CCCCCC"))
+            self.eq_btn.setIcon(make_svg_icon(SVG_EQ, color="#B3B3B3", size=19))
             self.eq_btn.setToolTip("10-Band Equalizer & Bass Boost: Off")
 
     def apply_live_equalizer(self, on_done=None):
@@ -1148,10 +1237,10 @@ class MiniPlayerBar(QFrame):
 
     def _on_playback_state_changed(self, state: QMediaPlayer.PlaybackState):
         if state == QMediaPlayer.PlaybackState.PlayingState:
-            self.play_btn.setIcon(FluentIcon.PAUSE)
+            self.play_btn.setIcon(make_svg_icon(SVG_PAUSE, color="#000000", size=20))
             self.play_btn.setToolTip("Pause (Space)")
         else:
-            self.play_btn.setIcon(FluentIcon.PLAY)
+            self.play_btn.setIcon(make_svg_icon(SVG_PLAY, color="#000000", size=20))
             self.play_btn.setToolTip("Play (Space)")
 
     def _toggle_play_pause(self):

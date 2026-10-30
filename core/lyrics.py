@@ -226,11 +226,12 @@ class LyricsEngine:
     def translate_lyrics(self, lines: list[str], target_lang: str = "en") -> list[str]:
         """
         Translates a list of lyric lines into the target language ('en' for English, 'fa' for Persian).
-        Uses persistent local disk caching in <cache_dir>/lyrics_translations/ and batched translation
-        requests with automatic per-line and secondary provider fallback.
+        Uses persistent local disk caching in <cache_dir>/lyrics_translations/ and multi-parameter
+        Google Translate Chrome Dictionary API requests with per-line fallback.
         """
         import hashlib
         import json
+        import re
         from core.paths import get_cache_dir
 
         lang = (target_lang or "").strip().lower()
@@ -242,24 +243,39 @@ class LyricsEngine:
         if not lines or lang not in ("en", "fa"):
             return list(lines)
 
-        # Check persistent disk cache first
         cache_dir = os.path.join(str(get_cache_dir()), "lyrics_translations")
         os.makedirs(cache_dir, exist_ok=True)
+
+        # Clean up any legacy v1 cache files that may contain invalid responses
+        try:
+            for fname in os.listdir(cache_dir):
+                if fname.startswith("trans_") and not fname.startswith("trans_v2_"):
+                    try:
+                        os.remove(os.path.join(cache_dir, fname))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         payload_hash = hashlib.sha1(
-            (f"{lang}||" + "\n".join(lines)).encode("utf-8", errors="replace")
+            (f"v2||{lang}||" + "\n".join(lines)).encode("utf-8", errors="replace")
         ).hexdigest()[:20]
-        cache_file = os.path.join(cache_dir, f"trans_{lang}_{payload_hash}.json")
+        cache_file = os.path.join(cache_dir, f"trans_v2_{lang}_{payload_hash}.json")
 
         if os.path.isfile(cache_file):
             try:
                 with open(cache_file, "r", encoding="utf-8") as f:
                     cached = json.load(f)
-                if isinstance(cached, list) and len(cached) == len(lines):
+                if (
+                    isinstance(cached, list)
+                    and len(cached) == len(lines)
+                    and not any("PLEASE SELECT TWO DISTINCT" in str(x).upper() for x in cached)
+                ):
                     return [str(x) for x in cached]
             except Exception:
                 pass
 
-        # Identify unique translatable lines (skip empty or instrumental-only markers)
+        # Identify unique translatable lines (skip empty, instrumental markers, or lines already in target script)
         unique_lines: list[str] = []
         seen_set: set[str] = set()
         for raw_line in lines:
@@ -268,6 +284,9 @@ class LyricsEngine:
                 continue
             stripped_notes = cleaned.strip("♪♫ \t-—•*")
             if not stripped_notes or stripped_notes.lower() in ("[instrumental]", "instrumental"):
+                continue
+            # If translating to Persian and line is already predominantly Persian/Arabic script, skip network call
+            if lang == "fa" and re.search(r'[\u0600-\u06FF]', stripped_notes) and not re.search(r'[A-Za-z\u3040-\u30FF\u4E00-\u9FFF]', stripped_notes):
                 continue
             if cleaned not in seen_set:
                 seen_set.add(cleaned)
@@ -278,27 +297,24 @@ class LyricsEngine:
 
         translation_map: dict[str, str] = {}
 
-        # Translate in batches of 20 unique lines using newline-delimited Google GTX endpoint
-        batch_size = 20
+        # Translate in batches of 30 unique lines via multi-q POST
+        batch_size = 30
         for start_i in range(0, len(unique_lines), batch_size):
             batch = unique_lines[start_i: start_i + batch_size]
-            joined_text = "\n".join(batch)
-            translated_batch = self._translate_batch_gtx(joined_text, lang, expected_count=len(batch))
+            translated_batch = self._translate_batch_gtx(batch, lang, expected_count=len(batch))
             if translated_batch and len(translated_batch) == len(batch):
                 for orig_l, trans_l in zip(batch, translated_batch):
-                    translation_map[orig_l] = trans_l.strip()
+                    translation_map[orig_l] = self._sanitize_translated_line(orig_l, trans_l)
             else:
-                # Fallback: translate line-by-line for this batch to guarantee 1-to-1 alignment
                 for orig_l in batch:
                     single_res = self._translate_single_line(orig_l, lang)
-                    translation_map[orig_l] = single_res.strip() if single_res else orig_l
+                    translation_map[orig_l] = self._sanitize_translated_line(orig_l, single_res)
 
         result_lines: list[str] = []
         for raw_line in lines:
             cleaned = (raw_line or "").strip()
             result_lines.append(translation_map.get(cleaned, raw_line))
 
-        # Save to persistent cache if we obtained meaningful translations
         try:
             if any(r != o for r, o in zip(result_lines, lines)):
                 with open(cache_file, "w", encoding="utf-8") as f:
@@ -308,48 +324,105 @@ class LyricsEngine:
 
         return result_lines
 
-    def _translate_batch_gtx(self, joined_text: str, target_lang: str, expected_count: int) -> Optional[list[str]]:
-        """Calls Google Translate GTX JSON endpoint on a newline-joined batch of lyric lines."""
+    @staticmethod
+    def _sanitize_translated_line(orig_line: str, trans_line: Optional[str]) -> str:
+        if not trans_line or not isinstance(trans_line, str):
+            return orig_line
+        cleaned = trans_line.strip()
+        upper = cleaned.upper()
+        if (
+            not cleaned
+            or "PLEASE SELECT TWO DISTINCT" in upper
+            or "MYMEMORY WARNING" in upper
+            or "QUERY LENGTH LIMIT" in upper
+            or "INVALID LANGUAGE PAIR" in upper
+        ):
+            return orig_line
+        return cleaned
+
+    def _translate_batch_gtx(self, batch_lines: list[str] | str, target_lang: str, expected_count: int = 1) -> Optional[list[str]]:
+        """
+        Translates a list of lyric lines in a single HTTP request using Google's
+        clients5 dict-chrome-ex multi-q endpoint, guaranteeing 1-to-1 line alignment.
+        """
+        if isinstance(batch_lines, str):
+            lines_list = [l for l in batch_lines.split("\n")]
+        else:
+            lines_list = list(batch_lines)
+
+        if not lines_list:
+            return []
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+        }
+
+        # Primary: clients5.google.com multi-q POST (returns 1-to-1 array per 'q' item)
         try:
-            url = "https://translate.googleapis.com/translate_a/single"
+            url = "https://clients5.google.com/translate_a/t"
             params = {
+                "client": "dict-chrome-ex",
+                "sl": "auto",
+                "tl": target_lang,
+            }
+            form_data = [("q", line) for line in lines_list]
+            resp = self.session.post(url, params=params, data=form_data, headers=headers, timeout=12)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list) and len(data) == len(lines_list):
+                    out: list[str] = []
+                    for orig_l, item in zip(lines_list, data):
+                        if isinstance(item, list) and item:
+                            tr_text = str(item[0] or "").strip()
+                            src_lang = str(item[1] or "").strip().lower() if len(item) > 1 else ""
+                            if src_lang == target_lang:
+                                out.append(orig_l)
+                            else:
+                                out.append(tr_text or orig_l)
+                        elif isinstance(item, str):
+                            out.append(item.strip() or orig_l)
+                        else:
+                            out.append(orig_l)
+                    if len(out) == expected_count:
+                        return out
+        except Exception as e:
+            logger.debug(f"clients5 batch translation error ({target_lang}): {e}")
+
+        # Secondary: translate.googleapis.com with explicit indexed delimiter
+        try:
+            delim = " ||| "
+            joined = delim.join(lines_list)
+            url2 = "https://translate.googleapis.com/translate_a/single"
+            params2 = {
                 "client": "gtx",
                 "sl": "auto",
                 "tl": target_lang,
                 "dt": "t",
-                "q": joined_text,
+                "q": joined,
             }
-            resp = self.session.get(url, params=params, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, list) and data and isinstance(data[0], list):
-                    full_translated = "".join(
-                        str(seg[0]) for seg in data[0] if isinstance(seg, list) and seg and seg[0] is not None
+            resp2 = self.session.get(url2, params=params2, headers=headers, timeout=10)
+            if resp2.status_code == 200:
+                data2 = resp2.json()
+                if isinstance(data2, list) and data2 and isinstance(data2[0], list):
+                    full_tr = "".join(
+                        str(seg[0]) for seg in data2[0] if isinstance(seg, list) and seg and seg[0] is not None
                     )
-                    split_lines = [l.strip() for l in full_translated.split("\n")]
-                    # Handle trailing newline if present
-                    if len(split_lines) == expected_count + 1 and not split_lines[-1]:
-                        split_lines.pop()
-                    if len(split_lines) == expected_count:
-                        return split_lines
-        except Exception as e:
-            logger.debug(f"GTX batch translation error ({target_lang}): {e}")
+                    parts = [p.strip() for p in full_tr.split("|||")]
+                    if len(parts) == expected_count:
+                        return parts
+        except Exception as e2:
+            logger.debug(f"googleapis fallback translation error ({target_lang}): {e2}")
+
         return None
 
     def _translate_single_line(self, text: str, target_lang: str) -> str:
-        """Translates a single lyric line via GTX with MyMemory fallback."""
-        res = self._translate_batch_gtx(text, target_lang, expected_count=1)
+        """Translates a single lyric line via clients5/GTX."""
+        res = self._translate_batch_gtx([text], target_lang, expected_count=1)
         if res and res[0]:
-            return res[0]
-        try:
-            url = "https://api.mymemory.translated.net/get"
-            resp = self.session.get(url, params={"q": text, "langpair": f"autodetect|{target_lang}"}, timeout=8)
-            if resp.status_code == 200:
-                data = resp.json()
-                trans = (data.get("responseData") or {}).get("translatedText")
-                if trans and isinstance(trans, str):
-                    return trans.strip()
-        except Exception as e:
-            logger.debug(f"Fallback single line translation error: {e}")
+            return self._sanitize_translated_line(text, res[0])
         return text
 

@@ -1,26 +1,34 @@
 import os
 import threading
 import logging
-from typing import Optional, List, Tuple, Callable
+from typing import Optional, List, Tuple
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QFileDialog, QApplication
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QFileDialog, QApplication, QPushButton
 )
 from qfluentwidgets import (
     MessageBoxBase, SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
     PushButton, PrimaryPushButton, ToolButton, Slider, ComboBox, SwitchButton,
-    SmoothScrollArea, CardWidget, FluentIcon, InfoBar, InfoBarPosition
+    SmoothScrollArea, CardWidget, FluentIcon, InfoBar
 )
 
 from core.config import config
 from core.utils import (
     EQ_FREQUENCIES, EQ_PRESETS, apply_equalizer_to_file, extract_embedded_cover
 )
-from gui.styles import TEXT_MUTED, TEXT_SECONDARY
+from gui.styles import TEXT_MUTED
 
 logger = logging.getLogger("gui.dialogs.player_panels")
+
+
+def _style_spotify_slider(slider: Slider):
+    """Applies Spotify Green (#1DB954 / #1ED760) theme colors to a QFluentWidgets Slider."""
+    try:
+        slider.setCustomColor(QColor("#1DB954"), QColor("#1ED760"))
+    except Exception:
+        pass
 
 
 class LyricLineRow(QFrame):
@@ -50,24 +58,24 @@ class LyricLineRow(QFrame):
             self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 8, 14, 8)
-        lay.setSpacing(12)
+        lay.setContentsMargins(16, 10, 16, 10)
+        lay.setSpacing(14)
 
         mins = max(0, timestamp_ms // 60000)
         secs = max(0, (timestamp_ms % 60000) // 1000)
         ts_str = f"{mins:02d}:{secs:02d}" if (is_synced and timestamp_ms >= 0) else "  •  "
 
         self.time_lbl = CaptionLabel(ts_str, self)
-        self.time_lbl.setFixedWidth(42)
+        self.time_lbl.setFixedWidth(44)
         self.time_lbl.setStyleSheet("color: #666666; font-family: 'Consolas', monospace; font-size: 11px;")
 
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
-        text_col.setSpacing(3)
+        text_col.setSpacing(4)
 
         self.text_lbl = BodyLabel(text, self)
         self.text_lbl.setWordWrap(True)
-        self.text_lbl.setStyleSheet("color: #AAAAAA; font-size: 14px; font-weight: 500; background: transparent;")
+        self.text_lbl.setStyleSheet("color: #B3B3B3; font-size: 15px; font-weight: 600; background: transparent;")
 
         self.trans_lbl = CaptionLabel("", self)
         self.trans_lbl.setWordWrap(True)
@@ -84,7 +92,10 @@ class LyricLineRow(QFrame):
         self.set_active(False, is_past=False)
 
     def set_translation(self, translated_text: str, target_lang: str = ""):
-        self.translated_text = (translated_text or "").strip()
+        raw_tr = (translated_text or "").strip()
+        if "PLEASE SELECT TWO DISTINCT" in raw_tr.upper():
+            raw_tr = ""
+        self.translated_text = raw_tr
         self.target_lang = (target_lang or "").strip().lower()
         show_trans = bool(
             self.translated_text
@@ -103,12 +114,12 @@ class LyricLineRow(QFrame):
         font_family = "'Vazirmatn', 'Tahoma', 'Segoe UI', sans-serif" if self.target_lang == "fa" else "'Segoe UI', sans-serif"
         if self._is_active:
             self.trans_lbl.setStyleSheet(
-                f"color: #86EFAC; font-family: {font_family}; font-size: 13.5px; font-weight: 600; background: transparent;"
+                f"color: #A7F3D0; font-family: {font_family}; font-size: 14px; font-weight: 600; background: transparent;"
             )
         else:
             c = "#64748B" if self._is_past else "#94A3B8"
             self.trans_lbl.setStyleSheet(
-                f"color: {c}; font-family: {font_family}; font-size: 12.5px; font-weight: 500; background: transparent;"
+                f"color: {c}; font-family: {font_family}; font-size: 13px; font-weight: 500; background: transparent;"
             )
 
     def set_active(self, active: bool, is_past: bool = False):
@@ -117,27 +128,27 @@ class LyricLineRow(QFrame):
         if active:
             self.setStyleSheet("""
                 LyricLineRow {
-                    background-color: rgba(29, 185, 84, 0.16);
+                    background-color: rgba(29, 185, 84, 0.14);
                     border-left: 3px solid #1ED760;
-                    border-radius: 6px;
+                    border-radius: 8px;
                 }
             """)
-            self.time_lbl.setStyleSheet("color: #1ED760; font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold; background: transparent;")
-            self.text_lbl.setStyleSheet("color: #1ED760; font-size: 16px; font-weight: 700; background: transparent;")
+            self.time_lbl.setStyleSheet("color: #1ED760; font-family: 'Consolas', monospace; font-size: 11.5px; font-weight: bold; background: transparent;")
+            self.text_lbl.setStyleSheet("color: #1ED760; font-size: 17px; font-weight: 700; background: transparent;")
         else:
             self.setStyleSheet("""
                 LyricLineRow {
                     background-color: transparent;
                     border-left: 3px solid transparent;
-                    border-radius: 6px;
+                    border-radius: 8px;
                 }
                 LyricLineRow:hover {
                     background-color: rgba(255, 255, 255, 0.05);
                 }
             """)
-            color = "#707070" if is_past else "#CCCCCC"
+            color = "#686868" if is_past else "#D1D5DB"
             self.time_lbl.setStyleSheet("color: #555555; font-family: 'Consolas', monospace; font-size: 11px; background: transparent;")
-            self.text_lbl.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: 500; background: transparent;")
+            self.text_lbl.setStyleSheet(f"color: {color}; font-size: 15px; font-weight: 600; background: transparent;")
         self._apply_translation_style()
 
     def mousePressEvent(self, event):
@@ -148,9 +159,9 @@ class LyricLineRow(QFrame):
 
 class KaraokeLyricsDrawer(MessageBoxBase):
     """
-    Slide-up Synchronized Karaoke Lyrics Viewer synced in real-time to MiniPlayerBar.
-    Supports click-to-seek on any line, live auto-scrolling, one-click online lyrics fetching,
-    and instant bilingual lyrics translation to English and Persian (فارسی).
+    Spotify-Style Synchronized Karaoke Lyrics & Bilingual Translation Studio.
+    Supports click-to-seek on any line, live auto-scrolling, online LRCLIB sync,
+    and instant 1-click translation to English and Persian (فارسی).
     """
 
     sig_lyrics_fetched = pyqtSignal(bool, str)
@@ -161,28 +172,37 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         self.player_bar = player_bar
         self.line_widgets: List[LyricLineRow] = []
         self._active_idx: int = -1
-        self.current_trans_lang: str = getattr(player_bar, "lyrics_translation_lang", "") or str(config.get("ui.lyrics_translation_lang", "none") or "none")
+        self.current_trans_lang: str = (
+            getattr(player_bar, "lyrics_translation_lang", "")
+            or str(config.get("ui.lyrics_translation_lang", "none") or "none")
+        )
         self.translated_lines: List[str] = list(getattr(player_bar, "lyrics_translated_lines", []))
 
-        self.widget.setMinimumWidth(660)
-        self.widget.setMinimumHeight(560)
+        self.widget.setMinimumWidth(700)
+        self.widget.setMinimumHeight(580)
+        self.viewLayout.setContentsMargins(18, 16, 18, 18)
+        self.viewLayout.setSpacing(12)
 
-        # Header with Cover Art + Track Info + Sync Badge
+        # Hide MessageBoxBase's default giant cyan bottom button bar
+        if hasattr(self, "buttonGroup"):
+            self.buttonGroup.setVisible(False)
+
+        # Unified Spotify Header Card: Cover + Title/Artist + Segmented Translation Switcher + Utility Icons
         header_card = CardWidget(self)
         header_card.setStyleSheet("""
             CardWidget {
-                background-color: #1e1e1e;
+                background-color: #181818;
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 8px;
+                border-radius: 10px;
             }
         """)
         h_lay = QHBoxLayout(header_card)
-        h_lay.setContentsMargins(12, 10, 14, 10)
+        h_lay.setContentsMargins(14, 10, 12, 10)
         h_lay.setSpacing(12)
 
         self.cover_lbl = QLabel(header_card)
         self.cover_lbl.setFixedSize(48, 48)
-        self.cover_lbl.setStyleSheet("background-color: #2a2a2a; border-radius: 6px;")
+        self.cover_lbl.setStyleSheet("background-color: #282828; border-radius: 6px;")
         h_lay.addWidget(self.cover_lbl)
 
         meta_v = QVBoxLayout()
@@ -193,84 +213,114 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         self.title_lbl.setStyleSheet("font-size: 15px; font-weight: 700; color: #FFFFFF;")
         self.artist_lbl = CaptionLabel(artist, header_card)
         self.artist_lbl.setTextColor(TEXT_MUTED, TEXT_MUTED)
+        self.mode_badge = CaptionLabel("", header_card)
+        self.mode_badge.setVisible(False)
         meta_v.addWidget(self.title_lbl)
         meta_v.addWidget(self.artist_lbl)
         h_lay.addLayout(meta_v, 1)
 
-        self.mode_badge = QLabel("Synchronized LRC", header_card)
-        self.mode_badge.setStyleSheet("""
-            QLabel {
-                background-color: rgba(29, 185, 84, 0.18);
-                color: #1ED760;
-                font-size: 11px;
-                font-weight: 700;
-                padding: 3px 8px;
-                border-radius: 4px;
-                border: 1px solid rgba(29, 185, 84, 0.35);
+        # Sleek 3-Pill Segmented Translation Switcher: [ Original | English | فارسی ]
+        pill_frame = QFrame(header_card)
+        pill_frame.setStyleSheet("""
+            QFrame {
+                background-color: #101010;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 16px;
             }
         """)
-        h_lay.addWidget(self.mode_badge)
-        self.viewLayout.addWidget(header_card)
+        pill_lay = QHBoxLayout(pill_frame)
+        pill_lay.setContentsMargins(3, 3, 3, 3)
+        pill_lay.setSpacing(2)
 
-        # Action & Translation toolbar row
-        tools_row = QHBoxLayout()
-        tools_row.setSpacing(8)
+        self.translate_off_btn = QPushButton("Original", pill_frame)
+        self.translate_off_btn.setFixedHeight(26)
+        self.translate_off_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.translate_off_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.translate_off_btn.setToolTip("Show original lyrics only")
+        self.translate_off_btn.clicked.connect(lambda: self.translate_lyrics_to("none"))
 
-        self.fetch_btn = PushButton(FluentIcon.SYNC, "Fetch / Sync Lyrics", self)
-        self.fetch_btn.setFixedHeight(30)
-        self.fetch_btn.clicked.connect(self._fetch_lyrics_online)
-
-        self.translate_en_btn = PushButton(FluentIcon.LANGUAGE, "Translate: English", self)
-        self.translate_en_btn.setFixedHeight(30)
-        self.translate_en_btn.setToolTip("Translate lyrics to English (click again to return to Original)")
+        self.translate_en_btn = QPushButton("English", pill_frame)
+        self.translate_en_btn.setFixedHeight(26)
+        self.translate_en_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.translate_en_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.translate_en_btn.setToolTip("Show bilingual English translation")
         self.translate_en_btn.clicked.connect(lambda: self._on_translate_btn_clicked("en"))
 
-        self.translate_fa_btn = PushButton(FluentIcon.LANGUAGE, "Translate: Persian (فارسی)", self)
-        self.translate_fa_btn.setFixedHeight(30)
-        self.translate_fa_btn.setToolTip("Translate lyrics to Persian / فارسی (click again to return to Original)")
+        self.translate_fa_btn = QPushButton("فارسی", pill_frame)
+        self.translate_fa_btn.setFixedHeight(26)
+        self.translate_fa_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.translate_fa_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.translate_fa_btn.setToolTip("Show bilingual Persian (فارسی) translation")
         self.translate_fa_btn.clicked.connect(lambda: self._on_translate_btn_clicked("fa"))
 
-        self.copy_btn = PushButton(FluentIcon.COPY, "Copy", self)
-        self.copy_btn.setFixedHeight(30)
+        pill_lay.addWidget(self.translate_off_btn)
+        pill_lay.addWidget(self.translate_en_btn)
+        pill_lay.addWidget(self.translate_fa_btn)
+        h_lay.addWidget(pill_frame)
+
+        # Compact Icon Actions: Sync Lyrics, Copy, Save .lrc, Close
+        icon_btn_style = """
+            ToolButton {
+                background-color: transparent;
+                border: none;
+                border-radius: 15px;
+            }
+            ToolButton:hover {
+                background-color: rgba(255, 255, 255, 0.10);
+            }
+        """
+        self.fetch_btn = ToolButton(FluentIcon.SYNC, header_card)
+        self.fetch_btn.setFixedSize(30, 30)
+        self.fetch_btn.setStyleSheet(icon_btn_style)
+        self.fetch_btn.setToolTip("Sync / Fetch Lyrics Online from LRCLIB")
+        self.fetch_btn.clicked.connect(self._fetch_lyrics_online)
+
+        self.copy_btn = ToolButton(FluentIcon.COPY, header_card)
+        self.copy_btn.setFixedSize(30, 30)
+        self.copy_btn.setStyleSheet(icon_btn_style)
+        self.copy_btn.setToolTip("Copy Lyrics to Clipboard")
         self.copy_btn.clicked.connect(self._copy_lyrics)
 
-        self.export_btn = PushButton(FluentIcon.SAVE, "Save .lrc", self)
-        self.export_btn.setFixedHeight(30)
+        self.export_btn = ToolButton(FluentIcon.SAVE, header_card)
+        self.export_btn.setFixedSize(30, 30)
+        self.export_btn.setStyleSheet(icon_btn_style)
+        self.export_btn.setToolTip("Export Synchronized .lrc File")
         self.export_btn.clicked.connect(self._export_lrc_file)
 
-        tools_row.addWidget(self.fetch_btn)
-        tools_row.addWidget(self.translate_en_btn)
-        tools_row.addWidget(self.translate_fa_btn)
-        tools_row.addWidget(self.copy_btn)
-        tools_row.addWidget(self.export_btn)
-        tools_row.addStretch(1)
-        self.viewLayout.addLayout(tools_row)
+        self.close_drawer_btn = ToolButton(FluentIcon.CLOSE, header_card)
+        self.close_drawer_btn.setFixedSize(30, 30)
+        self.close_drawer_btn.setStyleSheet(icon_btn_style)
+        self.close_drawer_btn.setToolTip("Close Lyrics View (Esc)")
+        self.close_drawer_btn.clicked.connect(self.accept)
 
-        # Scrollable Karaoke Viewport
+        h_lay.addWidget(self.fetch_btn)
+        h_lay.addWidget(self.copy_btn)
+        h_lay.addWidget(self.export_btn)
+        h_lay.addWidget(self.close_drawer_btn)
+        self.viewLayout.addWidget(header_card)
+
+        # Scrollable Spotify Karaoke Viewport
         self.scroll_area = SmoothScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setMinimumHeight(340)
+        self.scroll_area.setMinimumHeight(460)
         self.scroll_area.setStyleSheet("""
             QScrollArea, SmoothScrollArea {
-                background-color: #161616;
-                border: 1px solid rgba(255, 255, 255, 0.07);
-                border-radius: 8px;
+                background-color: #121212;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 10px;
             }
         """)
-        self.scroll_area.viewport().setStyleSheet("background-color: #161616;")
+        self.scroll_area.viewport().setStyleSheet("background-color: #121212;")
 
         self.lines_container = QWidget()
         self.lines_container.setStyleSheet("background: transparent;")
         self.lines_layout = QVBoxLayout(self.lines_container)
-        self.lines_layout.setContentsMargins(10, 16, 10, 16)
-        self.lines_layout.setSpacing(4)
+        self.lines_layout.setContentsMargins(14, 18, 14, 18)
+        self.lines_layout.setSpacing(6)
         self.lines_layout.addStretch(1)
 
         self.scroll_area.setWidget(self.lines_container)
         self.viewLayout.addWidget(self.scroll_area, 1)
-
-        self.yesButton.setText("Close")
-        self.cancelButton.setVisible(False)
 
         self.sig_lyrics_fetched.connect(self._on_lyrics_fetched)
         self.sig_translation_ready.connect(self._on_translation_ready)
@@ -282,35 +332,54 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         # If a translation language was active, ensure this track's lines are translated
         if self.current_trans_lang in ("en", "fa"):
             timeline = getattr(self.player_bar, "lyrics_timeline", [])
-            if timeline and len(self.translated_lines) != len(timeline):
+            if timeline and (
+                len(self.translated_lines) != len(timeline)
+                or any("PLEASE SELECT TWO DISTINCT" in str(x).upper() for x in self.translated_lines)
+            ):
                 self.translate_lyrics_to(self.current_trans_lang)
 
-        # Live 100ms sync timer while drawer is open
+        # Live 120ms sync timer while drawer is open
         self._sync_timer = QTimer(self)
         self._sync_timer.setInterval(120)
         self._sync_timer.timeout.connect(self._sync_active_line)
         self._sync_timer.start()
 
     def _update_translate_buttons_style(self):
-        active_style = """
-            PushButton {
-                background-color: rgba(29, 185, 84, 0.22);
-                color: #1ED760;
-                border: 1px solid #1ED760;
-                border-radius: 5px;
-                padding: 4px 10px;
+        active_pill = """
+            QPushButton {
+                background-color: #1DB954;
+                color: #000000;
+                border: none;
+                border-radius: 13px;
+                padding: 0px 14px;
+                font-size: 12px;
                 font-weight: 700;
             }
-            PushButton:hover {
-                background-color: rgba(29, 185, 84, 0.32);
+            QPushButton:hover {
+                background-color: #1ED760;
             }
         """
-        normal_style = ""
-        self.translate_en_btn.setStyleSheet(active_style if self.current_trans_lang == "en" else normal_style)
-        self.translate_fa_btn.setStyleSheet(active_style if self.current_trans_lang == "fa" else normal_style)
+        inactive_pill = """
+            QPushButton {
+                background-color: transparent;
+                color: #B3B3B3;
+                border: none;
+                border-radius: 13px;
+                padding: 0px 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                color: #FFFFFF;
+                background-color: rgba(255, 255, 255, 0.07);
+            }
+        """
+        is_orig = self.current_trans_lang not in ("en", "fa")
+        self.translate_off_btn.setStyleSheet(active_pill if is_orig else inactive_pill)
+        self.translate_en_btn.setStyleSheet(active_pill if self.current_trans_lang == "en" else inactive_pill)
+        self.translate_fa_btn.setStyleSheet(active_pill if self.current_trans_lang == "fa" else inactive_pill)
 
     def _on_translate_btn_clicked(self, target_lang: str):
-        # Toggle off if clicking the already active language
         if self.current_trans_lang == target_lang:
             self.translate_lyrics_to("none")
         else:
@@ -344,9 +413,8 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         self._update_translate_buttons_style()
 
         btn = self.translate_en_btn if lang == "en" else self.translate_fa_btn
-        orig_text = "Translate: English" if lang == "en" else "Translate: Persian (فارسی)"
         btn.setEnabled(False)
-        btn.setText("Translating...")
+        btn.setText("...")
 
         raw_lines = [txt for _, txt in timeline]
 
@@ -364,9 +432,9 @@ class KaraokeLyricsDrawer(MessageBoxBase):
 
     def _on_translation_ready(self, lang: str, translated: list):
         self.translate_en_btn.setEnabled(True)
-        self.translate_en_btn.setText("Translate: English")
+        self.translate_en_btn.setText("English")
         self.translate_fa_btn.setEnabled(True)
-        self.translate_fa_btn.setText("Translate: Persian (فارسی)")
+        self.translate_fa_btn.setText("فارسی")
         self._update_translate_buttons_style()
 
         if lang != self.current_trans_lang:
@@ -386,9 +454,6 @@ class KaraokeLyricsDrawer(MessageBoxBase):
 
         for idx, w in enumerate(self.line_widgets):
             w.set_translation(self.translated_lines[idx], lang)
-
-        lang_label = "English" if lang == "en" else "Persian (فارسی)"
-        InfoBar.success("Lyrics Translated", f"Showing bilingual lyrics with {lang_label} translation.", duration=2500, parent=self)
 
     def _load_header_cover(self):
         fp = self.player_bar.current_file_path
@@ -421,21 +486,15 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         is_synced = getattr(self.player_bar, "lyrics_are_synced", True)
 
         if not timeline:
-            self.mode_badge.setText("No Lyrics Embedded")
             empty_lbl = BodyLabel(
                 "No lyrics were found embedded in this track.\n"
-                "Click 'Fetch / Sync Lyrics' above to search LRCLIB for synchronized karaoke lyrics.",
+                "Click the Sync icon (↻) above to fetch synchronized lyrics from LRCLIB.",
                 self.lines_container
             )
             empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty_lbl.setStyleSheet("color: #888888; font-size: 13px; padding: 48px 20px;")
+            empty_lbl.setStyleSheet("color: #888888; font-size: 13.5px; padding: 64px 24px;")
             self.lines_layout.insertWidget(0, empty_lbl)
             return
-
-        if is_synced:
-            self.mode_badge.setText(f"Synchronized LRC ({len(timeline)} lines)")
-        else:
-            self.mode_badge.setText(f"Plain Lyrics ({len(timeline)} lines)")
 
         has_valid_trans = (
             self.current_trans_lang in ("en", "fa")
@@ -506,7 +565,6 @@ class KaraokeLyricsDrawer(MessageBoxBase):
         dur_ms = (getattr(track, "duration_ms", 0) if track else 0) or self.player_bar.player.duration()
 
         self.fetch_btn.setEnabled(False)
-        self.fetch_btn.setText("Fetching...")
 
         def worker():
             try:
@@ -538,7 +596,6 @@ class KaraokeLyricsDrawer(MessageBoxBase):
 
     def _on_lyrics_fetched(self, ok: bool, msg: str):
         self.fetch_btn.setEnabled(True)
-        self.fetch_btn.setText("Fetch / Sync Lyrics")
         if ok:
             self.player_bar._load_lyrics(self.player_bar.current_file_path, self.player_bar.current_track)
             self.translated_lines = []
@@ -601,10 +658,15 @@ class EqualizerDialog(MessageBoxBase):
         self.band_val_labels: List[CaptionLabel] = []
         self._updating_preset = False
 
-        self.widget.setMinimumWidth(680)
-        self.widget.setMinimumHeight(470)
+        self.widget.setMinimumWidth(690)
+        self.widget.setMinimumHeight(460)
+        self.viewLayout.setContentsMargins(18, 16, 18, 18)
+        self.viewLayout.setSpacing(12)
 
-        # Title + Enable Switch + Preset Selector
+        if hasattr(self, "buttonGroup"):
+            self.buttonGroup.setVisible(False)
+
+        # Title + Enable Switch + Close Icon
         top_row = QHBoxLayout()
         top_row.setSpacing(12)
 
@@ -619,17 +681,26 @@ class EqualizerDialog(MessageBoxBase):
         self.enable_switch.setChecked(bool(config.get("ui.eq_enabled", False)))
         self.enable_switch.checkedChanged.connect(self._on_settings_changed)
 
+        self.close_eq_btn = ToolButton(FluentIcon.CLOSE, self)
+        self.close_eq_btn.setFixedSize(30, 30)
+        self.close_eq_btn.setStyleSheet("""
+            ToolButton { background-color: transparent; border: none; border-radius: 15px; }
+            ToolButton:hover { background-color: rgba(255, 255, 255, 0.10); }
+        """)
+        self.close_eq_btn.clicked.connect(self.accept)
+
         top_row.addWidget(en_lbl)
         top_row.addWidget(self.enable_switch)
+        top_row.addWidget(self.close_eq_btn)
         self.viewLayout.addLayout(top_row)
 
         # Preset & Preamp/Bass Boost Card
         ctrl_card = CardWidget(self)
         ctrl_card.setStyleSheet("""
             CardWidget {
-                background-color: #1e1e1e;
+                background-color: #181818;
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 8px;
+                border-radius: 10px;
             }
         """)
         ctrl_lay = QVBoxLayout(ctrl_card)
@@ -664,6 +735,7 @@ class EqualizerDialog(MessageBoxBase):
 
         pre_lbl = CaptionLabel("Preamp:", ctrl_card)
         self.preamp_slider = Slider(Qt.Orientation.Horizontal, ctrl_card)
+        _style_spotify_slider(self.preamp_slider)
         self.preamp_slider.setRange(-120, 120)
         pre_init = int(round(float(config.get("ui.eq_preamp", 0.0) or 0.0) * 10))
         self.preamp_slider.setValue(pre_init)
@@ -673,6 +745,7 @@ class EqualizerDialog(MessageBoxBase):
 
         bass_lbl = CaptionLabel("Sub-Bass Boost (85Hz):", ctrl_card)
         self.bass_slider = Slider(Qt.Orientation.Horizontal, ctrl_card)
+        _style_spotify_slider(self.bass_slider)
         self.bass_slider.setRange(-60, 120)
         bass_init = int(round(float(config.get("ui.eq_bass_boost", 0.0) or 0.0) * 10))
         self.bass_slider.setValue(bass_init)
@@ -695,9 +768,9 @@ class EqualizerDialog(MessageBoxBase):
         bands_card = CardWidget(self)
         bands_card.setStyleSheet("""
             CardWidget {
-                background-color: #171717;
+                background-color: #141414;
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 8px;
+                border-radius: 10px;
             }
         """)
         bands_lay = QHBoxLayout(bands_card)
@@ -719,6 +792,7 @@ class EqualizerDialog(MessageBoxBase):
             val_lbl.setStyleSheet("color: #1ED760; font-size: 11px; font-weight: 600;")
 
             sl = Slider(Qt.Orientation.Vertical, bands_card)
+            _style_spotify_slider(sl)
             sl.setRange(-120, 120)
             sl.setValue(int(round(g_val * 10)))
             sl.setFixedHeight(165)
@@ -742,161 +816,172 @@ class EqualizerDialog(MessageBoxBase):
         act_row = QHBoxLayout()
         act_row.setSpacing(10)
 
-        self.apply_live_btn = PrimaryPushButton(FluentIcon.PLAY, "Apply Live EQ to Player", self)
-        self.apply_live_btn.setFixedHeight(32)
+        self.apply_live_btn = QPushButton("Apply Live EQ to Player", self)
+        self.apply_live_btn.setFixedHeight(34)
+        self.apply_live_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.apply_live_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1DB954;
+                color: #000000;
+                border: none;
+                border-radius: 17px;
+                padding: 0px 18px;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: #1ED760;
+            }
+            QPushButton:disabled {
+                background-color: #2a2a2a;
+                color: #666666;
+            }
+        """)
         self.apply_live_btn.clicked.connect(self._apply_live_now)
 
-        self.bake_btn = PushButton(FluentIcon.SAVE, "Save EQ Permanently to Current Track", self)
-        self.bake_btn.setFixedHeight(32)
-        self.bake_btn.setToolTip("Applies this 10-band EQ & Bass Boost curve directly to the audio file on disk (preserving all tags & cover art)")
-        self.bake_btn.clicked.connect(self._bake_to_current_file)
-        if not (self.player_bar and self.player_bar.current_file_path and os.path.isfile(self.player_bar.current_file_path)):
-            self.bake_btn.setEnabled(False)
+        self.bake_btn = PushButton(FluentIcon.SAVE, "Permanently Apply EQ to File", self)
+        self.bake_btn.setFixedHeight(34)
+        self.bake_btn.setToolTip(
+            "Permanently renders this EQ curve into the audio file on disk while preserving cover art, lyrics, and tags."
+        )
+        self.bake_btn.clicked.connect(self._bake_to_file)
 
         act_row.addWidget(self.apply_live_btn)
         act_row.addWidget(self.bake_btn)
         act_row.addStretch(1)
         self.viewLayout.addLayout(act_row)
 
-        self.yesButton.setText("Done")
-        self.cancelButton.setVisible(False)
         self.sig_bake_done.connect(self._on_bake_done)
 
-    def _on_preset_selected(self, index: int):
-        if self._updating_preset:
-            return
+    def _current_bands(self) -> List[float]:
+        return [round(sl.value() / 10.0, 1) for sl in self.band_sliders]
+
+    def _save_to_config(self):
+        config.set("ui.eq_enabled", self.enable_switch.isChecked())
+        config.set("ui.eq_preset", self.preset_combo.currentText())
+        config.set("ui.eq_preamp", round(self.preamp_slider.value() / 10.0, 1))
+        config.set("ui.eq_bass_boost", round(self.bass_slider.value() / 10.0, 1))
+        config.set("ui.eq_bands", self._current_bands())
+
+    def _on_preset_selected(self, _idx: int):
         name = self.preset_combo.currentText()
         if name not in EQ_PRESETS:
             return
         self._updating_preset = True
-        try:
-            p = EQ_PRESETS[name]
-            pre = float(p.get("preamp", 0.0))
-            bass = float(p.get("bass_boost", 0.0))
-            bands = list(p.get("bands", [0.0] * 10))
-            self.preamp_slider.setValue(int(round(pre * 10)))
-            self.preamp_val_lbl.setText(f"{pre:+.1f} dB")
-            self.bass_slider.setValue(int(round(bass * 10)))
-            self.bass_val_lbl.setText(f"{bass:+.1f} dB")
-            for i, sl in enumerate(self.band_sliders):
-                gv = float(bands[i]) if i < len(bands) else 0.0
-                sl.setValue(int(round(gv * 10)))
-                self.band_val_labels[i].setText(f"{gv:+.1f}")
-            if name != "Flat (Default)" and not self.enable_switch.isChecked():
-                self.enable_switch.setChecked(True)
-            self._save_to_config()
-        finally:
-            self._updating_preset = False
+        p = EQ_PRESETS[name]
+        pre = float(p.get("preamp", 0.0))
+        bass = float(p.get("bass_boost", 0.0))
+        bands = list(p.get("bands", [0.0] * 10))
 
-    def _reset_flat(self):
-        idx = self.preset_combo.findText("Flat (Default)")
-        if idx >= 0:
-            self.preset_combo.setCurrentIndex(idx)
-        self._apply_live_now()
+        self.preamp_slider.setValue(int(round(pre * 10)))
+        self.preamp_val_lbl.setText(f"{pre:+.1f} dB")
+        self.bass_slider.setValue(int(round(bass * 10)))
+        self.bass_val_lbl.setText(f"{bass:+.1f} dB")
+
+        for i, sl in enumerate(self.band_sliders):
+            g = float(bands[i]) if i < len(bands) else 0.0
+            sl.setValue(int(round(g * 10)))
+            self.band_val_labels[i].setText(f"{g:+.1f}")
+
+        if name != "Flat (Default)" and not self.enable_switch.isChecked():
+            self.enable_switch.setChecked(True)
+
+        self._updating_preset = False
+        self._save_to_config()
+        if self.player_bar:
+            self.player_bar._update_eq_button_state()
 
     def _on_preamp_or_bass_moved(self):
+        if self._updating_preset:
+            return
         pre = self.preamp_slider.value() / 10.0
         bass = self.bass_slider.value() / 10.0
         self.preamp_val_lbl.setText(f"{pre:+.1f} dB")
         self.bass_val_lbl.setText(f"{bass:+.1f} dB")
-        if not self._updating_preset:
-            self._set_combo_custom()
-            self._save_to_config()
-
-    def _on_band_moved(self, idx: int, val: int):
-        gv = val / 10.0
-        self.band_val_labels[idx].setText(f"{gv:+.1f}")
-        if not self._updating_preset:
-            self._set_combo_custom()
-            self._save_to_config()
-
-    def _set_combo_custom(self):
-        self._updating_preset = True
-        try:
-            c_idx = self.preset_combo.findText("Custom")
-            if c_idx >= 0:
-                self.preset_combo.setCurrentIndex(c_idx)
-        finally:
-            self._updating_preset = False
-
-    def _on_settings_changed(self, *args):
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentText("Custom")
+        self.preset_combo.blockSignals(False)
         self._save_to_config()
 
-    def _get_current_values(self) -> Tuple[bool, str, float, float, List[float]]:
-        enabled = self.enable_switch.isChecked()
-        preset = self.preset_combo.currentText()
-        preamp = round(self.preamp_slider.value() / 10.0, 1)
-        bass = round(self.bass_slider.value() / 10.0, 1)
-        bands = [round(sl.value() / 10.0, 1) for sl in self.band_sliders]
-        return enabled, preset, preamp, bass, bands
+    def _on_band_moved(self, idx: int, val: int):
+        if self._updating_preset:
+            return
+        g = val / 10.0
+        self.band_val_labels[idx].setText(f"{g:+.1f}")
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentText("Custom")
+        self.preset_combo.blockSignals(False)
+        if not self.enable_switch.isChecked() and abs(g) >= 0.2:
+            self.enable_switch.blockSignals(True)
+            self.enable_switch.setChecked(True)
+            self.enable_switch.blockSignals(False)
+        self._save_to_config()
 
-    def _save_to_config(self):
-        enabled, preset, preamp, bass, bands = self._get_current_values()
-        config.set("ui.eq_enabled", enabled, auto_save=False)
-        config.set("ui.eq_preset", preset, auto_save=False)
-        config.set("ui.eq_preamp", preamp, auto_save=False)
-        config.set("ui.eq_bass_boost", bass, auto_save=False)
-        config.set("ui.eq_bands", bands, auto_save=True)
-        if self.player_bar and hasattr(self.player_bar, "_update_eq_button_state"):
-            self.player_bar._update_eq_button_state()
+    def _reset_flat(self):
+        self.preset_combo.setCurrentText("Flat (Default)")
+        self.enable_switch.setChecked(False)
+        self._save_to_config()
+        if self.player_bar:
+            self.player_bar.apply_live_equalizer()
+
+    def _on_settings_changed(self):
+        self._save_to_config()
+        if self.player_bar:
+            self.player_bar.apply_live_equalizer()
 
     def _apply_live_now(self):
         self._save_to_config()
-        if self.player_bar and hasattr(self.player_bar, "apply_live_equalizer"):
-            self.apply_live_btn.setEnabled(False)
-            self.apply_live_btn.setText("Applying EQ...")
-            self.player_bar.apply_live_equalizer(
-                on_done=lambda: (
-                    self.apply_live_btn.setEnabled(True),
-                    self.apply_live_btn.setText("Apply Live EQ to Player"),
-                    InfoBar.success("Equalizer Active", f"Applied '{self.preset_combo.currentText()}' to active playback.", duration=2500, parent=self)
-                )
-            )
+        if not self.player_bar or not self.player_bar.current_file_path:
+            InfoBar.info("EQ Saved", "Equalizer curve saved and will apply on playback.", duration=2500, parent=self)
+            return
+        self.apply_live_btn.setEnabled(False)
+        self.apply_live_btn.setText("Applying Live EQ...")
+        self.player_bar.apply_live_equalizer(on_done=self._on_live_applied)
 
-    def _bake_to_current_file(self):
+    def _on_live_applied(self):
+        self.apply_live_btn.setEnabled(True)
+        self.apply_live_btn.setText("Apply Live EQ to Player")
+        InfoBar.success("Live EQ Active", f"Playing with '{self.preset_combo.currentText()}' EQ curve.", duration=2500, parent=self)
+
+    def _bake_to_file(self):
         fp = self.player_bar.current_file_path if self.player_bar else None
         if not fp or not os.path.isfile(fp):
+            InfoBar.warning("No Track Loaded", "Play a track first to permanently apply EQ to its audio file.", duration=3000, parent=self)
             return
-        self._save_to_config()
-        _, preset, preamp, bass, bands = self._get_current_values()
-        self.bake_btn.setEnabled(False)
-        self.bake_btn.setText("Saving EQ to Track...")
 
-        # Pause and release file handle temporarily on Windows if playing raw file
-        was_playing = self.player_bar.player.playbackState() == self.player_bar.player.PlaybackState.PlayingState
-        pos_ms = self.player_bar.player.position()
-        self.player_bar.player.stop()
-        from PyQt6.QtCore import QUrl
-        self.player_bar.player.setSource(QUrl())
+        self._save_to_config()
+        bands = self._current_bands()
+        pre = round(self.preamp_slider.value() / 10.0, 1)
+        bass = round(self.bass_slider.value() / 10.0, 1)
+
+        self.bake_btn.setEnabled(False)
+        self.bake_btn.setText("Rendering EQ to Track...")
+
+        if self.player_bar:
+            self.player_bar.player.stop()
+            self.player_bar.player.setSource(
+                self.player_bar.player.source().__class__()
+            )
 
         def worker():
-            ok = apply_equalizer_to_file(fp, bands, preamp_db=preamp, bass_boost_db=bass)
-            self.sig_bake_done.emit(ok, f"{pos_ms}|{1 if was_playing else 0}|{preset}")
+            ok = apply_equalizer_to_file(fp, bands, preamp_db=pre, bass_boost_db=bass)
+            self.sig_bake_done.emit(ok, fp)
 
         threading.Thread(target=worker, daemon=True, name="BakeEQWorker").start()
 
-    def _on_bake_done(self, ok: bool, state_str: str):
+    def _on_bake_done(self, ok: bool, fp: str):
         self.bake_btn.setEnabled(True)
-        self.bake_btn.setText("Save EQ Permanently to Current Track")
-        parts = state_str.split("|", 2)
-        pos_ms = int(parts[0]) if parts and parts[0].isdigit() else 0
-        was_playing = parts[1] == "1" if len(parts) > 1 else False
-        preset = parts[2] if len(parts) > 2 else "Custom"
-
-        if self.player_bar and self.player_bar.current_file_path:
-            from PyQt6.QtCore import QUrl
-            self.player_bar.player.setSource(QUrl.fromLocalFile(self.player_bar.current_file_path))
-            self.player_bar.player.setPosition(pos_ms)
-            if was_playing:
-                self.player_bar.player.play()
-
+        self.bake_btn.setText("Permanently Apply EQ to File")
         if ok:
+            if self.player_bar and self.player_bar.current_file_path == fp:
+                self.enable_switch.setChecked(False)
+                self._save_to_config()
+                self.player_bar.play_track(fp, self.player_bar.current_track, self.player_bar.current_quality_badge)
             InfoBar.success(
-                "Saved to Track",
-                f"Permanently applied '{preset}' EQ curve to '{os.path.basename(self.player_bar.current_file_path)}' with all tags preserved.",
+                "EQ Applied to Track",
+                f"Permanently rendered EQ curve to '{os.path.basename(fp)}' with all tags & artwork preserved.",
                 duration=4000,
                 parent=self
             )
         else:
-            InfoBar.error("EQ Save Failed", "Could not apply equalizer curve to track.", duration=3500, parent=self)
-
+            InfoBar.error("EQ Render Failed", "Could not apply EQ to the file.", duration=3500, parent=self)
