@@ -31,10 +31,57 @@ def normalize_path(path: str) -> str:
     return p
 
 
+def generate_mosaic_cover(track_files: List[str], output_path: str, size: Tuple[int, int] = (640, 640)) -> bool:
+    """
+    Generates a high-quality 2x2 grid mosaic image (like Spotify's native playlist artwork)
+    from up to 4 distinct album artworks extracted from the given list of audio files.
+    """
+    if not track_files:
+        return False
+    try:
+        import io
+        import hashlib
+        from PIL import Image
+        distinct_images: List[Image.Image] = []
+        seen_hashes = set()
+        for fp in track_files:
+            if fp and os.path.isfile(fp):
+                b = extract_embedded_cover(fp)
+                if b and len(b) > 500:
+                    h = hashlib.md5(b).hexdigest()
+                    if h not in seen_hashes:
+                        seen_hashes.add(h)
+                        try:
+                            im = Image.open(io.BytesIO(b)).convert("RGB")
+                            distinct_images.append(im)
+                            if len(distinct_images) == 4:
+                                break
+                        except Exception:
+                            pass
+        if not distinct_images:
+            return False
+        if len(distinct_images) < 4:
+            canvas = distinct_images[0].resize(size, Image.Resampling.LANCZOS)
+        else:
+            half_w = size[0] // 2
+            half_h = size[1] // 2
+            canvas = Image.new("RGB", size)
+            canvas.paste(distinct_images[0].resize((half_w, half_h), Image.Resampling.LANCZOS), (0, 0))
+            canvas.paste(distinct_images[1].resize((half_w, half_h), Image.Resampling.LANCZOS), (half_w, 0))
+            canvas.paste(distinct_images[2].resize((half_w, half_h), Image.Resampling.LANCZOS), (0, half_h))
+            canvas.paste(distinct_images[3].resize((half_w, half_h), Image.Resampling.LANCZOS), (half_w, half_h))
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        canvas.save(output_path, "JPEG", quality=90)
+        return True
+    except Exception as e:
+        logger.debug(f"Failed to generate mosaic cover: {e}")
+        return False
+
+
 def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = "") -> str:
     """
     Resolves or extracts collection cover artwork into the dedicated app cache directory:
-    cache/covers/{name}.jpg.
+    cache/covers/{name}.jpg or cache/covers/playlist_{name}.jpg.
     Never writes cover.jpg or any image files inside the user's music folder.
     Returns the path to the cached cover image if found/created, or empty string.
     """
@@ -47,7 +94,7 @@ def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = 
     if os.path.isdir(candidate_name) or ("\\" in candidate_name or "/" in candidate_name):
         candidate_name = os.path.basename(os.path.normpath(candidate_name))
 
-    if candidate_name.lower() in ("downloads", "music", ""):
+    if candidate_name.lower() in ("downloads", "music", "singles", ""):
         # Generic folder; cannot be used as collection name
         return ""
 
@@ -56,24 +103,51 @@ def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = 
     if not os.path.isdir(covers_dir):
         return ""
 
-    # 1. Check exact matches in covers_dir
     cached_cover = os.path.join(covers_dir, f"{safe_name}.jpg")
+    pl_cover = os.path.join(covers_dir, f"playlist_{safe_name}.jpg")
+    alb_cover = os.path.join(covers_dir, f"album_{safe_name}.jpg")
+
+    # 1. Check saved_playlists table in DB for official Spotify cover_url first
+    try:
+        db_p = get_archive_db_path()
+        if os.path.isfile(db_p):
+            with closing(sqlite3.connect(str(db_p), timeout=5.0)) as conn:
+                row = conn.execute(
+                    "SELECT cover_url FROM saved_playlists WHERE LOWER(name) = LOWER(?) AND cover_url IS NOT NULL AND cover_url != '' LIMIT 1",
+                    (candidate_name,)
+                ).fetchone()
+                if row and row[0]:
+                    if os.path.isfile(pl_cover) and os.path.getsize(pl_cover) > 500:
+                        return pl_cover
+                    import urllib.request
+                    urllib.request.urlretrieve(row[0], pl_cover)
+                    if os.path.isfile(pl_cover) and os.path.getsize(pl_cover) > 500:
+                        try:
+                            shutil.copy2(pl_cover, cached_cover)
+                        except Exception:
+                            pass
+                        return pl_cover
+    except Exception as e:
+        logger.debug(f"Could not retrieve cover_url for {candidate_name}: {e}")
+
+    # 2. Check dedicated playlist or album covers in covers_dir
+    if os.path.isfile(pl_cover) and os.path.getsize(pl_cover) > 500:
+        return pl_cover
+    if os.path.isfile(alb_cover) and os.path.getsize(alb_cover) > 500:
+        return alb_cover
+
+    # 3. Check exact match {safe_name}.jpg
     if os.path.isfile(cached_cover) and os.path.getsize(cached_cover) > 500:
         return cached_cover
 
-    for prefix in ("playlist_", "album_"):
-        candidate = os.path.join(covers_dir, f"{prefix}{safe_name}.jpg")
-        if os.path.isfile(candidate) and os.path.getsize(candidate) > 500:
-            return candidate
-
-    # 2. Case-insensitive and prefix match in covers_dir (handles long truncated names & unicode)
+    # 4. Case-insensitive and prefix match in covers_dir (handles long truncated names & unicode)
     safe_lower = safe_name.lower()
     try:
         for f in os.listdir(covers_dir):
             if not f.lower().endswith((".jpg", ".png", ".jpeg", ".webp")):
                 continue
             stem = os.path.splitext(f)[0].lower()
-            if stem == safe_lower or stem == f"playlist_{safe_lower}" or stem == f"album_{safe_lower}":
+            if stem in (f"playlist_{safe_lower}", f"album_{safe_lower}", safe_lower):
                 cp = os.path.join(covers_dir, f)
                 if os.path.isfile(cp) and os.path.getsize(cp) > 500:
                     return cp
@@ -85,25 +159,8 @@ def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = 
     except Exception:
         pass
 
-    # 3. Check saved_playlists table in DB for cover_url
-    try:
-        db_p = get_archive_db_path()
-        if os.path.isfile(db_p):
-            with closing(sqlite3.connect(str(db_p), timeout=5.0)) as conn:
-                row = conn.execute(
-                    "SELECT cover_url FROM saved_playlists WHERE LOWER(name) = LOWER(?) AND cover_url IS NOT NULL AND cover_url != '' LIMIT 1",
-                    (candidate_name,)
-                ).fetchone()
-                if row and row[0]:
-                    import urllib.request
-                    urllib.request.urlretrieve(row[0], cached_cover)
-                    if os.path.isfile(cached_cover) and os.path.getsize(cached_cover) > 500:
-                        return cached_cover
-    except Exception as e:
-        logger.debug(f"Could not retrieve cover_url for {candidate_name}: {e}")
-
-    # 4. Check if a cover image exists in a directory if collection_name_or_folder was a folder
-    if os.path.isdir(collection_name_or_folder) and candidate_name.lower() not in ("downloads", "music"):
+    # 5. Check if a cover image exists in a directory if collection_name_or_folder was a folder
+    if os.path.isdir(collection_name_or_folder) and candidate_name.lower() not in ("downloads", "music", "singles"):
         for ext in (".jpg", ".jpeg", ".png", ".webp"):
             old_cov = os.path.join(collection_name_or_folder, f"cover{ext}")
             if os.path.isfile(old_cov) and os.path.getsize(old_cov) > 500:
@@ -113,7 +170,28 @@ def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = 
                 except Exception:
                     pass
 
-    # 5. Extract from sample_file if provided and cache as {safe_name}.jpg
+    # 6. Generate 2x2 mosaic from tracks in downloaded_tracks for this collection
+    try:
+        db_p = get_archive_db_path()
+        if os.path.isfile(db_p):
+            with closing(sqlite3.connect(str(db_p), timeout=5.0)) as conn:
+                rows = conn.execute(
+                    "SELECT file_path FROM downloaded_tracks WHERE LOWER(collection_name) = LOWER(?) AND file_path IS NOT NULL LIMIT 40",
+                    (candidate_name,)
+                ).fetchall()
+                if rows:
+                    fps = [r[0] for r in rows if r[0] and os.path.isfile(r[0])]
+                    if fps:
+                        if generate_mosaic_cover(fps, pl_cover):
+                            try:
+                                shutil.copy2(pl_cover, cached_cover)
+                            except Exception:
+                                pass
+                            return pl_cover
+    except Exception as e_mos:
+        logger.debug(f"Could not generate mosaic for {candidate_name}: {e_mos}")
+
+    # 7. Extract from sample_file if provided and cache as {safe_name}.jpg
     target_audio = sample_file if (sample_file and os.path.isfile(sample_file)) else None
     if target_audio and os.path.isfile(target_audio):
         try:

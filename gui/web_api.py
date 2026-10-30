@@ -260,7 +260,7 @@ class WebBackendState:
         tracks_out: List[Dict[str, Any]] = []
         playlists_map: Dict[str, Dict[str, Any]] = {}
         albums_map: Dict[str, Dict[str, Any]] = {}
-        genres_set = set()
+        genres_counter = collections.Counter()
         total_bytes = 0
 
         # Seed playlists_map with all saved playlists so track counts and covers are 100% accurate
@@ -309,10 +309,10 @@ class WebBackendState:
             genre_raw = (rec.get("genre") or "").strip()
             primary_genre = ""
             if genre_raw:
-                for g in re.split(r"[;,]", genre_raw):
+                for g in re.split(r"[;,/|]", genre_raw):
                     g_clean = g.strip().title()
-                    if g_clean and len(g_clean) > 1:
-                        genres_set.add(g_clean)
+                    if g_clean and len(g_clean) > 1 and g_clean.lower() not in ("unknown", "other", "music", "audio"):
+                        genres_counter[g_clean] += 1
                         if not primary_genre:
                             primary_genre = g_clean
 
@@ -440,11 +440,15 @@ class WebBackendState:
         # Sort tracks by title by default
         tracks_out.sort(key=lambda t: (t["title"] or "").lower())
 
+        # Select top genres (at most 20) by frequency across user's library, sorted alphabetically for UI
+        top_genres = [g for g, _ in genres_counter.most_common(20)]
+        top_genres_sorted = sorted(top_genres, key=lambda s: s.lower())
+
         snapshot = {
             "tracks": tracks_out,
             "playlists": playlists_out,
             "albums": albums_out,
-            "genres": sorted(genres_set),
+            "genres": top_genres_sorted,
             "stats": {
                 "total_tracks": len(tracks_out),
                 "total_bytes": total_bytes,
