@@ -1,12 +1,18 @@
 import os
 import sys
 import logging
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QEasingCurve, QPoint
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QEasingCurve, QPoint, QCoreApplication
+if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
+    try:
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+        import PyQt6.QtWebEngineWidgets  # noqa: F401
+    except Exception:
+        pass
 from PyQt6.QtGui import QIcon, QKeySequence, QShortcut, QColor
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QVBoxLayout
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, FluentIcon,
-    setTheme, Theme, isDarkTheme
+    setTheme, Theme, isDarkTheme, setThemeColor
 )
 from gui.player_bar import MiniPlayerBar
 from gui.media_keys import MediaControllerManager
@@ -24,6 +30,7 @@ from core.utils import resource_path
 from core.paths import get_asset_path
 
 from gui.bridge import EngineSignalBridge
+from gui.views.web_studio_view import WebStudioView
 from gui.views.queue_view import QueueView
 from gui.views.playlists_view import PlaylistsView
 from gui.views.completed_view import CompletedView
@@ -43,9 +50,9 @@ class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
         self.setObjectName("flacify_main_window")
-        self.setWindowTitle("Flacify — High-Fidelity Audio Scraper")
-        self.resize(1060, 720)
-        self.setMinimumSize(880, 600)
+        self.setWindowTitle("Flacify — High-Fidelity Audio Studio")
+        self.resize(1240, 800)
+        self.setMinimumSize(960, 640)
 
         # Set Window Icon
         icon_path = get_asset_path("assets/icon.ico")
@@ -57,15 +64,19 @@ class MainWindow(FluentWindow):
             screen = QApplication.primaryScreen()
             if screen:
                 geom = screen.availableGeometry()
-                x = max(0, (geom.width() - 1060) // 2)
-                y = max(0, (geom.height() - 720) // 2)
+                x = max(0, (geom.width() - 1240) // 2)
+                y = max(0, (geom.height() - 800) // 2)
                 self.move(x, y)
         except Exception as e:
             logger.debug(f"Could not center window: {e}")
 
-        # Force Dark Theme and ensure solid background so window is never transparent
+        # Force Dark Theme and Spotify Green accent (prevents Windows red system accent bleed)
         setTheme(Theme.DARK)
-        self.setStyleSheet("MainWindow, FluentWindow { background-color: #181818; }")
+        try:
+            setThemeColor(QColor("#1DB954"))
+        except Exception:
+            pass
+        self.setStyleSheet("MainWindow, FluentWindow { background-color: #000000; }")
 
         # Initialize Headless Core Engine & Persistent Archive
         self.archive_manager = ArchiveManager()
@@ -102,7 +113,14 @@ class MainWindow(FluentWindow):
         self.bridge = EngineSignalBridge()
         self.bridge.bind_queue_manager(self.queue_manager)
 
-        # Create Sub-Interface Views with explicit object names
+        # Primary Chromium-powered Spotify Desktop Web Studio View
+        self.web_studio_view = WebStudioView(
+            queue_manager=self.queue_manager,
+            archive_manager=self.archive_manager,
+            parent=self,
+        )
+
+        # Create Sub-Interface Views with explicit object names (preserved for tests & fallback)
         self.queue_view = QueueView(self.queue_manager, self.bridge, self)
         self.queue_view.setObjectName("queue_view")
 
@@ -171,10 +189,19 @@ class MainWindow(FluentWindow):
         # Windows 11 System Tray Icon & Toasts
         self._init_system_tray(icon_path)
 
-        # Ensure Queue View is selected on initial display
-        self.switchTo(self.queue_view)
+        # Launch into the new full-bleed Spotify Desktop Web Studio by default
+        self.switchTo(self.web_studio_view)
+        if hasattr(self, "navigationInterface"):
+            self.navigationInterface.setVisible(False)
+        self.widgetLayout.setContentsMargins(0, 32, 0, 0)
 
     def _init_navigation(self):
+        self.addSubInterface(
+            self.web_studio_view,
+            FluentIcon.HOME,
+            "Studio",
+            NavigationItemPosition.TOP
+        )
         self.addSubInterface(
             self.queue_view,
             FluentIcon.DOWNLOAD,
@@ -314,6 +341,8 @@ class MainWindow(FluentWindow):
 
     def _on_track_completed(self, track_id: str, path: str):
         title_str = os.path.basename(path)
+        if hasattr(self, "web_studio_view") and self.web_studio_view.web_server:
+            self.web_studio_view.web_server.state.invalidate_library_cache()
         for it in self.queue_manager.get_items():
             if it.track.id == track_id:
                 self.completed_view.add_completed_item(it)
@@ -421,6 +450,11 @@ class MainWindow(FluentWindow):
                 logger.debug(f"Error checkpointing WAL on exit: {e_wal}")
         if hasattr(self, "media_controller"):
             self.media_controller.cleanup()
+        if hasattr(self, "web_studio_view"):
+            try:
+                self.web_studio_view.shutdown()
+            except Exception:
+                pass
         if hasattr(self, "player_bar"):
             self.player_bar.player.stop()
         self.queue_manager.stop()

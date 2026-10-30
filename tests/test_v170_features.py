@@ -296,6 +296,57 @@ class TestV170Features(unittest.TestCase):
         eq_dlg.close()
         player_bar.close()
 
+    # -----------------------------------------------------------------
+    # 6. Spotify Web Studio Backend API & Byte-Range Audio Streaming
+    # -----------------------------------------------------------------
+    def test_web_studio_api_and_streaming(self):
+        import urllib.request
+        import json
+        from unittest.mock import MagicMock
+        from gui.web_api import FlacifyWebServer
+
+        mp3_path = os.path.join(self.tmp_dir, "stream_test.mp3")
+        _generate_sine_sweep_mp3(mp3_path, lowpass_hz=0, bitrate="192k")
+        t1 = TrackMetadata(id="sp_web_1", title="Web Studio Song", artists=["Web Artist"], album="Web Album", duration_ms=10000)
+        self.archive.add_track(t1, mp3_path, "320k MP3", "MeloBot")
+
+        mock_qm = MagicMock()
+        mock_qm.get_all_items.return_value = []
+        mock_qm._paused = False
+
+        web_root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gui", "web_ui")
+        server = FlacifyWebServer(queue_manager=mock_qm, archive_manager=self.archive, web_root=web_root)
+        base_url = server.start()
+        try:
+            # Verify index.html & app.js
+            with urllib.request.urlopen(f"{base_url}/") as resp:
+                html = resp.read().decode("utf-8")
+                self.assertIn("Flacify", html)
+                self.assertIn("lyrics-drawer", html)
+
+            # Verify /api/state
+            with urllib.request.urlopen(f"{base_url}/api/state") as resp:
+                st = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(st["ok"])
+
+            # Verify /api/library
+            with urllib.request.urlopen(f"{base_url}/api/library?refresh=1") as resp:
+                lib = json.loads(resp.read().decode("utf-8"))
+                self.assertGreaterEqual(len(lib["tracks"]), 1)
+
+            # Verify HTTP 206 Byte-Range audio streaming
+            import urllib.parse
+            req = urllib.request.Request(
+                f"{base_url}/api/audio?path={urllib.parse.quote(mp3_path)}",
+                headers={"Range": "bytes=0-1023"},
+            )
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 206)
+                chunk = resp.read()
+                self.assertEqual(len(chunk), 1024)
+        finally:
+            server.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

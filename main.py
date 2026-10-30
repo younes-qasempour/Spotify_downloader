@@ -140,9 +140,14 @@ def run_gui():
     print("==================================================", flush=True)
     print("Initializing Fluent UI application...", flush=True)
 
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import Qt, QCoreApplication
     from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
+    try:
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+        import PyQt6.QtWebEngineWidgets  # noqa: F401
+    except Exception:
+        pass
 
     # Fix Windows taskbar icon grouping and create installer mutex
     if sys.platform == "win32":

@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flacify — High-Fidelity Audio Studio</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app-shell">
+    <!-- LEFT SIDEBAR: Navigation + Your Playlists (Spotify Desktop 3-Pane Style) -->
+    <aside class="sidebar">
+      <div class="sidebar-card nav-card">
+        <div class="brand-row">
+          <div class="brand-logo">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2">
+              <circle cx="12" cy="12" r="10" stroke="#1ED760" />
+              <path d="M8 14.5c2.5-1 5.5-1 8 0M7 11.5c3.2-1.2 6.8-1.2 10 0M6.5 8.5c3.8-1.4 7.2-1.4 11 0" stroke="#1ED760" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <span class="brand-title">Flacify</span>
+            <span class="brand-badge">STUDIO</span>
+          </div>
+        </div>
+
+        <nav class="main-nav" id="main-nav">
+          <button class="nav-item active" data-view="library">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 19.5V4.5M8 19.5V4.5M12 4.5l8 3-8 12" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Your Library</span>
+            <span class="nav-pill" id="nav-lib-count">0</span>
+          </button>
+
+          <button class="nav-item" data-view="queue">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Downloader Queue</span>
+            <span class="nav-pill emerald hidden" id="nav-queue-count">0</span>
+          </button>
+
+          <button class="nav-item" data-view="saved">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Saved &amp; Watch</span>
+            <span class="nav-pill" id="nav-watch-count">0</span>
+          </button>
+
+          <button class="nav-item" data-view="tools">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 12h3l3-8 4 16 3-8h7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Audio Lab &amp; Tools</span>
+          </button>
+
+          <button class="nav-item" data-view="settings">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+            </svg>
+            <span>Settings</span>
+          </button>
+        </nav>
+      </div>
+
+      <!-- Bottom Sidebar Card: Quick Collections Browser -->
+      <div class="sidebar-card playlists-sidebar-card">
+        <div class="sidebar-header">
+          <span class="sidebar-section-title">Collections</span>
+          <div class="sidebar-filter-pills">
+            <button class="chip-sm active" data-side-filter="all">All</button>
+            <button class="chip-sm" data-side-filter="playlist">Playlists</button>
+            <button class="chip-sm" data-side-filter="album">Albums</button>
+          </div>
+        </div>
+        <div class="sidebar-search-wrap">
+          <input type="text" id="sidebar-filter-input" placeholder="Filter collections..." autocomplete="off" />
+        </div>
+        <div class="sidebar-collections-list" id="sidebar-collections-list"></div>
+      </div>
+    </aside>
+
+    <!-- CENTER MAIN VIEWPORT -->
+    <main class="main-viewport" id="main-viewport">
+      <div class="ambient-backdrop" id="ambient-backdrop"></div>
+
+      <!-- Top Sticky Bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-circle-btn" id="btn-nav-home" title="All Songs Library">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M15 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+
+          <!-- Universal Search & Instant Spotify URL Bar -->
+          <div class="omni-bar">
+            <svg class="omni-icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35" stroke-linecap="round"/>
+            </svg>
+            <input
+              type="text"
+              id="omni-input"
+              placeholder="Search 5,000+ songs, artists, albums — or paste a Spotify URL to download..."
+              autocomplete="off"
+            />
+            <button class="omni-clear hidden" id="omni-clear" title="Clear">✕</button>
+            <button class="omni-action-btn hidden" id="omni-download-btn">Download URL</button>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <div class="resolving-pill hidden" id="topbar-resolving">
+            <span class="spinner-xs"></span>
+            <span id="topbar-resolving-text">Resolving...</span>
+          </div>
+          <button class="ghost-pill-btn" id="btn-rescan-disk" title="Rescan & Sync Downloads Folder">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+            </svg>
+            <span>Sync Disk</span>
+          </button>
+          <button class="ghost-pill-btn" id="btn-open-downloads" title="Open Downloads Folder in Explorer">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+            </svg>
+            <span>Folder</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Scrollable View Container -->
+      <div class="view-scroll" id="view-scroll">
+        <!-- 1. LIBRARY VIEW -->
+        <section class="view-page active" id="view-library">
+          <!-- Hero Header -->
+          <div class="hero-banner" id="library-hero">
+            <div class="hero-cover-wrap" id="hero-cover-wrap">
+              <img id="hero-cover-img" src="" alt="" class="hidden" />
+              <div id="hero-cover-fallback" class="hero-cover-fallback">♫</div>
+            </div>
+            <div class="hero-meta">
+              <span class="hero-overline" id="hero-overline">OFFLINE MASTER LIBRARY</span>
+              <h1 class="hero-title" id="hero-title">All Songs</h1>
+              <p class="hero-subtitle" id="hero-subtitle">Loading your high-fidelity library...</p>
+            </div>
+          </div>
+
+          <!-- Spotify Action & Filter Bar -->
+          <div class="action-toolbar">
+            <div class="action-left">
+              <button class="spotify-play-fab" id="hero-play-btn" title="Play Collection">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+                  <path d="M7 5v14l11-7z"/>
+                </svg>
+              </button>
+              <button class="action-icon-btn" id="hero-shuffle-btn" title="Shuffle Play Collection">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>
+                  <polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/>
+                  <line x1="4" y1="4" x2="9" y2="9"/>
+                </svg>
+              </button>
+              <button class="action-icon-btn hidden" id="hero-back-btn" title="Back to All Collections">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
+                </svg>
+                <span>Back</span>
+              </button>
+              <button class="action-icon-btn hidden" id="hero-folder-btn" title="Open Collection Folder">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+                </svg>
+              </button>
+              <button class="action-icon-btn hidden" id="hero-rename-btn" title="Rename Collection">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                </svg>
+              </button>
+              <button class="action-icon-btn" id="hero-m3u-btn" title="Export .M3U8 Playlist File">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/>
+                </svg>
+              </button>
+
+              <!-- Tab Switcher: Songs / Playlists Grid / Albums Grid -->
+              <div class="segmented-tabs" id="lib-subtabs">
+                <button class="seg-tab active" data-subtab="tracks">Songs</button>
+                <button class="seg-tab" data-subtab="playlists">Playlists</button>
+                <button class="seg-tab" data-subtab="albums">Albums</button>
+              </div>
+            </div>
+
+            <div class="action-right">
+              <select class="sleek-select" id="lib-genre-select" title="Filter by Genre">
+                <option value="all">All Genres</option>
+              </select>
+              <select class="sleek-select" id="lib-sort-select" title="Sort Order">
+                <option value="title_asc">Sort: Title (A–Z)</option>
+                <option value="artist_asc">Sort: Artist (A–Z)</option>
+                <option value="recent">Sort: Recently Added</option>
+                <option value="dur_desc">Sort: Duration (Longest)</option>
+                <option value="dur_asc">Sort: Duration (Shortest)</option>
+                <option value="genre_asc">Sort: Genre (A–Z)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Subview A: Virtualized Borderless Spotify Track Table -->
+          <div id="lib-tracks-container" class="tracks-table-wrap">
+            <div class="track-table-header">
+              <div class="col-num">#</div>
+              <div class="col-title">Title</div>
+              <div class="col-album">Album / Playlist</div>
+              <div class="col-genre">Genre</div>
+              <div class="col-quality">Quality</div>
+              <div class="col-dur">Duration</div>
+              <div class="col-act"></div>
+            </div>
+            <div id="virtual-tracks-spacer" class="virtual-spacer">
+              <div id="virtual-tracks-content" class="virtual-content"></div>
+            </div>
+          </div>
+
+          <!-- Subview B: Playlists / Albums Cover Art Card Grid -->
+          <div id="lib-grid-container" class="media-grid hidden"></div>
+        </section>
+
+        <!-- 2. DOWNLOADER & QUEUE VIEW -->
+        <section class="view-page" id="view-queue">
+          <div class="section-hero-card">
+            <div>
+              <span class="hero-overline">HIGH-FIDELITY SCRAPER ENGINE</span>
+              <h2 class="section-title">Spotify Downloader &amp; Live Queue</h2>
+              <p class="section-desc">Paste any Spotify Track, Album, Playlist, or Liked Songs URL (`open.spotify.com/collection/tracks`).</p>
+            </div>
+            <div class="url-ingest-row">
+              <input
+                type="text"
+                id="queue-url-input"
+                class="url-input-large"
+                placeholder="https://open.spotify.com/playlist/... or track / album URL"
+                autocomplete="off"
+              />
+              <button class="btn-primary-emerald" id="btn-queue-download">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4">
+                  <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round"/>
+                </svg>
+                <span>Download Now</span>
+              </button>
+              <button class="btn-secondary-dark" id="btn-queue-save-pl" title="Save to Saved Playlists without downloading immediately">
+                <span>Save to Playlists</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Queue Metrics & Controls -->
+          <div class="queue-toolbar">
+            <div class="segmented-tabs" id="queue-filter-tabs">
+              <button class="seg-tab active" data-qfilter="all">All (<span id="q-cnt-all">0</span>)</button>
+              <button class="seg-tab" data-qfilter="downloading">Active (<span id="q-cnt-dl">0</span>)</button>
+              <button class="seg-tab" data-qfilter="queued">Pending (<span id="q-cnt-wait">0</span>)</button>
+              <button class="seg-tab" data-qfilter="completed">Completed (<span id="q-cnt-done">0</span>)</button>
+              <button class="seg-tab" data-qfilter="failed">Failed (<span id="q-cnt-fail">0</span>)</button>
+            </div>
+            <div class="queue-actions">
+              <span class="speed-badge" id="queue-speed-badge">⚡ 0 B/s</span>
+              <button class="ghost-pill-btn" id="btn-queue-pause">Pause All</button>
+              <button class="ghost-pill-btn" id="btn-queue-retry">Retry Failed</button>
+              <button class="ghost-pill-btn" id="btn-queue-clear">Clear Completed</button>
+            </div>
+          </div>
+
+          <div id="queue-list-container" class="queue-list"></div>
+        </section>
+
+        <!-- 3. SAVED & WATCHED PLAYLISTS VIEW -->
+        <section class="view-page" id="view-saved">
+          <div class="saved-layout">
+            <div class="saved-left-pane">
+              <div class="pane-header">
+                <h3>Saved &amp; Watched Playlists</h3>
+                <button class="btn-sm-emerald" id="btn-add-saved-pl">+ Add URL</button>
+              </div>
+              <div id="saved-playlists-list" class="saved-pl-list"></div>
+            </div>
+            <div class="saved-right-pane" id="saved-detail-pane">
+              <div class="empty-state">Select a saved playlist on the left to inspect tracks, toggle Watch Auto-Sync, or download missing songs.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4. AUDIO LAB & STUDIO TOOLS VIEW (Spectrum Inspector + Smart Duplicate Merger) -->
+        <section class="view-page" id="view-tools">
+          <div class="tools-header">
+            <div class="segmented-tabs" id="tools-tabs">
+              <button class="seg-tab active" data-tooltab="spectrum">🔬 True Spectrum &amp; Fake-Bitrate Inspector</button>
+              <button class="seg-tab" data-tooltab="duplicates">🧬 Smart Duplicate &amp; Fingerprint Merger</button>
+            </div>
+          </div>
+
+          <!-- Tool A: Spectrum Inspector -->
+          <div id="tool-panel-spectrum" class="tool-panel">
+            <div class="tool-card">
+              <div class="tool-card-top">
+                <div>
+                  <h3>True Audio Spectrum &amp; Fake-Bitrate Auditor</h3>
+                  <p>Detect upscaled 128kbps transcodes disguised as 320kbps MP3 or FLAC by measuring actual acoustic energy roll-off up to 22 kHz.</p>
+                </div>
+                <div class="tool-btn-row">
+                  <button class="btn-primary-emerald" id="btn-run-spectrum-batch">Audit Library Sample (60 Tracks)</button>
+                </div>
+              </div>
+              <div id="spectrum-single-result" class="spectrum-single-box hidden"></div>
+              <div id="spectrum-batch-status" class="spectrum-status-bar hidden"></div>
+              <div id="spectrum-results-table" class="spectrum-table-wrap"></div>
+            </div>
+          </div>
+
+          <!-- Tool B: Duplicate Merger -->
+          <div id="tool-panel-duplicates" class="tool-panel hidden">
+            <div class="tool-card">
+              <div class="tool-card-top">
+                <div>
+                  <h3>Smart Duplicate &amp; Acoustic Fingerprint Merger</h3>
+                  <p>Find identical tracks across playlists using ISRC, duration, and Chromaprint acoustic fingerprinting. Reclaim disk space via NTFS Hard-Linking (0 bytes wasted) or Clean Merge.</p>
+                </div>
+                <div class="tool-btn-row">
+                  <label class="checkbox-pill">
+                    <input type="checkbox" id="chk-dup-fingerprint" />
+                    <span>Deep Acoustic Fingerprint</span>
+                  </label>
+                  <button class="btn-secondary-dark" id="btn-scan-duplicates">Scan Library</button>
+                  <button class="btn-primary-emerald hidden" id="btn-hardlink-duplicates">Hard-Link Consolidate</button>
+                  <button class="btn-danger-outline hidden" id="btn-merge-duplicates">Clean Merge</button>
+                </div>
+              </div>
+              <div id="duplicates-summary" class="dup-summary">Click "Scan Library" to detect duplicate songs across folders.</div>
+              <div id="duplicates-list" class="dup-groups-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 5. SETTINGS VIEW -->
+        <section class="view-page" id="view-settings">
+          <div class="settings-container">
+            <h2 class="section-title">Studio Settings</h2>
+            <p class="section-desc">Configure audio sources, EBU R128 loudness mastering, storage paths, and scheduled playlist sync.</p>
+
+            <div class="settings-card">
+              <h3>Storage &amp; Organization</h3>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Download Directory</div>
+                  <div class="setting-sub">Root folder where downloaded songs and playlists are stored</div>
+                </div>
+                <div class="setting-control-row">
+                  <input type="text" id="set-output-dir" class="sleek-input" style="width: 320px;" />
+                  <button class="btn-secondary-dark" id="btn-browse-dir">Browse...</button>
+                </div>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Organize Playlists &amp; Albums in Subfolders</div>
+                  <div class="setting-sub">Automatically create a dedicated subfolder for each playlist or album</div>
+                </div>
+                <input type="checkbox" id="set-subfolders" class="toggle-switch" />
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <h3>Audio Engine &amp; Mastering</h3>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Primary Audio Source</div>
+                  <div class="setting-sub">Preferred scraper source before cascading fallback</div>
+                </div>
+                <select id="set-preferred-source" class="sleek-select">
+                  <option value="melobot">MeloBot (320kbps MP3 + Telegram Direct)</option>
+                  <option value="ytm">YouTube Music (251 Opus / 320k)</option>
+                  <option value="musilon">Musilon (FLAC / High-Bitrate)</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">EBU R128 Loudness Mastering (-11 LUFS)</div>
+                  <div class="setting-sub">Boost quiet songs and balance volume across all downloads without clipping</div>
+                </div>
+                <input type="checkbox" id="set-normalize" class="toggle-switch" />
+              </div>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Embed Synchronized Lyrics (.LRC)</div>
+                  <div class="setting-sub">Automatically fetch and embed synced karaoke lyrics from LRCLIB</div>
+                </div>
+                <input type="checkbox" id="set-embed-lyrics" class="toggle-switch" />
+              </div>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Max Concurrent Downloads</div>
+                  <div class="setting-sub">Number of parallel worker threads</div>
+                </div>
+                <input type="number" id="set-concurrency" min="1" max="12" class="sleek-input" style="width: 90px;" />
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <h3>Scheduled Watch Playlists Auto-Sync</h3>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Enable Background Playlist Watcher</div>
+                  <div class="setting-sub">Automatically check watched playlists for newly added Spotify songs</div>
+                </div>
+                <input type="checkbox" id="set-autosync-enabled" class="toggle-switch" />
+              </div>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Auto-Sync Check Interval (Minutes)</div>
+                  <div class="setting-sub">How often to poll Spotify for new songs in watched playlists</div>
+                </div>
+                <input type="number" id="set-autosync-interval" min="5" max="720" class="sleek-input" style="width: 90px;" />
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <h3>Spotify Developer API (Optional)</h3>
+              <div class="setting-row">
+                <div class="setting-label">Spotify Client ID</div>
+                <input type="text" id="set-sp-id" class="sleek-input" style="width: 320px;" placeholder="Optional Client ID" />
+              </div>
+              <div class="setting-row">
+                <div class="setting-label">Spotify Client Secret</div>
+                <input type="password" id="set-sp-secret" class="sleek-input" style="width: 320px;" placeholder="Optional Client Secret" />
+              </div>
+            </div>
+
+            <div class="settings-footer">
+              <button class="btn-primary-emerald" id="btn-save-settings">Save Settings</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- BOTTOM SPOTIFY DESKTOP PLAYER BAR (90px) -->
+  <footer class="player-bar" id="player-bar">
+    <!-- Left: Now Playing Artwork & Track Info -->
+    <div class="player-left">
+      <div class="player-cover-wrap" id="player-cover-wrap" title="Click to open Fullscreen Karaoke Lyrics Studio">
+        <img id="player-cover-img" src="" alt="" class="hidden" />
+        <div id="player-cover-fallback" class="player-cover-fallback">♫</div>
+        <div class="player-cover-expand">▲</div>
+      </div>
+      <div class="player-track-meta">
+        <div class="player-title-row">
+          <span class="player-title" id="player-title">Ready to Play</span>
+          <span class="player-quality-badge hidden" id="player-badge">320K</span>
+        </div>
+        <div class="player-artist" id="player-artist">Select any song from your library</div>
+      </div>
+    </div>
+
+    <!-- Center: Transport Controls + Seek Slider + Live Karaoke & Translation Ticker -->
+    <div class="player-center">
+      <div class="transport-row">
+        <button class="transport-btn" id="btn-shuffle" title="Shuffle">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>
+            <polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/>
+            <line x1="4" y1="4" x2="9" y2="9"/>
+          </svg>
+        </button>
+        <button class="transport-btn" id="btn-prev" title="Previous Track">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor">
+            <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
+          </svg>
+        </button>
+        <button class="transport-play-btn" id="btn-play-pause" title="Play / Pause (Space)">
+          <svg id="icon-play" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M7 5v14l11-7z"/>
+          </svg>
+          <svg id="icon-pause" class="hidden" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M6 5h4v14H6zm8 0h4v14h-4z"/>
+          </svg>
+        </button>
+        <button class="transport-btn" id="btn-next" title="Next Track">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor">
+            <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
+          </svg>
+        </button>
+        <button class="transport-btn" id="btn-repeat" title="Repeat Mode">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/>
+            <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="seek-row">
+        <span class="time-lbl" id="lbl-curr-time">0:00</span>
+        <div class="slider-wrap" id="seek-slider-wrap">
+          <input type="range" id="seek-slider" min="0" max="1000" value="0" step="1" />
+          <div class="slider-fill" id="seek-fill" style="width: 0%;"></div>
+        </div>
+        <span class="time-lbl" id="lbl-total-time">0:00</span>
+      </div>
+
+      <div class="player-lyric-ticker" id="player-lyric-ticker" title="Click to open Synchronized Karaoke Lyrics Studio">
+        <span class="ticker-orig" id="ticker-orig">♪ Synchronized Karaoke Studio Ready ♪</span>
+        <span class="ticker-trans" id="ticker-trans"></span>
+      </div>
+    </div>
+
+    <!-- Right: Live Spectrum Visualizer + Lyrics + Translate + 10-Band EQ + Volume -->
+    <div class="player-right">
+      <canvas id="mini-visualizer" width="68" height="26" title="Live Real-Time Audio Spectrum"></canvas>
+
+      <button class="utility-btn" id="btn-open-lyrics" title="Synchronized Karaoke Lyrics Studio">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+          <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" stroke-linecap="round"/>
+        </svg>
+      </button>
+
+      <button class="utility-pill-btn" id="btn-cycle-trans" title="Cycle Lyrics Translation (Original / English / Persian فارسی)">
+        <span id="lbl-trans-pill">ORIG</span>
+      </button>
+
+      <button class="utility-btn" id="btn-open-eq" title="Real-Time 10-Band Equalizer & Bass Boost">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+          <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+          <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+          <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
+        </svg>
+      </button>
+
+      <button class="utility-btn" id="btn-mute" title="Mute / Unmute">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07" stroke-linecap="round"/>
+        </svg>
+      </button>
+
+      <div class="slider-wrap vol-slider-wrap">
+        <input type="range" id="vol-slider" min="0" max="100" value="100" step="1" />
+        <div class="slider-fill" id="vol-fill" style="width: 100%;"></div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- SLIDE-UP APPLE MUSIC / SPOTIFY FULLSCREEN KARAOKE LYRICS DRAWER -->
+  <div class="glass-drawer hidden" id="lyrics-drawer">
+    <div class="lyrics-backdrop-art" id="lyrics-backdrop-art"></div>
+    <div class="drawer-inner">
+      <div class="drawer-header-card">
+        <div class="drawer-track-info">
+          <img id="lyrics-cover-img" src="" alt="" class="drawer-cover" />
+          <div>
+            <div class="drawer-title" id="lyrics-title">No Track Playing</div>
+            <div class="drawer-artist" id="lyrics-artist">Select a song</div>
+          </div>
+        </div>
+
+        <!-- 3-Pill Segmented Translation Switcher -->
+        <div class="trans-segmented" id="lyrics-trans-switcher">
+          <button class="trans-pill active" data-lang="none">Original</button>
+          <button class="trans-pill" data-lang="en">English</button>
+          <button class="trans-pill" data-lang="fa">فارسی</button>
+        </div>
+
+        <div class="drawer-actions">
+          <button class="ghost-pill-btn" id="btn-lyrics-sync" title="Fetch Synchronized Lyrics from LRCLIB">
+            <span>↻ Sync LRCLIB</span>
+          </button>
+          <button class="ghost-pill-btn" id="btn-lyrics-copy" title="Copy Lyrics + Translation">
+            <span>Copy</span>
+          </button>
+          <button class="ghost-pill-btn" id="btn-lyrics-save" title="Export .lrc File">
+            <span>Save .lrc</span>
+          </button>
+          <button class="icon-circle-btn" id="btn-close-lyrics" title="Close Lyrics (Esc)">✕</button>
+        </div>
+      </div>
+
+      <div class="lyrics-scroll-area" id="lyrics-scroll-area">
+        <div class="lyrics-lines-list" id="lyrics-lines-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE-UP REAL-TIME 10-BAND WEBAUDIO EQUALIZER & BASS BOOST STUDIO -->
+  <div class="glass-modal-backdrop hidden" id="eq-modal">
+    <div class="eq-studio-card">
+      <div class="eq-header">
+        <div>
+          <h3>Real-Time 10-Band Parametric Equalizer &amp; Bass Studio</h3>
+          <p>Zero-latency WebAudio DSP filters — drag any slider to sculpt sound instantaneously.</p>
+        </div>
+        <div class="eq-header-controls">
+          <label class="checkbox-pill">
+            <input type="checkbox" id="eq-enabled-toggle" checked />
+            <span>Enable EQ</span>
+          </label>
+          <select id="eq-preset-select" class="sleek-select"></select>
+          <button class="ghost-pill-btn" id="btn-eq-reset">Reset Flat</button>
+          <button class="icon-circle-btn" id="btn-close-eq">✕</button>
+        </div>
+      </div>
+
+      <canvas id="eq-spectrum-canvas" width="680" height="90"></canvas>
+
+      <div class="eq-knobs-row">
+        <div class="eq-horizontal-control">
+          <div class="eq-ctrl-label"><span>Preamp Gain</span><strong id="lbl-eq-preamp">+0.0 dB</strong></div>
+          <input type="range" id="eq-preamp-slider" min="-12" max="12" step="0.5" value="0" />
+        </div>
+        <div class="eq-horizontal-control">
+          <div class="eq-ctrl-label"><span>Sub-Bass Punch (85 Hz)</span><strong id="lbl-eq-bass">+0.0 dB</strong></div>
+          <input type="range" id="eq-bass-slider" min="0" max="12" step="0.5" value="0" />
+        </div>
+      </div>
+
+      <div class="eq-bands-grid" id="eq-bands-grid"></div>
+
+      <div class="eq-footer">
+        <span class="eq-status-msg" id="eq-status-msg">Real-time WebAudio DSP active</span>
+        <div class="eq-footer-btns">
+          <button class="btn-secondary-dark" id="btn-eq-apply-file" title="Render this EQ curve permanently into the current audio file via FFmpeg">
+            Master &amp; Save Permanently to File
+          </button>
+          <button class="btn-primary-emerald" id="btn-eq-done">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Hidden HTML5 Audio Element connected to Web Audio API -->
+  <audio id="audio-element" crossorigin="anonymous" preload="auto"></audio>
+
+  <script src="/app.js"></script>
+</body>
+</html>
