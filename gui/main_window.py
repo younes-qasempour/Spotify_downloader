@@ -193,6 +193,10 @@ class MainWindow(FluentWindow):
         self.switchTo(self.web_studio_view)
         if hasattr(self, "navigationInterface"):
             self.navigationInterface.setVisible(False)
+            self.navigationInterface.setFixedWidth(0)
+            self.navigationInterface.hide()
+        if hasattr(self, "player_bar"):
+            self.player_bar.hide()
         self.widgetLayout.setContentsMargins(0, 32, 0, 0)
 
     def _init_navigation(self):

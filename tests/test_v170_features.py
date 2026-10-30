@@ -344,6 +344,38 @@ class TestV170Features(unittest.TestCase):
                 self.assertEqual(resp.status, 206)
                 chunk = resp.read()
                 self.assertEqual(len(chunk), 1024)
+
+            # Verify saved playlist and tracks endpoint with downloaded status
+            pl_id = "test_pl_1"
+            self.archive.save_playlist(pl_id, "Test Playlist", "https://open.spotify.com/playlist/test_pl_1", [
+                TrackMetadata(id="sp_web_1", title="Web Studio Song", artists=["Web Artist"], album="Web Album", duration_ms=10000),
+                TrackMetadata(id="sp_web_2", title="Missing Track", artists=["Artist 2"], album="Album 2", duration_ms=15000),
+            ])
+            with urllib.request.urlopen(f"{base_url}/api/saved_playlists") as resp:
+                pl_data = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(pl_data["ok"])
+                self.assertGreaterEqual(len(pl_data["playlists"]), 1)
+                matched = [p for p in pl_data["playlists"] if p["id"] == pl_id][0]
+                self.assertEqual(matched["total_tracks"], 2)
+                self.assertEqual(matched["downloaded_count"], 1)
+
+            with urllib.request.urlopen(f"{base_url}/api/saved_playlists/tracks?id={pl_id}") as resp:
+                tr_data = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(tr_data["ok"])
+                self.assertEqual(len(tr_data["tracks"]), 2)
+                tr1 = [t for t in tr_data["tracks"] if t["spotify_id"] == "sp_web_1"][0]
+                self.assertTrue(tr1["is_downloaded"])
+                self.assertEqual(tr1["status"], "downloaded")
+                self.assertEqual(tr1["quality_badge"], "320k MP3")
+
+            # Verify on-the-fly transcoding endpoint
+            req_trans = urllib.request.Request(
+                f"{base_url}/api/audio?path={urllib.parse.quote(mp3_path)}&transcode=1",
+                headers={"Range": "bytes=0-511"},
+            )
+            with urllib.request.urlopen(req_trans) as resp:
+                self.assertEqual(resp.status, 206)
+                self.assertEqual(len(resp.read()), 512)
         finally:
             server.stop()
 

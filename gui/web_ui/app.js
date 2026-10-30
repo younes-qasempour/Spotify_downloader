@@ -423,13 +423,17 @@ function applyLibraryFilters() {
 
   let list = state.library.tracks.filter(t => {
     if (coll) {
-      if ((t.collection_name || "").toLowerCase() !== coll.name.toLowerCase()) return false;
+      const collNameLow = coll.name.toLowerCase();
+      const inColls = (t.collections && t.collections.some(c => c.toLowerCase() === collNameLow))
+        || ((t.collection_name || "").toLowerCase() === collNameLow)
+        || ((t.album || "").toLowerCase() === collNameLow);
+      if (!inColls) return false;
     }
     if (genre && genre !== "all") {
       if (!(t.genres_all || "").toLowerCase().includes(genre.toLowerCase())) return false;
     }
     if (q && !q.startsWith("http://") && !q.startsWith("https://")) {
-      const hay = `${t.title} ${t.artist} ${t.album} ${t.collection_name} ${t.genre}`.toLowerCase();
+      const hay = `${t.title} ${t.artist} ${t.album} ${t.collection_name} ${(t.collections || []).join(" ")} ${t.genre}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -613,6 +617,10 @@ function playTrackFromList(list, index) {
   // Update Player Bar UI
   document.getElementById("player-title").textContent = track.title;
   document.getElementById("player-artist").textContent = track.artist;
+  document.getElementById("lbl-curr-time").textContent = "0:00";
+  document.getElementById("lbl-total-time").textContent = track.duration_str || "0:00";
+  document.getElementById("seek-slider").value = 0;
+  document.getElementById("seek-fill").style.width = "0%";
 
   const badgeEl = document.getElementById("player-badge");
   if (track.quality_badge) {
@@ -945,10 +953,10 @@ async function loadSavedPlaylists() {
 
   listEl.innerHTML = state.savedPlaylists.map(p => `
     <div class="side-coll-row ${state.selectedSavedPlaylistId === p.id ? "active" : ""}" data-pid="${escapeHtml(p.id)}">
-      <img class="side-coll-thumb" src="${coverUrl(p.cover_url)}" onerror="this.style.visibility='hidden'" />
+      <img class="side-coll-thumb" src="${coverUrl(p.local_cover || p.cover_url)}" onerror="this.style.visibility='hidden'" />
       <div class="side-coll-meta">
         <div class="side-coll-title">${p.auto_sync ? "⏱ " : ""}${escapeHtml(p.name)}</div>
-        <div class="side-coll-sub">${p.downloaded_count || 0} / ${p.track_count || 0} downloaded</div>
+        <div class="side-coll-sub">${p.downloaded_count || 0} / ${p.total_tracks || p.track_count || 0} downloaded</div>
       </div>
     </div>
   `).join("");
@@ -960,58 +968,108 @@ async function loadSavedPlaylists() {
   });
 }
 
+let currentSavedTracks = [];
+let savedTrackFilter = "all"; // 'all' | 'downloaded' | 'missing'
+let savedTrackQuery = "";
+let savedTrackSliceLimit = 150;
+
 async function loadSavedPlaylistDetail(pid) {
   state.selectedSavedPlaylistId = pid;
   loadSavedPlaylists();
   const pane = document.getElementById("saved-detail-pane");
-  pane.innerHTML = `<div style="padding:30px; color:var(--text-secondary);">Loading playlist tracks...</div>`;
+  pane.innerHTML = `<div style="padding:30px; color:var(--text-secondary);"><span class="spinner-xs"></span> Loading playlist tracks...</div>`;
 
   const res = await apiGet(`/api/saved_playlists/tracks?id=${encodeURIComponent(pid)}`);
-  if (!res || !res.ok || !res.playlist) return;
+  if (!res || !res.ok || !res.playlist) {
+    pane.innerHTML = `<div style="padding:30px; color:#f87171;">Could not load playlist details.</div>`;
+    return;
+  }
 
   const pl = res.playlist;
   const tracks = res.tracks || [];
-  const missingCnt = tracks.filter(t => !t.is_downloaded).length;
+  currentSavedTracks = tracks;
+  savedTrackFilter = "all";
+  savedTrackQuery = "";
+  savedTrackSliceLimit = 150;
+
+  const downloadedCnt = tracks.filter(t => t.is_downloaded).length;
+  const missingCnt = tracks.length - downloadedCnt;
+  const cUrl = coverUrl(pl.local_cover || pl.cover_url);
 
   pane.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.08);">
-      <div>
-        <h2 style="font-size:22px; font-weight:800;">${escapeHtml(pl.name)}</h2>
-        <div style="color:var(--text-secondary); font-size:12.5px; margin-top:4px;">
-          ${tracks.length} tracks • ${missingCnt} missing • Last synced: ${escapeHtml(pl.last_synced_at || "Never")}
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.08);">
+      <div style="display:flex; align-items:center; gap:16px;">
+        <img src="${cUrl}" style="width:68px; height:68px; border-radius:8px; object-fit:cover; background:#222; box-shadow:0 8px 20px rgba(0,0,0,0.5);" onerror="this.style.display='none'" />
+        <div>
+          <h2 style="font-size:22px; font-weight:800; color:#fff;">${escapeHtml(pl.name)}</h2>
+          <div style="color:var(--text-secondary); font-size:12.5px; margin-top:4px;">
+            ${tracks.length.toLocaleString()} tracks • <span style="color:#4ade80;">${downloadedCnt.toLocaleString()} downloaded</span>${missingCnt > 0 ? ` • <span style="color:#f87171;">${missingCnt.toLocaleString()} missing</span>` : ""} • Last synced: ${escapeHtml(pl.last_synced_at || "Never")}
+          </div>
         </div>
       </div>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <button class="btn-primary-emerald" id="btn-pl-play-all" title="Play downloaded tracks from this playlist">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7 5v14l11-7z"/></svg>
+          <span>Play Playlist (${downloadedCnt})</span>
+        </button>
         <label class="checkbox-pill" title="Automatically watch and sync new tracks added on Spotify">
           <input type="checkbox" id="chk-pl-watch" ${pl.auto_sync ? "checked" : ""} />
           <span>⏱ Watch Auto-Sync</span>
         </label>
         <button class="btn-secondary-dark" id="btn-pl-sync-now">↻ Sync with Spotify</button>
-        <button class="btn-primary-emerald" id="btn-pl-dl-missing">Download Missing (${missingCnt})</button>
+        ${missingCnt > 0 ? `<button class="btn-primary-emerald" id="btn-pl-dl-missing">Download Missing (${missingCnt})</button>` : `<button class="ghost-pill-btn" disabled style="opacity:0.6; cursor:default;">✓ All Downloaded</button>`}
         <button class="btn-danger-outline" id="btn-pl-delete">Delete</button>
       </div>
     </div>
-    <div style="max-height: calc(100vh - 330px); overflow-y:auto;">
-      ${tracks.map(t => `
-        <div class="track-row" style="grid-template-columns: 40px 1fr 180px 110px 70px;" data-local="${escapeHtml(t.local_path)}">
-          <div class="col-num">${t.index}</div>
-          <div class="col-title">
-            <div class="row-title-box">
-              <div class="row-title-text">${escapeHtml(t.title)}</div>
-              <div class="row-artist-text">${escapeHtml(t.artist)}</div>
-            </div>
-          </div>
-          <div class="col-album">${escapeHtml(t.album)}</div>
-          <div>
-            <span class="q-badge ${t.is_downloaded ? "melobot" : "opus"}">
-              ${t.is_downloaded ? "✓ Downloaded" : "Missing"}
-            </span>
-          </div>
-          <div class="col-dur">${t.duration_str}</div>
-        </div>
-      `).join("")}
+
+    <!-- Quick Search & Filter Controls -->
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+      <div class="segmented-tabs" id="saved-filter-tabs">
+        <button class="seg-tab active" data-sfilter="all">All (${tracks.length})</button>
+        <button class="seg-tab" data-sfilter="downloaded">Downloaded (${downloadedCnt})</button>
+        <button class="seg-tab" data-sfilter="missing">Missing (${missingCnt})</button>
+      </div>
+      <div style="flex:1; max-width:320px;">
+        <input type="text" id="saved-track-search" class="sidebar-search-wrap" style="width:100%; height:32px; background:#202020; border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:0 14px; color:#fff; font-size:12.5px;" placeholder="Search in ${escapeHtml(pl.name)}..." autocomplete="off" />
+      </div>
     </div>
+
+    <div id="saved-tracks-list-wrap" style="max-height: calc(100vh - 360px); overflow-y:auto;"></div>
   `;
+
+  renderFilteredSavedTracks();
+
+  // Wire search and filter tabs
+  const searchInput = document.getElementById("saved-track-search");
+  if (searchInput) {
+    searchInput.addEventListener("input", (e) => {
+      savedTrackQuery = e.target.value.toLowerCase().trim();
+      savedTrackSliceLimit = 150;
+      renderFilteredSavedTracks();
+    });
+  }
+
+  document.querySelectorAll("#saved-filter-tabs .seg-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      savedTrackFilter = btn.dataset.sfilter;
+      document.querySelectorAll("#saved-filter-tabs .seg-tab").forEach(b => b.classList.toggle("active", b === btn));
+      savedTrackSliceLimit = 150;
+      renderFilteredSavedTracks();
+    });
+  });
+
+  // Play Playlist Button
+  const playAllBtn = document.getElementById("btn-pl-play-all");
+  if (playAllBtn) {
+    playAllBtn.addEventListener("click", () => {
+      const playable = currentSavedTracks.filter(t => t.is_downloaded && t.file_path);
+      if (playable.length > 0) {
+        playTrackFromList(playable, 0);
+      } else {
+        showToast("No downloaded tracks in this playlist yet.");
+      }
+    });
+  }
 
   document.getElementById("chk-pl-watch").addEventListener("change", async (e) => {
     await apiPost("/api/saved_playlists/action", {
@@ -1028,11 +1086,14 @@ async function loadSavedPlaylistDetail(pid) {
     showToast(r.message || "Sync started...");
   });
 
-  document.getElementById("btn-pl-dl-missing").addEventListener("click", async () => {
-    const r = await apiPost("/api/saved_playlists/action", { action: "download_missing", playlist_id: pid });
-    showToast(`Queued ${r.queued || 0} missing tracks`);
-    switchView("queue");
-  });
+  const dlMissingBtn = document.getElementById("btn-pl-dl-missing");
+  if (dlMissingBtn) {
+    dlMissingBtn.addEventListener("click", async () => {
+      const r = await apiPost("/api/saved_playlists/action", { action: "download_missing", playlist_id: pid });
+      showToast(`Queued ${r.queued || 0} missing tracks`);
+      switchView("queue");
+    });
+  }
 
   document.getElementById("btn-pl-delete").addEventListener("click", async () => {
     if (confirm(`Delete saved playlist "${pl.name}"?`)) {
@@ -1042,6 +1103,99 @@ async function loadSavedPlaylistDetail(pid) {
       loadSavedPlaylists();
     }
   });
+}
+
+function renderFilteredSavedTracks() {
+  const wrap = document.getElementById("saved-tracks-list-wrap");
+  if (!wrap) return;
+
+  const f = savedTrackFilter;
+  const q = savedTrackQuery;
+
+  let filtered = currentSavedTracks.filter(t => {
+    if (f === "downloaded" && !t.is_downloaded) return false;
+    if (f === "missing" && t.is_downloaded) return false;
+    if (q) {
+      const hay = `${t.title} ${t.artist} ${t.album}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (!filtered.length) {
+    wrap.innerHTML = `<div style="text-align:center; padding:40px; color:var(--text-secondary);">No tracks match the filter.</div>`;
+    return;
+  }
+
+  const sliced = filtered.slice(0, savedTrackSliceLimit);
+  const playableList = filtered.filter(t => t.is_downloaded && t.file_path);
+
+  wrap.innerHTML = `
+    <div class="track-table-header" style="grid-template-columns: 44px minmax(200px, 2fr) minmax(130px, 1.2fr) 130px 70px;">
+      <div class="col-num">#</div>
+      <div class="col-title">Title</div>
+      <div class="col-album">Album</div>
+      <div class="col-quality">Status</div>
+      <div class="col-dur">Duration</div>
+    </div>
+    ${sliced.map((t, idx) => {
+      const qbLower = (t.quality_badge || "").toLowerCase();
+      const qbClass = qbLower.includes("flac") ? "flac" : qbLower.includes("opus") ? "opus" : "melobot";
+      const isCur = state.currentTrack && t.file_path && t.file_path === state.currentTrack.file_path;
+
+      const numCell = isCur && state.isPlaying
+        ? `<div class="eq-bars"><span></span><span></span><span></span><span></span></div>`
+        : `<span class="row-idx-text">${t.index || (idx + 1)}</span><span class="row-play-icon">▶</span>`;
+
+      return `
+        <div class="track-row ${isCur ? "playing" : ""}" style="grid-template-columns: 44px minmax(200px, 2fr) minmax(130px, 1.2fr) 130px 70px;" data-sidx="${idx}">
+          <div class="col-num">${numCell}</div>
+          <div class="col-title">
+            <img class="row-thumb" src="${coverUrl(t.cover_key || t.cover_url)}" loading="lazy" onerror="this.style.visibility='hidden'" />
+            <div class="row-title-box">
+              <div class="row-title-text">${escapeHtml(t.title)}</div>
+              <div class="row-artist-text">${escapeHtml(t.artist)}</div>
+            </div>
+          </div>
+          <div class="col-album">${escapeHtml(t.album || "—")}</div>
+          <div class="col-quality">
+            <span class="q-badge ${t.is_downloaded ? qbClass : "opus"}">
+              ${t.is_downloaded ? escapeHtml(t.quality_badge || "✓ Downloaded") : "Missing"}
+            </span>
+          </div>
+          <div class="col-dur">${t.duration_str || "--:--"}</div>
+        </div>
+      `;
+    }).join("")}
+    ${filtered.length > savedTrackSliceLimit ? `
+      <div style="text-align:center; padding:16px;">
+        <button class="ghost-pill-btn" id="btn-saved-load-more">Load more tracks (${sliced.length} of ${filtered.length})...</button>
+      </div>
+    ` : ""}
+  `;
+
+  // Row click listeners to play track
+  wrap.querySelectorAll(".track-row").forEach(row => {
+    row.addEventListener("click", () => {
+      const idx = Number(row.getAttribute("data-sidx"));
+      const track = sliced[idx];
+      if (!track) return;
+      if (track.is_downloaded && track.file_path) {
+        const pIdx = playableList.findIndex(x => x.spotify_id === track.spotify_id || x.file_path === track.file_path);
+        playTrackFromList(playableList, pIdx >= 0 ? pIdx : 0);
+      } else {
+        showToast(`"${track.title}" is not yet downloaded.`);
+      }
+    });
+  });
+
+  const loadMoreBtn = document.getElementById("btn-saved-load-more");
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener("click", () => {
+      savedTrackSliceLimit += 250;
+      renderFilteredSavedTracks();
+    });
+  }
 }
 
 // ==========================================================================
@@ -1536,6 +1690,23 @@ document.addEventListener("DOMContentLoaded", () => {
     renderVirtualTracks();
   });
 
+  audioEl.addEventListener("loadedmetadata", () => {
+    if (audioEl.duration && !isNaN(audioEl.duration) && isFinite(audioEl.duration)) {
+      document.getElementById("lbl-total-time").textContent = formatMs(audioEl.duration * 1000);
+    }
+  });
+
+  audioEl.addEventListener("error", (e) => {
+    console.warn("Audio element error:", audioEl.error);
+    const src = audioEl.src;
+    if (src && !src.includes("transcode=1")) {
+      console.log("Attempting fallback with on-the-fly MP3 transcoding...");
+      const sep = src.includes("?") ? "&" : "?";
+      audioEl.src = src + sep + "transcode=1";
+      audioEl.play().catch(err => console.error("Transcode fallback failed:", err));
+    }
+  });
+
   audioEl.addEventListener("ended", () => {
     if (state.repeatMode === "one") {
       audioEl.currentTime = 0;
@@ -1755,3 +1926,4 @@ document.addEventListener("DOMContentLoaded", () => {
   pollBackendState();
   setInterval(pollBackendState, 1200);
 });
+

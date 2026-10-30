@@ -1,4 +1,5 @@
 import collections
+import hashlib
 import json
 import logging
 import mimetypes
@@ -9,7 +10,7 @@ import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -24,6 +25,7 @@ from core.utils import (
     EQ_FREQUENCIES,
     EQ_PRESETS,
     apply_equalizer_to_file,
+    ensure_ffmpeg,
     extract_embedded_cover,
     extract_embedded_lyrics,
     format_bytes,
@@ -32,6 +34,35 @@ from core.utils import (
 )
 
 logger = logging.getLogger("gui.web_api")
+
+
+def get_cached_transcode(file_path: str) -> Optional[str]:
+    """Transcodes unsupported audio containers (like .m4a / AAC) to MP3 for Chromium playback."""
+    ffmpeg = ensure_ffmpeg()
+    if not ffmpeg or not os.path.isfile(ffmpeg):
+        return None
+    cache_dir = os.path.join(get_cache_dir(), "web_audio_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    try:
+        st = os.stat(file_path)
+        key = hashlib.md5(f"{file_path}_{st.st_mtime}_{st.st_size}".encode("utf-8")).hexdigest()
+    except OSError:
+        key = hashlib.md5(file_path.encode("utf-8")).hexdigest()
+
+    out_mp3 = os.path.join(cache_dir, f"{key}.mp3")
+    if os.path.isfile(out_mp3) and os.path.getsize(out_mp3) > 1000:
+        return out_mp3
+
+    cmd = [
+        ffmpeg, "-y", "-i", file_path,
+        "-vn", "-acodec", "libmp3lame", "-b:a", "320k",
+        out_mp3
+    ]
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
+    if res.returncode == 0 and os.path.isfile(out_mp3):
+        return out_mp3
+    return None
 
 
 class WebBackendState:
@@ -157,6 +188,23 @@ class WebBackendState:
         base_dir = config.get("download.output_dir", "")
         archive_records = self.archive.get_all_tracks()
 
+        # Fetch true playlist memberships from saved_playlists and saved_playlist_tracks
+        saved_pls = self.archive.get_saved_playlists()
+        track_collections_map: Dict[str, Set[str]] = collections.defaultdict(set)
+        try:
+            with self.archive.connection() as conn:
+                cur = conn.execute("""
+                    SELECT s.spotify_id, p.name 
+                    FROM saved_playlist_tracks s
+                    JOIN saved_playlists p ON s.playlist_id = p.id
+                    WHERE s.spotify_id IS NOT NULL AND s.spotify_id != ''
+                """)
+                for sid, pname in cur.fetchall():
+                    if pname:
+                        track_collections_map[sid].add(pname.strip())
+        except Exception as e_mem:
+            logger.debug(f"Could not load playlist track memberships: {e_mem}")
+
         # Index archive records by normalized file path
         arch_by_path: Dict[str, Dict[str, Any]] = {}
         for rec in archive_records:
@@ -202,8 +250,8 @@ class WebBackendState:
                             "album": coll_name or "Singles",
                             "duration_ms": 0,
                             "file_path": fp,
-                            "quality": "FLAC" if ext == ".flac" else ("YTM Opus" if ext == ".opus" else "320k MP3"),
-                            "source": "Local Disk",
+                            "quality_badge": "FLAC" if ext == ".flac" else ("YTM Opus" if ext == ".opus" else "320k MP3"),
+                            "source_type": "Local Disk",
                             "collection_name": coll_name,
                             "collection_type": "playlist" if coll_name else "single",
                             "genre": "",
@@ -214,6 +262,22 @@ class WebBackendState:
         albums_map: Dict[str, Dict[str, Any]] = {}
         genres_set = set()
         total_bytes = 0
+
+        # Seed playlists_map with all saved playlists so track counts and covers are 100% accurate
+        for pl in saved_pls:
+            p_name = pl["name"].strip()
+            cov_key = resolve_collection_cover(p_name) or pl.get("local_cover") or pl.get("cover_url") or ""
+            playlists_map[p_name] = {
+                "name": p_name,
+                "type": "playlist",
+                "artist": "Spotify Playlist",
+                "folder_path": "",
+                "cover_key": cov_key,
+                "track_count": 0,
+                "total_bytes": 0,
+                "genres": collections.Counter(),
+                "latest_mtime": 0.0,
+            }
 
         norm_base = os.path.normcase(os.path.normpath(base_dir)) if base_dir else ""
 
@@ -237,23 +301,28 @@ class WebBackendState:
                 if rel and rel != ".":
                     coll_name = rel.split(os.sep)[0]
 
+            sid = rec.get("spotify_id") or ""
+            coll_set = set(track_collections_map.get(sid, set()))
+            if coll_name and coll_name.lower() not in ("singles", "downloads", "music", "."):
+                coll_set.add(coll_name)
+
             genre_raw = (rec.get("genre") or "").strip()
             primary_genre = ""
             if genre_raw:
-                for g in genre_raw.split(","):
+                for g in re.split(r"[;,]", genre_raw):
                     g_clean = g.strip().title()
-                    if g_clean:
+                    if g_clean and len(g_clean) > 1:
                         genres_set.add(g_clean)
                         if not primary_genre:
                             primary_genre = g_clean
 
             dur_ms = int(rec.get("duration_ms") or 0)
-            qual = (rec.get("quality") or "").strip()
-            src = (rec.get("source") or "").strip()
-            if src.lower() == "melobot" and "melobot" not in qual.lower():
-                badge = f"MeloBot {qual}" if qual else "MeloBot 320k"
-            elif qual:
+            qual = (rec.get("quality_badge") or rec.get("quality") or "").strip()
+            src = (rec.get("source_type") or rec.get("source") or "").strip()
+            if qual:
                 badge = qual
+            elif src.lower() == "melobot":
+                badge = "MeloBot 320k"
             else:
                 ext = os.path.splitext(fp)[1].lower()
                 badge = "FLAC" if ext == ".flac" else ("YTM Opus" if ext == ".opus" else "320k MP3")
@@ -263,7 +332,7 @@ class WebBackendState:
             album = rec.get("album") or coll_name or "Singles"
 
             track_obj = {
-                "id": rec.get("spotify_id") or norm_p,
+                "id": sid or norm_p,
                 "title": title,
                 "artist": artist,
                 "album": album,
@@ -275,7 +344,8 @@ class WebBackendState:
                 "cover_key": fp,
                 "quality_badge": badge,
                 "source": src,
-                "collection_name": coll_name,
+                "collection_name": coll_name or (sorted(list(coll_set))[0] if coll_set else "Singles"),
+                "collections": sorted(list(coll_set)),
                 "collection_type": coll_type,
                 "folder_path": folder,
                 "size_bytes": fsize,
@@ -284,14 +354,13 @@ class WebBackendState:
             tracks_out.append(track_obj)
 
             # Group into Playlists or Albums
-            if coll_name and coll_name.lower() not in ("singles", "downloads", "."):
-                target_map = albums_map if coll_type == "album" else playlists_map
-                if coll_name not in target_map:
-                    cov_cand = resolve_collection_cover(folder) or fp
-                    target_map[coll_name] = {
-                        "name": coll_name,
-                        "type": "album" if coll_type == "album" else "playlist",
-                        "artist": artist if coll_type == "album" else "Playlist",
+            if coll_type == "album" and album and album.lower() not in ("singles", "downloads", "."):
+                if album not in albums_map:
+                    cov_cand = resolve_collection_cover(album, fp) or fp
+                    albums_map[album] = {
+                        "name": album,
+                        "type": "album",
+                        "artist": artist,
                         "folder_path": folder,
                         "cover_key": cov_cand,
                         "track_count": 0,
@@ -299,17 +368,44 @@ class WebBackendState:
                         "genres": collections.Counter(),
                         "latest_mtime": 0.0,
                     }
-                entry = target_map[coll_name]
-                entry["track_count"] += 1
-                entry["total_bytes"] += fsize
-                if mtime > entry["latest_mtime"]:
-                    entry["latest_mtime"] = mtime
+                a_entry = albums_map[album]
+                a_entry["track_count"] += 1
+                a_entry["total_bytes"] += fsize
+                if mtime > a_entry["latest_mtime"]:
+                    a_entry["latest_mtime"] = mtime
                 if primary_genre:
-                    entry["genres"][primary_genre] += 1
+                    a_entry["genres"][primary_genre] += 1
+
+            # Group into all matching playlists
+            for c_name in coll_set:
+                if c_name not in playlists_map:
+                    cov_cand = resolve_collection_cover(c_name, fp) or fp
+                    playlists_map[c_name] = {
+                        "name": c_name,
+                        "type": "playlist",
+                        "artist": "Playlist",
+                        "folder_path": folder,
+                        "cover_key": cov_cand,
+                        "track_count": 0,
+                        "total_bytes": 0,
+                        "genres": collections.Counter(),
+                        "latest_mtime": 0.0,
+                    }
+                p_entry = playlists_map[c_name]
+                p_entry["track_count"] += 1
+                p_entry["total_bytes"] += fsize
+                if not p_entry.get("folder_path"):
+                    p_entry["folder_path"] = folder
+                if mtime > p_entry["latest_mtime"]:
+                    p_entry["latest_mtime"] = mtime
+                if primary_genre:
+                    p_entry["genres"][primary_genre] += 1
 
         # Format playlists and albums lists
         playlists_out = []
         for name, info in sorted(playlists_map.items(), key=lambda kv: kv[0].lower()):
+            if info["track_count"] == 0:
+                continue
             top_genres = [g for g, _ in info["genres"].most_common(2)]
             playlists_out.append({
                 "name": info["name"],
@@ -325,6 +421,8 @@ class WebBackendState:
 
         albums_out = []
         for name, info in sorted(albums_map.items(), key=lambda kv: kv[0].lower()):
+            if info["track_count"] == 0:
+                continue
             top_genres = [g for g, _ in info["genres"].most_common(2)]
             albums_out.append({
                 "name": info["name"],
@@ -434,7 +532,8 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 return self._handle_get_cover(key)
             elif path == "/api/audio":
                 fp = qs.get("path", [""])[0]
-                return self._handle_stream_audio(fp)
+                trans = qs.get("transcode", ["0"])[0] == "1"
+                return self._handle_stream_audio(fp, transcode=trans)
             else:
                 return self._handle_static_file(path)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -680,7 +779,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         if not fp:
             return self._send_json({"ok": False, "error": "Missing file_path"}, status=400)
 
-        self.state.archive.remove_by_path(fp)
+        tr = self.state.archive.get_track_by_path(fp)
+        if tr and tr.get("spotify_id"):
+            self.state.archive.remove_downloaded_track(tr["spotify_id"])
+
         if delete_disk and os.path.isfile(fp):
             try:
                 os.remove(fp)
@@ -696,11 +798,11 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
     def _handle_rename_collection(self, body: Dict[str, Any]):
         old_name = (body.get("old_name") or "").strip()
         new_name = (body.get("new_name") or "").strip()
-        folder_path = (body.get("folder_path") or "").strip()
+        coll_type = (body.get("collection_type") or "playlist").strip()
         if not old_name or not new_name:
             return self._send_json({"ok": False, "error": "Both old_name and new_name are required"}, status=400)
 
-        ok = self.state.archive.rename_downloaded_collection(old_name, new_name, folder_path)
+        ok = self.state.archive.rename_collection(old_name, new_name, coll_type)
         self.state.invalidate_library_cache()
         self._send_json({"ok": ok})
 
@@ -710,7 +812,7 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         snap = self.state.build_library_snapshot()
         tracks = [
             t for t in snap["tracks"]
-            if not coll_name or coll_name == "All Songs" or t["collection_name"].lower() == coll_name.lower()
+            if not coll_name or coll_name == "All Songs" or t["collection_name"].lower() == coll_name.lower() or coll_name in t.get("collections", [])
         ]
         if not tracks:
             return self._send_json({"ok": False, "error": "No tracks to export"}, status=400)
@@ -736,17 +838,29 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
     def _handle_get_saved_playlists(self):
         pls = self.state.archive.get_saved_playlists()
+        for p in pls:
+            if not p.get("local_cover"):
+                p["local_cover"] = resolve_collection_cover(p["name"]) or p.get("cover_url") or ""
         self._send_json({"ok": True, "playlists": pls})
 
     def _handle_get_saved_playlist_tracks(self, playlist_id: str):
         if not playlist_id:
             return self._send_json({"ok": False, "error": "Missing playlist id"}, status=400)
         pl = self.state.archive.get_saved_playlist(playlist_id)
+        if pl and not pl.get("local_cover"):
+            pl["local_cover"] = resolve_collection_cover(pl["name"]) or pl.get("cover_url") or ""
         tracks = self.state.archive.get_saved_playlist_tracks(playlist_id)
         out_tracks = []
         for idx, tr in enumerate(tracks, 1):
-            is_dl = bool(tr.get("is_downloaded")) and bool(tr.get("local_path")) and os.path.isfile(tr.get("local_path", ""))
+            fp = tr.get("file_path") or tr.get("local_path") or ""
+            is_dl = (tr.get("status") == "downloaded") and bool(fp) and os.path.isfile(fp)
+            if not is_dl and fp and os.path.isfile(fp):
+                is_dl = True
             dur_ms = int(tr.get("duration_ms") or 0)
+            qb = tr.get("quality_badge") or tr.get("quality") or ""
+            if not qb and is_dl and fp:
+                qb, _ = ArchiveManager.infer_badge_from_file(fp)
+            cov = resolve_collection_cover(tr.get("album") or "") or tr.get("cover_url") or ""
             out_tracks.append({
                 "index": idx,
                 "spotify_id": tr.get("spotify_id", ""),
@@ -754,12 +868,16 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 "artist": tr.get("artist", ""),
                 "album": tr.get("album", ""),
                 "duration_ms": dur_ms,
-                "duration_str": format_duration(dur_ms),
+                "duration_str": format_duration(dur_ms) if dur_ms > 0 else "--:--",
                 "cover_url": tr.get("cover_url", ""),
+                "cover_key": fp if (fp and os.path.isfile(fp)) else (tr.get("cover_url") or cov),
                 "genre": tr.get("genre", ""),
                 "is_downloaded": is_dl,
-                "local_path": tr.get("local_path", "") if is_dl else "",
-                "quality": tr.get("quality", ""),
+                "status": "downloaded" if is_dl else (tr.get("status") or "pending"),
+                "file_path": fp if is_dl else "",
+                "local_path": fp if is_dl else "",
+                "quality_badge": qb or ("Downloaded" if is_dl else "Missing"),
+                "quality": qb,
             })
         self._send_json({"ok": True, "playlist": pl, "tracks": out_tracks})
 
@@ -774,12 +892,14 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
 
         elif action == "delete" and pid:
             self.state.archive.delete_saved_playlist(pid)
+            self.state.invalidate_library_cache()
             return self._send_json({"ok": True})
 
         elif action == "rename" and pid:
             new_name = (body.get("name") or "").strip()
             if new_name:
-                self.state.archive.rename_saved_playlist(pid, new_name)
+                self.state.archive.update_saved_playlist(pid, name=new_name)
+            self.state.invalidate_library_cache()
             return self._send_json({"ok": True})
 
         elif action in ("download_missing", "download_all", "download_selected") and pid:
@@ -789,7 +909,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             to_queue: List[TrackMetadata] = []
 
             for r in rows:
-                is_dl = bool(r.get("is_downloaded")) and bool(r.get("local_path")) and os.path.isfile(r.get("local_path", ""))
+                fp = r.get("file_path") or r.get("local_path") or ""
+                is_dl = (r.get("status") == "downloaded") and bool(fp) and os.path.isfile(fp)
+                if not is_dl and fp and os.path.isfile(fp):
+                    is_dl = True
                 if action == "download_missing" and is_dl:
                     continue
                 if action == "download_selected" and r.get("spotify_id") not in selected_ids:
@@ -825,10 +948,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
 
         elif action == "sync" and pid:
             pl = self.state.archive.get_saved_playlist(pid)
-            if not pl or not pl.get("source_url"):
+            source_url = (pl.get("spotify_url") if pl else "") or (pl.get("source_url") if pl else "")
+            if not pl or not source_url:
                 return self._send_json({"ok": False, "error": "Playlist has no Spotify source URL"}, status=400)
 
-            url = pl["source_url"]
             auto_queue = bool(body.get("queue_new", True))
 
             def sync_worker():
@@ -840,10 +963,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                         client_id=config.get("spotify.client_id", ""),
                         client_secret=config.get("spotify.client_secret", ""),
                     )
-                    fresh = sp.resolve(url)
+                    fresh = sp.resolve(source_url)
                     if fresh:
                         res = self.state.archive.sync_saved_playlist(pid, fresh)
-                        new_tracks = res.get("new_tracks", [])
+                        new_tracks = res.get("delta_tracks", [])
                         if auto_queue and new_tracks:
                             for t in new_tracks:
                                 t.collection_name = pl["name"]
@@ -857,6 +980,7 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                                 "ok": True,
                                 "message": f"Synced '{pl['name']}': +{res.get('added', 0)} new tracks",
                             }
+                        self.state.invalidate_library_cache()
                     else:
                         with self.state.resolving_lock:
                             self.state.is_resolving = False
@@ -869,6 +993,8 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
 
             threading.Thread(target=sync_worker, daemon=True, name="WebPlaylistSync").start()
             return self._send_json({"ok": True, "message": f"Syncing '{pl['name']}' in background..."})
+
+        return self._send_json({"ok": False, "error": f"Unknown playlist action '{action}'"}, status=400)
 
         return self._send_json({"ok": False, "error": f"Unknown playlist action '{action}'"}, status=400)
 
@@ -1218,7 +1344,7 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _handle_stream_audio(self, file_path: str):
+    def _handle_stream_audio(self, file_path: str, transcode: bool = False):
         if not file_path or not os.path.isfile(file_path):
             self.send_response(404)
             self._send_cors_headers()
@@ -1226,6 +1352,12 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             return
 
         ext = os.path.splitext(file_path)[1].lower()
+        if ext in (".m4a", ".aac", ".alac") or transcode:
+            transcoded_p = get_cached_transcode(file_path)
+            if transcoded_p and os.path.isfile(transcoded_p):
+                file_path = transcoded_p
+                ext = ".mp3"
+
         mime_map = {
             ".mp3": "audio/mpeg",
             ".flac": "audio/flac",
