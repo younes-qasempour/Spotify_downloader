@@ -2381,6 +2381,38 @@ class ArchiveManager:
             logger.error(f"Failed to delete playlist {playlist_id}: {e}")
             return False
 
+    def reset_saved_playlist_tracks_status(self, playlist_id: str) -> int:
+        """Resets queued, failed, and downloading tracks in a saved playlist back to pending."""
+        try:
+            with self.connection() as conn:
+                with conn:
+                    cur = conn.execute("""
+                        UPDATE saved_playlist_tracks
+                        SET status = 'pending'
+                        WHERE playlist_id = ? AND status IN ('queued', 'failed', 'downloading')
+                    """, (playlist_id,))
+                    return cur.rowcount
+        except Exception as e:
+            logger.debug(f"Failed to reset track statuses for {playlist_id}: {e}")
+            return 0
+
+    def delete_saved_playlist_track(self, playlist_id: str, spotify_id: str) -> bool:
+        """Deletes an individual track from a saved playlist and updates playlist track counts."""
+        try:
+            with self.connection() as conn:
+                with conn:
+                    conn.execute("""
+                        DELETE FROM saved_playlist_tracks
+                        WHERE playlist_id = ? AND spotify_id = ?
+                    """, (playlist_id, spotify_id))
+                    cur = conn.execute("SELECT COUNT(*) FROM saved_playlist_tracks WHERE playlist_id = ?", (playlist_id,))
+                    tot = cur.fetchone()[0]
+                    conn.execute("UPDATE saved_playlists SET total_tracks = ? WHERE id = ?", (tot, playlist_id))
+                return True
+        except Exception as e:
+            logger.debug(f"Failed to delete track {spotify_id} from {playlist_id}: {e}")
+            return False
+
     def update_saved_playlist(
         self,
         playlist_id: str,

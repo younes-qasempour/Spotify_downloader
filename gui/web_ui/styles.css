@@ -63,11 +63,44 @@ html, body {
    ========================================================================== */
 #app-shell {
   display: grid;
-  grid-template-columns: 280px 1fr;
-  gap: 8px;
+  grid-template-columns: var(--sidebar-width, 280px) 4px 1fr;
+  gap: 0;
   padding: 8px 8px 0 8px;
   height: calc(100vh - 90px);
   width: 100vw;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.sidebar-resizer, .saved-resizer {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s ease;
+  position: relative;
+  z-index: 10;
+  margin: 0 4px;
+}
+
+.sidebar-resizer::after, .saved-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1px;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 1px;
+  transition: all 0.15s ease;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer.resizing::after,
+.saved-resizer:hover::after,
+.saved-resizer.resizing::after {
+  background: #1ed760;
+  width: 3px;
+  box-shadow: 0 0 10px rgba(30, 215, 96, 0.6);
 }
 
 .sidebar {
@@ -1186,43 +1219,260 @@ html, body {
 }
 
 /* Saved Playlists Split View */
-.saved-layout {
-  display: grid;
-  grid-template-columns: 310px 1fr;
-  gap: 16px;
-  margin-top: 16px;
-  min-height: calc(100vh - 200px);
-}
-
-.saved-left-pane, .saved-right-pane {
-  background: #181818;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 10px;
-  padding: 16px;
-}
-
-.pane-header {
+.saved-top-overview {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  background: #161618;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
-.btn-sm-emerald {
-  border: none;
-  background: var(--spotify-bright);
-  color: #000;
-  font-weight: 700;
+.saved-overview-left h2 {
+  font-size: 18px;
+  font-weight: 800;
+  color: #fff;
+  margin: 0 0 4px 0;
+}
+
+.saved-overview-metrics {
   font-size: 12px;
-  padding: 5px 12px;
-  border-radius: 14px;
-  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.saved-api-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 11.5px;
+  color: #94a3b8;
+}
+
+.saved-api-banner.connected {
+  background: rgba(74, 222, 128, 0.08);
+  border-color: rgba(74, 222, 128, 0.25);
+  color: #4ade80;
+}
+
+.saved-api-banner.guest {
+  background: rgba(234, 179, 8, 0.08);
+  border-color: rgba(234, 179, 8, 0.25);
+  color: #eab308;
+}
+
+.saved-overview-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.saved-layout {
+  display: grid;
+  grid-template-columns: var(--saved-sidebar-width, 320px) 4px 1fr;
+  gap: 0;
+  height: calc(100vh - 200px);
+  min-height: 480px;
+}
+
+.saved-left-pane {
+  background: #161618;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.pane-search-wrap {
+  padding-bottom: 10px;
+}
+
+.pane-search-wrap input {
+  width: 100%;
+  height: 32px;
+  background: #1f1f22;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: #fff;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.pane-search-wrap input:focus {
+  border-color: #1ed760;
+  outline: none;
 }
 
 .saved-pl-list {
+  flex: 1;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+}
+
+.saved-right-pane {
+  background: #161618;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Batch Download Quota Control Card (v1.6.2 Restored) */
+.batch-card {
+  background: #1a1a1e;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.batch-action-col {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.batch-presets-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.btn-preset {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #ccc;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-preset:hover, .btn-preset.active {
+  background: rgba(30, 215, 96, 0.2);
+  border-color: #1ed760;
+  color: #1ed760;
+}
+
+.batch-size-input {
+  width: 58px;
+  height: 28px;
+  background: #222226;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  color: #fff;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.batch-size-input:focus {
+  border-color: #1ed760;
+  outline: none;
+}
+
+/* Glassmorphic Dialog Modal Styling */
+.glass-dialog-card {
+  width: 500px;
+  max-width: 90vw;
+  background: #18181c;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8);
+  padding: 22px;
+  color: #fff;
+}
+
+.dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.dialog-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 4px 0;
+}
+
+.dialog-header p {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.dialog-body {
+  margin-bottom: 20px;
+}
+
+.dialog-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+  margin-bottom: 6px;
+}
+
+.dialog-input {
+  width: 100%;
+  height: 36px;
+  background: #222228;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 0 12px;
+  color: #fff;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.dialog-input:focus {
+  border-color: #1ed760;
+  outline: none;
+}
+
+.dialog-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.dialog-resolving {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1ed760;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 /* Tools & Settings Cards */

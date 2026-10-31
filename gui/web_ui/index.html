@@ -83,6 +83,9 @@
       </div>
     </aside>
 
+    <!-- Draggable Sidebar Resizer Handle (Spotify Desktop Style) -->
+    <div class="sidebar-resizer" id="sidebar-resizer" title="Drag to resize sidebar (Double-click to toggle)"></div>
+
     <!-- CENTER MAIN VIEWPORT -->
     <main class="main-viewport" id="main-viewport">
       <div class="ambient-backdrop" id="ambient-backdrop"></div>
@@ -280,16 +283,43 @@
 
         <!-- 3. SAVED & WATCHED PLAYLISTS VIEW -->
         <section class="view-page" id="view-saved">
+          <!-- Top Overview & Spotify API Status Bar -->
+          <div class="saved-top-overview" id="saved-top-overview">
+            <div class="saved-overview-left">
+              <h2>Saved &amp; Watched Playlists</h2>
+              <div class="saved-overview-metrics" id="saved-overview-metrics">
+                <span id="saved-metric-count">0 playlists</span> • <span id="saved-metric-tracks">0 total tracks</span>
+              </div>
+            </div>
+            <div class="saved-api-banner" id="saved-api-banner">
+              <span id="saved-api-icon">⚡</span>
+              <span id="saved-api-text">Checking Spotify API status...</span>
+              <button class="ghost-pill-btn hidden" id="saved-api-btn">Configure Keys</button>
+            </div>
+            <div class="saved-overview-actions">
+              <button class="btn-primary-emerald" id="btn-add-saved-pl">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                <span>Save Spotify Playlist</span>
+              </button>
+              <button class="btn-secondary-dark" id="btn-sync-all-saved" title="Check all saved playlists for newly added songs online">
+                ↻ Sync All
+              </button>
+            </div>
+          </div>
+
           <div class="saved-layout">
             <div class="saved-left-pane">
-              <div class="pane-header">
-                <h3>Saved &amp; Watched Playlists</h3>
-                <button class="btn-sm-emerald" id="btn-add-saved-pl">+ Add URL</button>
+              <div class="pane-search-wrap">
+                <input type="text" id="saved-pl-filter" placeholder="Filter saved playlists..." autocomplete="off" />
               </div>
               <div id="saved-playlists-list" class="saved-pl-list"></div>
             </div>
+
+            <!-- Resizable Splitter Handle between playlists and detail table -->
+            <div class="saved-resizer" id="saved-resizer" title="Drag to resize saved playlists pane"></div>
+
             <div class="saved-right-pane" id="saved-detail-pane">
-              <div class="empty-state">Select a saved playlist on the left to inspect tracks, toggle Watch Auto-Sync, or download missing songs.</div>
+              <div class="empty-state">Select a saved playlist on the left to inspect tracks, configure batch download quotas, or toggle Watch Auto-Sync.</div>
             </div>
           </div>
           <!-- Tool C: Batch Tag & Metadata Editor -->
@@ -1193,6 +1223,107 @@
           </button>
           <button class="btn-primary-emerald" id="btn-eq-done">Done</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: SAVE SPOTIFY PLAYLIST OFFLINE -->
+  <div class="glass-modal-backdrop hidden" id="modal-save-playlist">
+    <div class="glass-dialog-card">
+      <div class="dialog-header">
+        <div>
+          <h3>Save Spotify Playlist Offline</h3>
+          <p>Store full track metadata from Spotify into SQLite offline. You can inspect tracks and download in controlled batches.</p>
+        </div>
+        <button class="icon-circle-btn" id="btn-close-save-modal">✕</button>
+      </div>
+
+      <div class="dialog-body">
+        <label class="dialog-label">Spotify Playlist or Liked Songs URL</label>
+        <div class="dialog-input-row">
+          <input type="text" id="input-save-playlist-url" class="dialog-input" placeholder="https://open.spotify.com/playlist/... or collection/tracks" autocomplete="off" />
+          <button class="btn-secondary-dark" id="btn-paste-save-url">Paste</button>
+        </div>
+
+        <div style="margin-top: 10px;">
+          <button class="ghost-pill-btn" id="btn-preset-liked-songs" style="color: #1ed760; border-color: rgba(30,215,96,0.3);">
+            ♡ Use Spotify Liked Songs (collection/tracks)
+          </button>
+        </div>
+
+        <div id="save-playlist-resolving" class="dialog-resolving hidden">
+          <span class="spinner-xs"></span>
+          <span id="save-resolving-text">Resolving metadata from Spotify API...</span>
+        </div>
+      </div>
+
+      <div class="dialog-footer">
+        <button class="btn-secondary-dark" id="btn-cancel-save-playlist">Cancel</button>
+        <button class="btn-primary-emerald" id="btn-confirm-save-playlist">Save Playlist Offline</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: EDIT PLAYLIST DETAILS -->
+  <div class="glass-modal-backdrop hidden" id="modal-edit-playlist">
+    <div class="glass-dialog-card">
+      <div class="dialog-header">
+        <div>
+          <h3>Edit Playlist Details</h3>
+          <p>Rename playlist, update cover artwork, or change Spotify source link.</p>
+        </div>
+        <button class="icon-circle-btn" id="btn-close-edit-modal">✕</button>
+      </div>
+
+      <div class="dialog-body">
+        <input type="hidden" id="edit-pl-id" />
+        <label class="dialog-label">Playlist Name</label>
+        <input type="text" id="input-edit-pl-name" class="dialog-input" placeholder="Playlist name..." />
+
+        <label class="dialog-label" style="margin-top:12px;">Spotify Source URL</label>
+        <input type="text" id="input-edit-pl-url" class="dialog-input" placeholder="https://open.spotify.com/playlist/..." />
+
+        <label class="dialog-label" style="margin-top:12px;">Cover Artwork (URL or local image file)</label>
+        <div class="dialog-input-row">
+          <input type="text" id="input-edit-pl-cover" class="dialog-input" placeholder="Image URL or local file path..." />
+          <button class="btn-secondary-dark" id="btn-browse-pl-cover">Browse File</button>
+        </div>
+      </div>
+
+      <div class="dialog-footer">
+        <button class="btn-secondary-dark" id="btn-cancel-edit-playlist">Cancel</button>
+        <button class="btn-primary-emerald" id="btn-confirm-edit-playlist">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: EDIT TRACK METADATA -->
+  <div class="glass-modal-backdrop hidden" id="modal-edit-track">
+    <div class="glass-dialog-card">
+      <div class="dialog-header">
+        <div>
+          <h3>Edit Track Metadata</h3>
+          <p>Modify title, artist, and album for this track in your offline playlist.</p>
+        </div>
+        <button class="icon-circle-btn" id="btn-close-edit-track-modal">✕</button>
+      </div>
+
+      <div class="dialog-body">
+        <input type="hidden" id="edit-track-pl-id" />
+        <input type="hidden" id="edit-track-sid" />
+        <label class="dialog-label">Track Title</label>
+        <input type="text" id="input-edit-tr-title" class="dialog-input" placeholder="Title..." />
+
+        <label class="dialog-label" style="margin-top:12px;">Artist(s)</label>
+        <input type="text" id="input-edit-tr-artist" class="dialog-input" placeholder="Artist(s)..." />
+
+        <label class="dialog-label" style="margin-top:12px;">Album</label>
+        <input type="text" id="input-edit-tr-album" class="dialog-input" placeholder="Album..." />
+      </div>
+
+      <div class="dialog-footer">
+        <button class="btn-secondary-dark" id="btn-cancel-edit-track">Cancel</button>
+        <button class="btn-primary-emerald" id="btn-confirm-edit-track">Save Track</button>
       </div>
     </div>
   </div>

@@ -979,10 +979,11 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             self.state.invalidate_library_cache()
             return self._send_json({"ok": True})
 
-        elif action in ("download_missing", "download_all", "download_selected") and pid:
+        elif action in ("download_missing", "download_all", "download_selected", "download_batch") and pid:
             pl = self.state.archive.get_saved_playlist(pid)
             rows = self.state.archive.get_saved_playlist_tracks(pid)
             selected_ids = set(body.get("spotify_ids") or [])
+            limit = int(body.get("limit") or 0)
             to_queue: List[TrackMetadata] = []
 
             for r in rows:
@@ -990,7 +991,7 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 is_dl = (r.get("status") == "downloaded") and bool(fp) and os.path.isfile(fp)
                 if not is_dl and fp and os.path.isfile(fp):
                     is_dl = True
-                if action == "download_missing" and is_dl:
+                if action in ("download_missing", "download_batch") and is_dl:
                     continue
                 if action == "download_selected" and r.get("spotify_id") not in selected_ids:
                     continue
@@ -1018,10 +1019,110 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 )
                 to_queue.append(tm)
 
+            if limit > 0 and len(to_queue) > limit:
+                to_queue = to_queue[:limit]
+
             if to_queue:
                 self.state.qm.enqueue(to_queue)
                 self.state.qm.start_all()
-            return self._send_json({"ok": True, "queued": len(to_queue)})
+            return self._send_json({"ok": True, "queued": len(to_queue), "limit": limit})
+
+        elif action == "edit_playlist" and pid:
+            name = (body.get("name") or "").strip()
+            spotify_url = (body.get("spotify_url") or "").strip()
+            cover_url = (body.get("cover_url") or "").strip()
+            local_cover_path = (body.get("local_cover_path") or "").strip()
+            self.state.archive.update_saved_playlist(
+                pid,
+                name=name or None,
+                cover_url=cover_url or None,
+                spotify_url=spotify_url or None,
+                local_cover_path=local_cover_path or None
+            )
+            self.state.invalidate_library_cache()
+            return self._send_json({"ok": True})
+
+        elif action == "reset_status" and pid:
+            count = self.state.archive.reset_saved_playlist_tracks_status(pid)
+            return self._send_json({"ok": True, "reset": count})
+
+        elif action == "delete_track" and pid:
+            sid = (body.get("spotify_id") or "").strip()
+            if sid:
+                self.state.archive.delete_saved_playlist_track(pid, sid)
+                self.state.invalidate_library_cache()
+            return self._send_json({"ok": True})
+
+        elif action == "edit_track" and pid:
+            sid = (body.get("spotify_id") or "").strip()
+            title = body.get("title")
+            artist = body.get("artist")
+            album = body.get("album")
+            if sid:
+                self.state.archive.update_saved_playlist_track(pid, sid, title=title, artist=artist, album=album)
+                self.state.invalidate_library_cache()
+            return self._send_json({"ok": True})
+
+        elif action == "sync_all":
+            def sync_all_worker():
+                try:
+                    pls = self.state.archive.get_saved_playlists()
+                    sp = SpotifyClient(
+                        client_id=config.get("spotify.client_id", ""),
+                        client_secret=config.get("spotify.client_secret", ""),
+                    )
+                    synced_count = 0
+                    total_added = 0
+                    for pl in pls:
+                        src_url = (pl.get("spotify_url") or pl.get("source_url") or "").strip()
+                        if src_url:
+                            fresh = sp.resolve(src_url)
+                            if fresh:
+                                res = self.state.archive.sync_saved_playlist(pl["id"], fresh)
+                                total_added += res.get("added", 0)
+                                synced_count += 1
+                    self.state.invalidate_library_cache()
+                    logger.info(f"Sync all completed: {synced_count} playlists checked, {total_added} new tracks.")
+                except Exception as e_sa:
+                    logger.error(f"Sync all playlists error: {e_sa}")
+
+            threading.Thread(target=sync_all_worker, daemon=True, name="SyncAllPlaylistsThread").start()
+            return self._send_json({"ok": True, "message": "Syncing all saved playlists in background..."})
+
+        elif action == "export_m3u8" and pid:
+            pl = self.state.archive.get_saved_playlist(pid)
+            if not pl:
+                return self._send_json({"ok": False, "error": "Playlist not found"}, status=404)
+            tracks = self.state.archive.get_saved_playlist_tracks(pid, status="downloaded")
+            valid = [t for t in tracks if t.get("file_path") and os.path.isfile(t.get("file_path"))]
+            if not valid:
+                return self._send_json({"ok": False, "error": "No downloaded tracks found on disk for this playlist."}, status=400)
+
+            out_dir = config.get("download.output_dir", "downloads")
+            playlists_dir = os.path.join(out_dir, "Playlists")
+            os.makedirs(playlists_dir, exist_ok=True)
+            safe_name = re.sub(r'[<>:"/\|?*]', "_", pl.get("name", "Playlist"))
+            m3u_path = os.path.join(playlists_dir, f"{safe_name}.m3u8")
+
+            lines = ["#EXTM3U", f"#PLAYLIST:{pl.get('name', 'Playlist')}"]
+            for t in valid:
+                dur_s = max(1, int((t.get("duration_ms") or 0) // 1000))
+                lines.append(f"#EXTINF:{dur_s},{t.get('artist', 'Unknown')} - {t.get('title', 'Unknown')}")
+                lines.append(t["file_path"])
+
+            with open(m3u_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+
+            return self._send_json({"ok": True, "file_path": m3u_path, "count": len(valid)})
+
+        elif action == "open_folder":
+            folder = config.get("download.output_dir", "downloads")
+            if os.path.isdir(folder):
+                try:
+                    os.startfile(folder)
+                except Exception:
+                    subprocess.Popen(["explorer", folder])
+            return self._send_json({"ok": True})
 
         elif action == "sync" and pid:
             pl = self.state.archive.get_saved_playlist(pid)
