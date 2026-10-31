@@ -40,6 +40,8 @@ hiddenimports = [
     'PyQt6.QtGui',
     'PyQt6.QtWidgets',
     'PyQt6.QtMultimedia',
+    'PyQt6.QtWebEngineCore',
+    'PyQt6.QtWebEngineWidgets',
     'PyQt6.sip',
     'qfluentwidgets',
     'yt_dlp',
@@ -68,9 +70,6 @@ hiddenimports += collect_submodules('telethon')
 
 # Exclude unnecessary large packages to shrink the bundle footprint by 150MB+
 excludes = [
-    'PyQt6.QtWebEngine',
-    'PyQt6.QtWebEngineCore',
-    'PyQt6.QtWebEngineWidgets',
     'PyQt6.QtQuick',
     'PyQt6.QtQuickWidgets',
     'PyQt6.QtQml',

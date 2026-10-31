@@ -117,6 +117,8 @@ class MainWindow(FluentWindow):
         self.web_studio_view = WebStudioView(
             queue_manager=self.queue_manager,
             archive_manager=self.archive_manager,
+            musilon_engine=self.musilon_engine,
+            melobot_engine=self.melobot_engine,
             parent=self,
         )
 
@@ -283,6 +285,17 @@ class MainWindow(FluentWindow):
 
         menu.addSeparator()
 
+        play_act = menu.addAction("Play / Pause")
+        play_act.triggered.connect(self.media_play_pause)
+
+        next_act = menu.addAction("Next Track")
+        next_act.triggered.connect(self.media_next)
+
+        prev_act = menu.addAction("Previous Track")
+        prev_act.triggered.connect(self.media_prev)
+
+        menu.addSeparator()
+
         pause_act = menu.addAction("Pause Downloads")
         pause_act.triggered.connect(self.queue_manager.pause)
 
@@ -297,6 +310,42 @@ class MainWindow(FluentWindow):
         self.tray_icon.setContextMenu(menu)
         self.tray_icon.activated.connect(self._on_tray_activated)
         self.tray_icon.show()
+
+    def media_play_pause(self):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaPlayPause === 'function') window.triggerMediaPlayPause();")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.toggle_play_pause()
+
+    def media_next(self):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaNext === 'function') window.triggerMediaNext();")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.play_next()
+
+    def media_prev(self):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaPrev === 'function') window.triggerMediaPrev();")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.play_previous()
+
+    def media_stop(self):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaStop === 'function') window.triggerMediaStop();")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.player.stop()
+
+    def media_adjust_volume(self, delta: int):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript(f"if (typeof window.triggerMediaVolume === 'function') window.triggerMediaVolume({delta});")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.adjust_volume(delta)
+
+    def media_seek_relative(self, ms: int):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript(f"if (typeof window.triggerMediaSeek === 'function') window.triggerMediaSeek({ms});")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.seek_relative(ms)
 
     def _restore_from_tray(self):
         self.showNormal()

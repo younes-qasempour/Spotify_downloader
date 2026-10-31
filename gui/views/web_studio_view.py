@@ -1,7 +1,7 @@
 import logging
 import os
 import threading
-from typing import Optional
+from typing import Optional, Any
 
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor
@@ -27,6 +27,8 @@ class WebStudioView(QWidget):
         self,
         queue_manager: DownloadQueueManager,
         archive_manager: ArchiveManager,
+        musilon_engine: Optional[Any] = None,
+        melobot_engine: Optional[Any] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
@@ -48,6 +50,8 @@ class WebStudioView(QWidget):
             archive_manager=self.archive,
             web_root=web_root,
             folder_picker_cb=self._pick_folder_threadsafe,
+            musilon_engine=musilon_engine,
+            melobot_engine=melobot_engine,
         )
         self.server_url = self.web_server.start()
 

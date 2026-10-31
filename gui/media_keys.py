@@ -94,30 +94,41 @@ class GlobalMediaKeyFilter(QObject):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress:
-            player_bar = getattr(self.main_window, "player_bar", None)
-            if not player_bar or not player_bar.isVisible():
-                return super().eventFilter(watched, event)
-
             key = event.key()
             modifiers = event.modifiers()
             has_ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
             has_shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
             has_alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)
 
+            player_bar = getattr(self.main_window, "player_bar", None)
+            is_web = hasattr(self.main_window, "web_studio_view")
+
             # ---------------------------------------------------------
             # 1. Hardware Media Keys (ALWAYS handled regardless of focus)
             # ---------------------------------------------------------
             if key in (Qt.Key.Key_MediaPlay, Qt.Key.Key_MediaPause, Qt.Key.Key_MediaTogglePlayPause):
-                player_bar.toggle_play_pause()
+                if hasattr(self.main_window, "media_play_pause"):
+                    self.main_window.media_play_pause()
+                elif player_bar:
+                    player_bar.toggle_play_pause()
                 return True
             elif key == Qt.Key.Key_MediaNext:
-                player_bar.play_next()
+                if hasattr(self.main_window, "media_next"):
+                    self.main_window.media_next()
+                elif player_bar:
+                    player_bar.play_next()
                 return True
             elif key == Qt.Key.Key_MediaPrevious:
-                player_bar.play_previous()
+                if hasattr(self.main_window, "media_prev"):
+                    self.main_window.media_prev()
+                elif player_bar:
+                    player_bar.play_previous()
                 return True
             elif key == Qt.Key.Key_MediaStop:
-                player_bar.player.stop()
+                if hasattr(self.main_window, "media_stop"):
+                    self.main_window.media_stop()
+                elif player_bar:
+                    player_bar.player.stop()
                 return True
 
             # ---------------------------------------------------------
@@ -130,33 +141,44 @@ class GlobalMediaKeyFilter(QObject):
             # 3. In-App Keyboard Shortcuts (Active when not editing text)
             # ---------------------------------------------------------
             if key == Qt.Key.Key_Space:
-                player_bar.toggle_play_pause()
+                if is_web:
+                    self.main_window.media_play_pause()
+                elif player_bar and player_bar.isVisible():
+                    player_bar.toggle_play_pause()
                 return True
 
             elif key == Qt.Key.Key_Left:
                 if has_ctrl:
-                    player_bar.play_previous()
+                    if is_web: self.main_window.media_prev()
+                    elif player_bar: player_bar.play_previous()
                 elif has_shift:
-                    player_bar.seek_relative(-10000)
+                    if is_web: self.main_window.media_seek_relative(-10000)
+                    elif player_bar: player_bar.seek_relative(-10000)
                 else:
-                    player_bar.seek_relative(-5000)
+                    if is_web: self.main_window.media_seek_relative(-5000)
+                    elif player_bar: player_bar.seek_relative(-5000)
                 return True
 
             elif key == Qt.Key.Key_Right:
                 if has_ctrl:
-                    player_bar.play_next()
+                    if is_web: self.main_window.media_next()
+                    elif player_bar: player_bar.play_next()
                 elif has_shift:
-                    player_bar.seek_relative(10000)
+                    if is_web: self.main_window.media_seek_relative(10000)
+                    elif player_bar: player_bar.seek_relative(10000)
                 else:
-                    player_bar.seek_relative(5000)
+                    if is_web: self.main_window.media_seek_relative(5000)
+                    elif player_bar: player_bar.seek_relative(5000)
                 return True
 
             elif key == Qt.Key.Key_Up:
-                player_bar.adjust_volume(5)
+                if is_web: self.main_window.media_adjust_volume(5)
+                elif player_bar: player_bar.adjust_volume(5)
                 return True
 
             elif key == Qt.Key.Key_Down:
-                player_bar.adjust_volume(-5)
+                if is_web: self.main_window.media_adjust_volume(-5)
+                elif player_bar: player_bar.adjust_volume(-5)
                 return True
 
             elif not has_ctrl and not has_alt:

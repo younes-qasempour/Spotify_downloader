@@ -17,6 +17,8 @@ import requests
 from core.archive import ArchiveManager, resolve_collection_cover
 from core.config import config
 from core.lyrics import LyricsData, LyricsEngine
+from core.melobot import MeloBotEngine
+from core.musilon import MusilonEngine
 from core.paths import get_cache_dir
 from core.queue_manager import DownloadQueueManager, QueueItem
 from core.spotify_client import SpotifyClient, TrackMetadata
@@ -25,12 +27,14 @@ from core.utils import (
     EQ_FREQUENCIES,
     EQ_PRESETS,
     apply_equalizer_to_file,
+    download_ffmpeg,
     ensure_ffmpeg,
     extract_embedded_cover,
     extract_embedded_lyrics,
     format_bytes,
     format_duration,
     inspect_audio_spectrum,
+    normalize_audio_loudness,
 )
 
 logger = logging.getLogger("gui.web_api")
@@ -74,11 +78,22 @@ class WebBackendState:
         archive_manager: ArchiveManager,
         folder_picker_cb: Optional[Callable[[str], str]] = None,
         on_track_play_cb: Optional[Callable[[str, str, str], None]] = None,
+        musilon_engine: Optional[MusilonEngine] = None,
+        melobot_engine: Optional[MeloBotEngine] = None,
     ):
         self.qm = queue_manager
         self.archive = archive_manager
         self.folder_picker_cb = folder_picker_cb
         self.on_track_play_cb = on_track_play_cb
+
+        # Engines for Musilon and MeloBot Telegram authentication
+        self.musilon = musilon_engine or getattr(getattr(self.qm, "engine", None), "musilon", None) or MusilonEngine()
+        self.melobot = melobot_engine or getattr(getattr(self.qm, "engine", None), "melobot", None) or MeloBotEngine()
+
+        self.ffmpeg_downloading = False
+        self.ffmpeg_download_progress = 0.0
+        self.ffmpeg_download_msg = ""
+        self.ffmpeg_download_success = False
 
         self.cover_cache: collections.OrderedDict[str, Tuple[bytes, str]] = collections.OrderedDict()
         self.cover_lock = threading.Lock()
@@ -100,6 +115,13 @@ class WebBackendState:
         self.spectrum_progress = 0
         self.spectrum_total = 0
         self.spectrum_results: List[Dict[str, Any]] = []
+
+        # Maintenance tasks state
+        self.maint_lock = threading.Lock()
+        self.maint_running = False
+        self.maint_task = ""
+        self.maint_progress = ""
+        self.maint_result: Dict[str, Any] = {}
 
     def invalidate_library_cache(self):
         with self.lib_lock:
@@ -474,7 +496,13 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         pass
 
     def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        if not origin or origin.startswith("http://127.0.0.1") or origin.startswith("http://localhost"):
+            allow_origin = origin if origin else "http://127.0.0.1"
+            self.send_header("Access-Control-Allow-Origin", allow_origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Range")
         self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges")
@@ -527,6 +555,18 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 return self._handle_get_lyrics(fp, title, artist)
             elif path == "/api/settings":
                 return self._handle_get_settings()
+            elif path == "/api/auth/musilon/status":
+                return self._handle_musilon_status()
+            elif path == "/api/auth/telegram/status":
+                return self._handle_telegram_status()
+            elif path == "/api/auth/spotify/status":
+                return self._handle_spotify_status()
+            elif path == "/api/diagnostics/ffmpeg":
+                return self._handle_ffmpeg_status()
+            elif path == "/api/diagnostics/ffmpeg/download_status":
+                return self._handle_ffmpeg_download_status()
+            elif path == "/api/maintenance/status":
+                return self._handle_maintenance_status()
             elif path == "/api/eq":
                 return self._handle_get_eq()
             elif path == "/api/tools/spectrum/status":
@@ -575,6 +615,32 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 return self._handle_lyrics_translate(body)
             elif path == "/api/lyrics/save":
                 return self._handle_lyrics_save(body)
+            elif path == "/api/auth/musilon/login":
+                return self._handle_musilon_login(body)
+            elif path == "/api/auth/musilon/test":
+                return self._handle_musilon_test(body)
+            elif path == "/api/auth/musilon/cookie":
+                return self._handle_musilon_cookie(body)
+            elif path == "/api/auth/telegram/send_code":
+                return self._handle_telegram_send_code(body)
+            elif path == "/api/auth/telegram/sign_in":
+                return self._handle_telegram_sign_in(body)
+            elif path == "/api/auth/telegram/logout":
+                return self._handle_telegram_logout(body)
+            elif path == "/api/auth/spotify/validate":
+                return self._handle_spotify_validate(body)
+            elif path == "/api/diagnostics/ffmpeg/download":
+                return self._handle_ffmpeg_download(body)
+            elif path == "/api/maintenance/clean":
+                return self._handle_maintenance_clean(body)
+            elif path == "/api/maintenance/repair":
+                return self._handle_maintenance_repair(body)
+            elif path == "/api/maintenance/retag_genres":
+                return self._handle_maintenance_retag_genres(body)
+            elif path == "/api/maintenance/boost_volume":
+                return self._handle_maintenance_boost_volume(body)
+            elif path == "/api/maintenance/replaygain":
+                return self._handle_maintenance_replaygain(body)
             elif path == "/api/eq/save":
                 return self._handle_eq_save(body)
             elif path == "/api/eq/apply_file":
@@ -1261,17 +1327,35 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             "ok": True,
             "settings": {
                 "output_dir": config.get("download.output_dir", ""),
-                "save_in_subfolders": bool(config.get("download.save_in_subfolders", True)),
+                "save_in_subfolders": bool(config.get("download.save_in_subfolders", False)),
+                "naming_template": config.get("download.naming_template", "{artist} - {title}"),
+                "album_naming_template": config.get("download.album_naming_template", "{track_num}. {artist} - {title}"),
                 "concurrency": int(config.get("download.concurrency", 5)),
-                "preferred_source": config.get("download.preferred_source", "melobot"),
-                "prefer_high_quality": bool(config.get("download.prefer_high_quality", True)),
-                "normalize_audio": bool(config.get("download.normalize_audio", True)),
+                "preferred_source": config.get("source_engine", config.get("download.preferred_source", "musilon")),
+                "preferred_quality": config.get("download.preferred_quality", "320"),
+                "target_format": config.get("download.target_format", "original"),
+                "allow_fallback": bool(config.get("download.allow_fallback", True)),
+                "lyrics_mode": config.get("download.lyrics_mode", "embedded_only"),
                 "embed_lyrics": bool(config.get("download.embed_lyrics", True)),
+                "embed_cover_art": bool(config.get("download.embed_cover_art", True)),
+                "generate_m3u8": bool(config.get("download.generate_m3u8", True)),
+                "normalize_volume": bool(config.get("download.normalize_volume", True)),
+                "replaygain_tagging": bool(config.get("download.replaygain_tagging", False)),
+                "cookies_file": config.get("download.cookies_file", ""),
+                "proxy": config.get("download.proxy", ""),
                 "auto_sync_enabled": bool(config.get("playlists.auto_sync_enabled", True)),
                 "auto_sync_interval_min": int(config.get("playlists.auto_sync_interval_min", 30)),
                 "spotify_client_id": config.get("spotify.client_id", ""),
                 "spotify_client_secret": config.get("spotify.client_secret", ""),
                 "musilon_enabled": bool(config.get("musilon.enabled", True)),
+                "musilon_username": config.get("musilon.username", ""),
+                "musilon_session_cookie": config.get("musilon.session_cookie", ""),
+                "musilon_safe_mode": bool(config.get("musilon.safe_mode", True)),
+                "musilon_cooldown_min_sec": int(config.get("musilon.cooldown_min_sec", 15)),
+                "musilon_cooldown_max_sec": int(config.get("musilon.cooldown_max_sec", 35)),
+                "telegram_enabled": bool(config.get("telegram.enabled", False)),
+                "telegram_phone": config.get("telegram.phone", ""),
+                "telegram_safe_delay_sec": int(config.get("telegram.safe_delay_sec", 2)),
             },
         })
 
@@ -1280,33 +1364,369 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         mapping = {
             "output_dir": "download.output_dir",
             "save_in_subfolders": "download.save_in_subfolders",
+            "naming_template": "download.naming_template",
+            "album_naming_template": "download.album_naming_template",
             "concurrency": "download.concurrency",
-            "preferred_source": "download.preferred_source",
-            "prefer_high_quality": "download.prefer_high_quality",
-            "normalize_audio": "download.normalize_audio",
+            "preferred_source": "source_engine",
+            "preferred_quality": "download.preferred_quality",
+            "target_format": "download.target_format",
+            "allow_fallback": "download.allow_fallback",
+            "lyrics_mode": "download.lyrics_mode",
             "embed_lyrics": "download.embed_lyrics",
+            "embed_cover_art": "download.embed_cover_art",
+            "generate_m3u8": "download.generate_m3u8",
+            "normalize_volume": "download.normalize_volume",
+            "replaygain_tagging": "download.replaygain_tagging",
+            "cookies_file": "download.cookies_file",
+            "proxy": "download.proxy",
             "auto_sync_enabled": "playlists.auto_sync_enabled",
             "auto_sync_interval_min": "playlists.auto_sync_interval_min",
             "spotify_client_id": "spotify.client_id",
             "spotify_client_secret": "spotify.client_secret",
             "musilon_enabled": "musilon.enabled",
+            "musilon_username": "musilon.username",
+            "musilon_password": "musilon.password",
+            "musilon_session_cookie": "musilon.session_cookie",
+            "musilon_safe_mode": "musilon.safe_mode",
+            "musilon_cooldown_min_sec": "musilon.cooldown_min_sec",
+            "musilon_cooldown_max_sec": "musilon.cooldown_max_sec",
+            "telegram_enabled": "telegram.enabled",
+            "telegram_phone": "telegram.phone",
+            "telegram_safe_delay_sec": "telegram.safe_delay_sec",
         }
         for key, cfg_path in mapping.items():
             if key in s:
                 config.set(cfg_path, s[key])
+        config.save()
         self.state.invalidate_library_cache()
         self._send_json({"ok": True})
 
     def _handle_shell_open(self, body: Dict[str, Any]):
-        target = (body.get("path") or config.get("download.output_dir", "")).strip()
-        if not target:
+        if "path" in body and not str(body.get("path") or "").strip():
             return self._send_json({"ok": False, "error": "Empty path"}, status=400)
+        raw_target = (body.get("path") or config.get("download.output_dir", "")).strip()
+        if not raw_target:
+            return self._send_json({"ok": False, "error": "Empty path"}, status=400)
+        target = os.path.abspath(raw_target)
+        if not os.path.exists(target):
+            return self._send_json({"ok": False, "error": f"Path not found: {raw_target}"}, status=404)
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         if os.path.isfile(target):
             subprocess.Popen(["explorer", f"/select,{os.path.normpath(target)}"], creationflags=flags)
         elif os.path.isdir(target):
             subprocess.Popen(["explorer", os.path.normpath(target)], creationflags=flags)
         self._send_json({"ok": True})
+
+    # ------------------------------------------------------------------
+    # Handlers: Authentication & Diagnostics
+    # ------------------------------------------------------------------
+    def _handle_musilon_status(self):
+        musilon = self.state.musilon
+        has_user = bool(config.get("musilon.username", ""))
+        has_pwd = bool(config.get("musilon.password", ""))
+        cookie = config.get("musilon.session_cookie", "")
+        has_cookie = bool(cookie.strip())
+        budget = musilon.get_download_budget() or {}
+        is_auth = musilon.is_authenticated() if hasattr(musilon, "is_authenticated") else False
+        is_vip = getattr(musilon, "is_vip", False)
+        self._send_json({
+            "ok": True,
+            "configured": has_user or has_cookie,
+            "has_credentials": has_user and has_pwd,
+            "has_cookie": has_cookie,
+            "username": config.get("musilon.username", ""),
+            "is_authenticated": is_auth,
+            "is_vip": is_vip,
+            "budget": budget,
+            "enabled": bool(config.get("musilon.enabled", True)),
+            "safe_mode": bool(config.get("musilon.safe_mode", True)),
+            "cooldown_min_sec": int(config.get("musilon.cooldown_min_sec", 15)),
+            "cooldown_max_sec": int(config.get("musilon.cooldown_max_sec", 35)),
+        })
+
+    def _handle_musilon_login(self, body: Dict[str, Any]):
+        user = (body.get("username") or "").strip()
+        pwd = (body.get("password") or "").strip()
+        if not user or not pwd:
+            return self._send_json({"ok": False, "error": "Username and password are required."}, status=400)
+        musilon = self.state.musilon
+        success, msg = musilon.login_with_credentials(user, pwd)
+        if success:
+            cookie_dict = musilon.session.cookies.get_dict()
+            cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+            config.set("musilon.username", user)
+            config.set("musilon.password", pwd)
+            config.set("musilon.session_cookie", cookie_str)
+            config.save()
+            connected, is_auth, is_vip, test_msg = musilon.test_connection(auto_login=False)
+            budget = musilon.get_download_budget() or {}
+            self._send_json({
+                "ok": True,
+                "message": msg,
+                "is_authenticated": is_auth,
+                "is_vip": is_vip,
+                "test_message": test_msg,
+                "budget": budget,
+            })
+        else:
+            self._send_json({"ok": False, "error": msg}, status=401)
+
+    def _handle_musilon_test(self, body: Dict[str, Any]):
+        musilon = self.state.musilon
+        connected, is_auth, is_vip, msg = musilon.test_connection(auto_login=True)
+        budget = musilon.get_download_budget() or {}
+        self._send_json({
+            "ok": True,
+            "connected": connected,
+            "is_authenticated": is_auth,
+            "is_vip": is_vip,
+            "message": msg,
+            "budget": budget,
+        })
+
+    def _handle_musilon_cookie(self, body: Dict[str, Any]):
+        cookie = (body.get("cookie") or "").strip()
+        musilon = self.state.musilon
+        config.set("musilon.session_cookie", cookie)
+        config.save()
+        if hasattr(musilon, "_load_cookie_string"):
+            musilon._load_cookie_string(cookie)
+        connected, is_auth, is_vip, msg = musilon.test_connection(auto_login=False)
+        budget = musilon.get_download_budget() or {}
+        self._send_json({
+            "ok": True,
+            "connected": connected,
+            "is_authenticated": is_auth,
+            "is_vip": is_vip,
+            "message": msg,
+            "budget": budget,
+        })
+
+    def _handle_telegram_status(self):
+        melobot = self.state.melobot
+        authorized = melobot.is_authorized()
+        user = melobot.get_me() if authorized else None
+        self._send_json({
+            "ok": True,
+            "authorized": authorized,
+            "user": user,
+            "phone": config.get("telegram.phone", ""),
+            "enabled": bool(config.get("telegram.enabled", False)),
+            "safe_delay_sec": int(config.get("telegram.safe_delay_sec", 2)),
+        })
+
+    def _handle_telegram_send_code(self, body: Dict[str, Any]):
+        phone = (body.get("phone") or "").strip()
+        if not phone:
+            return self._send_json({"ok": False, "error": "Phone number is required."}, status=400)
+        config.set("telegram.phone", phone)
+        config.save()
+        melobot = self.state.melobot
+        res = melobot.send_code(phone)
+        if res.get("success"):
+            self._send_json({"ok": True, "phone_code_hash": res.get("phone_code_hash", "")})
+        else:
+            self._send_json({"ok": False, "error": res.get("error", "Failed to send code.")}, status=400)
+
+    def _handle_telegram_sign_in(self, body: Dict[str, Any]):
+        code = (body.get("code") or "").strip()
+        pwd = (body.get("password") or "").strip() or None
+        phone = (body.get("phone") or "").strip() or config.get("telegram.phone", "")
+        if not code:
+            return self._send_json({"ok": False, "error": "Verification code is required."}, status=400)
+        melobot = self.state.melobot
+        res = melobot.sign_in(code=code, password=pwd, phone=phone)
+        if res.get("success"):
+            config.set("telegram.enabled", True)
+            config.save()
+            self._send_json({"ok": True, "user": res.get("user", {})})
+        else:
+            self._send_json({"ok": False, "error": res.get("error", "Sign-in failed.")}, status=400)
+
+    def _handle_telegram_logout(self, body: Dict[str, Any]):
+        melobot = self.state.melobot
+        ok = melobot.log_out()
+        config.set("telegram.enabled", False)
+        config.save()
+        self._send_json({"ok": bool(ok)})
+
+    def _handle_spotify_status(self):
+        cid = config.get("spotify.client_id", "")
+        sec = config.get("spotify.client_secret", "")
+        has_keys = bool(cid and sec)
+        user_auth = False
+        user_name = ""
+        if has_keys:
+            try:
+                sp = SpotifyClient(client_id=cid, client_secret=sec)
+                user_auth = sp.has_user_auth(allow_network=False)
+                user_name = sp._cached_user_name or ""
+            except Exception:
+                pass
+        self._send_json({
+            "ok": True,
+            "configured": has_keys,
+            "client_id": cid,
+            "has_user_auth": user_auth,
+            "user_name": user_name,
+        })
+
+    def _handle_spotify_validate(self, body: Dict[str, Any]):
+        cid = (body.get("client_id") or config.get("spotify.client_id", "")).strip()
+        sec = (body.get("client_secret") or config.get("spotify.client_secret", "")).strip()
+        if not cid or not sec:
+            return self._send_json({"ok": False, "error": "Client ID and Client Secret are required."}, status=400)
+        try:
+            sp = SpotifyClient(client_id=cid, client_secret=sec)
+            tracks = sp.resolve("https://open.spotify.com/track/3AJwUDP919kvQ9QcozQPxg")
+            if tracks:
+                config.set("spotify.client_id", cid)
+                config.set("spotify.client_secret", sec)
+                config.save()
+                user_auth = sp.has_user_auth(allow_network=False)
+                self._send_json({
+                    "ok": True,
+                    "title": tracks[0].title,
+                    "artist": tracks[0].artist_str,
+                    "has_user_auth": user_auth,
+                    "message": f"Verified successfully! Test track resolved: '{tracks[0].title}' by {tracks[0].artist_str}",
+                })
+            else:
+                self._send_json({"ok": False, "error": "Spotify credentials did not return track metadata."}, status=400)
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)}, status=400)
+
+    def _handle_ffmpeg_status(self):
+        path = ensure_ffmpeg()
+        self._send_json({
+            "ok": True,
+            "installed": bool(path and os.path.isfile(path)),
+            "path": path or "",
+        })
+
+    def _handle_ffmpeg_download(self, body: Dict[str, Any]):
+        if self.state.ffmpeg_downloading:
+            return self._send_json({"ok": True, "message": "Download is already in progress."})
+
+        self.state.ffmpeg_downloading = True
+        self.state.ffmpeg_download_progress = 0.0
+        self.state.ffmpeg_download_msg = "Connecting to repository..."
+        self.state.ffmpeg_download_success = False
+
+        def prog_cb(pct: float, msg: str):
+            self.state.ffmpeg_download_progress = pct
+            self.state.ffmpeg_download_msg = msg
+
+        def worker():
+            try:
+                res = download_ffmpeg(progress_callback=prog_cb)
+                self.state.ffmpeg_download_success = bool(res)
+                self.state.ffmpeg_download_msg = f"FFmpeg installed at {res}" if res else "Download failed."
+            except Exception as e:
+                self.state.ffmpeg_download_success = False
+                self.state.ffmpeg_download_msg = f"Error: {e}"
+            finally:
+                self.state.ffmpeg_downloading = False
+
+        threading.Thread(target=worker, daemon=True, name="FFmpegDownloader").start()
+        self._send_json({"ok": True, "message": "FFmpeg download started."})
+
+    def _handle_ffmpeg_download_status(self):
+        self._send_json({
+            "ok": True,
+            "downloading": self.state.ffmpeg_downloading,
+            "progress": round(self.state.ffmpeg_download_progress, 1),
+            "message": self.state.ffmpeg_download_msg,
+            "success": self.state.ffmpeg_download_success,
+        })
+
+    # ------------------------------------------------------------------
+    # Handlers: Library Maintenance Jobs
+    # ------------------------------------------------------------------
+    def _run_maintenance_job(self, task_name: str, job_fn: Callable):
+        with self.state.maint_lock:
+            if self.state.maint_running:
+                return False, f"Task '{self.state.maint_task}' is already running."
+            self.state.maint_running = True
+            self.state.maint_task = task_name
+            self.state.maint_progress = "Starting..."
+            self.state.maint_result = {}
+
+        def worker():
+            try:
+                def prog_cb(cur: int, total: int, msg: str):
+                    with self.state.maint_lock:
+                        self.state.maint_progress = f"[{cur}/{total}] {msg}"
+
+                res = job_fn(prog_cb)
+                with self.state.maint_lock:
+                    self.state.maint_result = {"ok": True, "data": res}
+                    self.state.maint_progress = "Completed successfully."
+            except Exception as e:
+                logger.error(f"Maintenance job '{task_name}' error: {e}", exc_info=True)
+                with self.state.maint_lock:
+                    self.state.maint_result = {"ok": False, "error": str(e)}
+                    self.state.maint_progress = f"Failed: {e}"
+            finally:
+                with self.state.maint_lock:
+                    self.state.maint_running = False
+                self.state.invalidate_library_cache()
+
+        threading.Thread(target=worker, daemon=True, name=f"MaintJob_{task_name}").start()
+        return True, "Started"
+
+    def _handle_maintenance_status(self):
+        with self.state.maint_lock:
+            self._send_json({
+                "ok": True,
+                "running": self.state.maint_running,
+                "task": self.state.maint_task,
+                "progress": self.state.maint_progress,
+                "result": self.state.maint_result,
+            })
+
+    def _handle_maintenance_clean(self, body: Dict[str, Any]):
+        def job(_):
+            stats = self.state.archive.purge_corrupt_and_cleanup_library()
+            return stats
+
+        ok, msg = self._run_maintenance_job("clean", job)
+        self._send_json({"ok": ok, "message": msg})
+
+    def _handle_maintenance_repair(self, body: Dict[str, Any]):
+        def job(prog_cb):
+            return self.state.archive.repair_library(progress_callback=prog_cb)
+
+        ok, msg = self._run_maintenance_job("repair", job)
+        self._send_json({"ok": ok, "message": msg})
+
+    def _handle_maintenance_retag_genres(self, body: Dict[str, Any]):
+        def job(prog_cb):
+            return self.state.archive.retag_all_library_genres(progress_callback=prog_cb)
+
+        ok, msg = self._run_maintenance_job("retag_genres", job)
+        self._send_json({"ok": ok, "message": msg})
+
+    def _handle_maintenance_boost_volume(self, body: Dict[str, Any]):
+        target_lufs = float(config.get("download.target_lufs", -9.0) or -9.0)
+        workers = min(12, max(4, (os.cpu_count() or 4)))
+
+        def job(prog_cb):
+            return self.state.archive.normalize_all_library_tracks(
+                target_lufs=target_lufs,
+                max_workers=workers,
+                progress_callback=prog_cb
+            )
+
+        ok, msg = self._run_maintenance_job("boost_volume", job)
+        self._send_json({"ok": ok, "message": msg})
+
+    def _handle_maintenance_replaygain(self, body: Dict[str, Any]):
+        def job(prog_cb):
+            return self.state.archive.retag_all_library_replaygain(progress_callback=prog_cb)
+
+        ok, msg = self._run_maintenance_job("replaygain", job)
+        self._send_json({"ok": ok, "message": msg})
 
     def _handle_folder_dialog(self, body: Dict[str, Any]):
         current = (body.get("current") or config.get("download.output_dir", "")).strip()
@@ -1457,12 +1877,16 @@ class FlacifyWebServer:
         web_root: str,
         folder_picker_cb: Optional[Callable[[str], str]] = None,
         on_track_play_cb: Optional[Callable[[str, str, str], None]] = None,
+        musilon_engine: Optional[MusilonEngine] = None,
+        melobot_engine: Optional[MeloBotEngine] = None,
     ):
         self.state = WebBackendState(
             queue_manager=queue_manager,
             archive_manager=archive_manager,
             folder_picker_cb=folder_picker_cb,
             on_track_play_cb=on_track_play_cb,
+            musilon_engine=musilon_engine,
+            melobot_engine=melobot_engine,
         )
         self.web_root = os.path.abspath(web_root)
         self.port = 0

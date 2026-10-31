@@ -348,98 +348,483 @@
         <!-- 5. SETTINGS VIEW -->
         <section class="view-page" id="view-settings">
           <div class="settings-container">
-            <h2 class="section-title">Studio Settings</h2>
-            <p class="section-desc">Configure audio sources, EBU R128 loudness mastering, storage paths, and scheduled playlist sync.</p>
-
-            <div class="settings-card">
-              <h3>Storage &amp; Organization</h3>
-              <div class="setting-row">
+            <div class="settings-header">
+              <div class="settings-header-top">
                 <div>
-                  <div class="setting-label">Download Directory</div>
-                  <div class="setting-sub">Root folder where downloaded songs and playlists are stored</div>
+                  <h2 class="section-title">Studio Settings &amp; Engine Preferences</h2>
+                  <p class="section-desc">Manage authentication, audio engines, storage directories, and automated maintenance.</p>
                 </div>
-                <div class="setting-control-row">
-                  <input type="text" id="set-output-dir" class="sleek-input" style="width: 320px;" />
-                  <button class="btn-secondary-dark" id="btn-browse-dir">Browse...</button>
-                </div>
+                <button class="btn-primary-emerald" id="btn-save-settings-top">Save All Changes</button>
               </div>
-              <div class="setting-row">
-                <div>
-                  <div class="setting-label">Organize Playlists &amp; Albums in Subfolders</div>
-                  <div class="setting-sub">Automatically create a dedicated subfolder for each playlist or album</div>
-                </div>
-                <input type="checkbox" id="set-subfolders" class="toggle-switch" />
+
+              <!-- Tabbed Sub-navigation -->
+              <div class="settings-nav-tabs" id="settings-sub-tabs">
+                <button class="settings-tab-btn active" data-tab="accounts">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                  <span>Accounts &amp; Logins</span>
+                </button>
+                <button class="settings-tab-btn" data-tab="audio">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  <span>Audio &amp; Mastering</span>
+                </button>
+                <button class="settings-tab-btn" data-tab="storage">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                  <span>Storage &amp; Naming</span>
+                </button>
+                <button class="settings-tab-btn" data-tab="automation">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  <span>Automation &amp; Watch</span>
+                </button>
+                <button class="settings-tab-btn" data-tab="maintenance">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
+                  <span>Diagnostics &amp; Maintenance</span>
+                </button>
               </div>
             </div>
 
-            <div class="settings-card">
-              <h3>Audio Engine &amp; Mastering</h3>
-              <div class="setting-row">
-                <div>
-                  <div class="setting-label">Primary Audio Source</div>
-                  <div class="setting-sub">Preferred scraper source before cascading fallback</div>
+            <!-- TAB 1: ACCOUNTS & LOGINS -->
+            <div class="settings-tab-panel" id="stab-accounts">
+              <!-- Musilon VIP Card -->
+              <div class="settings-card">
+                <div class="card-header-row">
+                  <div class="card-title-wrap">
+                    <span class="engine-icon">👑</span>
+                    <div>
+                      <h3>Musilon VIP / Premium Account</h3>
+                      <p class="card-subtitle">Download native Lossless FLAC 16/24-bit and high-speed 320 kbps MP3 directly from CDN.</p>
+                    </div>
+                  </div>
+                  <span id="musilon-status-badge" class="status-pill offline">Checking...</span>
                 </div>
-                <select id="set-preferred-source" class="sleek-select">
-                  <option value="melobot">MeloBot (320kbps MP3 + Telegram Direct)</option>
-                  <option value="ytm">YouTube Music (251 Opus / 320k)</option>
-                  <option value="musilon">Musilon (FLAC / High-Bitrate)</option>
-                </select>
+
+                <div class="setting-row">
+                  <div class="form-grid-2col">
+                    <div class="form-group">
+                      <label>Registered Email Address</label>
+                      <input type="text" id="set-musilon-email" class="sleek-input" placeholder="e.g. name@gmail.com" />
+                    </div>
+                    <div class="form-group">
+                      <label>Account Password</label>
+                      <input type="password" id="set-musilon-password" class="sleek-input" placeholder="Password" />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="setting-action-row">
+                  <button class="btn-primary-emerald" id="btn-musilon-login">Log In to Musilon</button>
+                  <button class="btn-secondary-dark" id="btn-musilon-test">Test Connection &amp; VIP Status</button>
+                </div>
+
+                <div id="musilon-info-box" class="info-alert-box hidden"></div>
+
+                <div class="setting-row">
+                  <div class="form-group" style="width: 100%;">
+                    <label>Advanced: Session Cookie (Auto-saved on login)</label>
+                    <div class="input-with-btn">
+                      <input type="text" id="set-musilon-cookie" class="sleek-input" placeholder="__Secure-next-auth.session-token=..." />
+                      <button class="btn-secondary-dark" id="btn-paste-musilon-cookie">Paste &amp; Save</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Enable Musilon Download Engine</div>
+                    <div class="setting-sub">Search Musilon catalog for lossless and 320k tracks before fallback</div>
+                  </div>
+                  <input type="checkbox" id="set-musilon-enabled" class="toggle-switch" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Anti-Ban Stealth Shield (Safe Mode)</div>
+                    <div class="setting-sub">Prevents 429 rate limits via randomized human pauses and browser headers</div>
+                  </div>
+                  <input type="checkbox" id="set-musilon-safe-mode" class="toggle-switch" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Download Cooldown Interval (Seconds)</div>
+                    <div class="setting-sub">Pause between songs to evade automated bot detection</div>
+                  </div>
+                  <div class="setting-control-row">
+                    <label class="inline-label">Min: <input type="number" id="set-musilon-cd-min" min="0" max="300" class="sleek-input" style="width: 70px;" /></label>
+                    <label class="inline-label">Max: <input type="number" id="set-musilon-cd-max" min="0" max="300" class="sleek-input" style="width: 70px;" /></label>
+                  </div>
+                </div>
               </div>
-              <div class="setting-row">
-                <div>
-                  <div class="setting-label">EBU R128 Loudness Mastering (-11 LUFS)</div>
-                  <div class="setting-sub">Boost quiet songs and balance volume across all downloads without clipping</div>
+
+              <!-- MeloBot VIP / Telegram Card -->
+              <div class="settings-card">
+                <div class="card-header-row">
+                  <div class="card-title-wrap">
+                    <span class="engine-icon">✈️</span>
+                    <div>
+                      <h3>MeloBot VIP / Telegram Account</h3>
+                      <p class="card-subtitle">Connect your Telegram account to scrape Lossless FLAC &amp; 320k MP3 via @melobot bot.</p>
+                    </div>
+                  </div>
+                  <span id="telegram-status-badge" class="status-pill offline">Checking...</span>
                 </div>
-                <input type="checkbox" id="set-normalize" class="toggle-switch" />
+
+                <div class="setting-row">
+                  <div class="form-grid-2col">
+                    <div class="form-group">
+                      <label>Telegram Phone Number</label>
+                      <div class="input-with-btn">
+                        <input type="text" id="set-tg-phone" class="sleek-input" placeholder="+989123456789 or +1..." />
+                        <button class="btn-secondary-dark" id="btn-tg-send-code">Send Code</button>
+                      </div>
+                    </div>
+                    <div class="form-group">
+                      <label>Telegram OTP Verification Code</label>
+                      <input type="text" id="set-tg-code" class="sleek-input" placeholder="5-digit code sent to Telegram" />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="setting-row" id="tg-2fa-row" style="display: none;">
+                  <div class="form-group" style="width: 100%;">
+                    <label>2FA Cloud Password (Optional)</label>
+                    <input type="password" id="set-tg-2fa" class="sleek-input" placeholder="Your Telegram 2-Step Verification password" />
+                  </div>
+                </div>
+
+                <div class="setting-action-row">
+                  <button class="btn-primary-emerald" id="btn-tg-signin">Verify &amp; Connect Telegram</button>
+                  <button class="btn-secondary-dark" id="btn-tg-check">Check Status</button>
+                  <button class="btn-danger-outline" id="btn-tg-logout">Disconnect</button>
+                </div>
+
+                <div id="telegram-info-box" class="info-alert-box hidden"></div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Enable MeloBot Telegram Engine</div>
+                    <div class="setting-sub">Allow querying tracks from MeloBot using your Telegram session</div>
+                  </div>
+                  <input type="checkbox" id="set-tg-enabled" class="toggle-switch" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Telegram Request Delay (Seconds)</div>
+                    <div class="setting-sub">Delay between requests to avoid Telegram flood wait</div>
+                  </div>
+                  <input type="number" id="set-tg-delay" min="0" max="30" class="sleek-input" style="width: 90px;" />
+                </div>
               </div>
-              <div class="setting-row">
-                <div>
-                  <div class="setting-label">Embed Synchronized Lyrics (.LRC)</div>
-                  <div class="setting-sub">Automatically fetch and embed synced karaoke lyrics from LRCLIB</div>
+
+              <!-- Spotify Developer Web API Card -->
+              <div class="settings-card">
+                <div class="card-header-row">
+                  <div class="card-title-wrap">
+                    <span class="engine-icon">🟢</span>
+                    <div>
+                      <h3>Spotify Developer Web API Credentials</h3>
+                      <p class="card-subtitle">Required for full playlist pagination (>100 songs). Guest embed mode is capped at 100 tracks.</p>
+                    </div>
+                  </div>
+                  <span id="spotify-status-badge" class="status-pill guest">Checking...</span>
                 </div>
-                <input type="checkbox" id="set-embed-lyrics" class="toggle-switch" />
-              </div>
-              <div class="setting-row">
-                <div>
-                  <div class="setting-label">Max Concurrent Downloads</div>
-                  <div class="setting-sub">Number of parallel worker threads</div>
+
+                <div class="setting-row">
+                  <div class="form-grid-2col">
+                    <div class="form-group">
+                      <label>Spotify Client ID</label>
+                      <input type="text" id="set-sp-id" class="sleek-input" placeholder="Spotify App Client ID" />
+                    </div>
+                    <div class="form-group">
+                      <label>Spotify Client Secret</label>
+                      <input type="password" id="set-sp-secret" class="sleek-input" placeholder="Spotify App Client Secret" />
+                    </div>
+                  </div>
                 </div>
-                <input type="number" id="set-concurrency" min="1" max="12" class="sleek-input" style="width: 90px;" />
+
+                <div class="setting-action-row">
+                  <button class="btn-secondary-dark" id="btn-sp-validate">Validate Spotify Credentials</button>
+                  <a href="https://developer.spotify.com/dashboard" target="_blank" class="ghost-pill-btn" style="text-decoration: none;">Open Spotify Dashboard ↗</a>
+                </div>
+
+                <div id="spotify-info-box" class="info-alert-box hidden"></div>
               </div>
             </div>
 
-            <div class="settings-card">
-              <h3>Scheduled Watch Playlists Auto-Sync</h3>
-              <div class="setting-row">
-                <div>
-                  <div class="setting-label">Enable Background Playlist Watcher</div>
-                  <div class="setting-sub">Automatically check watched playlists for newly added Spotify songs</div>
+            <!-- TAB 2: AUDIO & MASTERING -->
+            <div class="settings-tab-panel hidden" id="stab-audio">
+              <div class="settings-card">
+                <h3>Primary Audio Source &amp; Quality</h3>
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Primary Download Source</div>
+                    <div class="setting-sub">Service queried first for audio downloads before falling back</div>
+                  </div>
+                  <select id="set-preferred-source" class="sleek-select">
+                    <option value="musilon">👑 Musilon VIP (Lossless FLAC 16/24-bit + 320k)</option>
+                    <option value="melobot">✈️ MeloBot (@melobot Telegram VIP)</option>
+                    <option value="ytm">🌐 YouTube Music (Opus 251 / 320k)</option>
+                  </select>
                 </div>
-                <input type="checkbox" id="set-autosync-enabled" class="toggle-switch" />
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Preferred Audio Bitrate / Quality</div>
+                    <div class="setting-sub">Select preferred stream quality from high-fidelity sources</div>
+                  </div>
+                  <select id="set-preferred-quality" class="sleek-select">
+                    <option value="320">MP3 320 kbps CBR (High Quality MP3)</option>
+                    <option value="flac">Lossless FLAC (16-bit CD / 24-bit Hi-Res)</option>
+                  </select>
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Target Audio Format (Universal Transcoder)</div>
+                    <div class="setting-sub">Auto-transcode downloads via FFmpeg (Original keeps native audio untouched)</div>
+                  </div>
+                  <select id="set-target-format" class="sleek-select">
+                    <option value="original">Original / Native Stream (Fastest, pristine)</option>
+                    <option value="alac">Apple Lossless (ALAC .m4a — iPhone &amp; Apple Music)</option>
+                    <option value="mp3">MP3 320 kbps CBR (Universal compatibility)</option>
+                    <option value="flac">FLAC 16/24-bit (Lossless Audio)</option>
+                    <option value="opus">Opus 256 kbps (High efficiency)</option>
+                  </select>
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Enable YouTube Music Safety-Net Fallback</div>
+                    <div class="setting-sub">Automatically fetch Opus audio from YouTube Music if a track isn't found in VIP sources</div>
+                  </div>
+                  <input type="checkbox" id="set-fallback" class="toggle-switch" />
+                </div>
               </div>
-              <div class="setting-row">
-                <div>
-                  <div class="setting-label">Auto-Sync Check Interval (Minutes)</div>
-                  <div class="setting-sub">How often to poll Spotify for new songs in watched playlists</div>
+
+              <div class="settings-card">
+                <h3>Loudness Mastering &amp; Lyrics Tagging</h3>
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Auto-Boost &amp; Balance Audio Volume (EBU R128)</div>
+                    <div class="setting-sub">Boost quiet songs and normalize volume to punchy -9.0 LUFS with true-peak limiting</div>
+                  </div>
+                  <input type="checkbox" id="set-normalize" class="toggle-switch" />
                 </div>
-                <input type="number" id="set-autosync-interval" min="5" max="720" class="sleek-input" style="width: 90px;" />
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">ReplayGain 2.0 Loudness Normalization Tagging</div>
+                    <div class="setting-sub">Embed non-destructive track volume adjustment metadata tags without re-encoding</div>
+                  </div>
+                  <input type="checkbox" id="set-replaygain" class="toggle-switch" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Embed Front Cover Artwork</div>
+                    <div class="setting-sub">Embed highest-resolution front cover artwork directly into audio container</div>
+                  </div>
+                  <input type="checkbox" id="set-embed-cover" class="toggle-switch" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Lyrics Storage Mode</div>
+                    <div class="setting-sub">Choose whether to embed lyrics directly or export standalone .lrc files</div>
+                  </div>
+                  <select id="set-lyrics-mode" class="sleek-select">
+                    <option value="embedded_only">Embedded in Audio Only (Cleanest — no .lrc files)</option>
+                    <option value="separate_folder">Dedicated Subfolder (lyrics/)</option>
+                    <option value="same_folder">Same Folder as Audio (.lrc)</option>
+                  </select>
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Embed Plain Lyrics in Container Tags</div>
+                    <div class="setting-sub">Embed lyrics text into ID3 (USLT), Vorbis (LYRICS), or MP4 tags</div>
+                  </div>
+                  <input type="checkbox" id="set-embed-lyrics" class="toggle-switch" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Generate Companion .m3u8 Playlist Files</div>
+                    <div class="setting-sub">Create UTF-8 .m3u8 playlist files inside playlist folders for portable players</div>
+                  </div>
+                  <input type="checkbox" id="set-generate-m3u8" class="toggle-switch" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Max Concurrent Downloads</div>
+                    <div class="setting-sub">Simultaneous download worker threads (Default: 5)</div>
+                  </div>
+                  <input type="number" id="set-concurrency" min="1" max="10" class="sleek-input" style="width: 90px;" />
+                </div>
               </div>
             </div>
 
-            <div class="settings-card">
-              <h3>Spotify Developer API (Optional)</h3>
-              <div class="setting-row">
-                <div class="setting-label">Spotify Client ID</div>
-                <input type="text" id="set-sp-id" class="sleek-input" style="width: 320px;" placeholder="Optional Client ID" />
+            <!-- TAB 3: STORAGE & NAMING -->
+            <div class="settings-tab-panel hidden" id="stab-storage">
+              <div class="settings-card">
+                <h3>Directory &amp; Organization</h3>
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Download Directory</div>
+                    <div class="setting-sub">Root destination folder where songs and playlists are stored</div>
+                  </div>
+                  <div class="setting-control-row">
+                    <input type="text" id="set-output-dir" class="sleek-input" style="width: 320px;" />
+                    <button class="btn-secondary-dark" id="btn-browse-dir">Browse...</button>
+                    <button class="btn-secondary-dark" id="btn-open-dir-explorer" title="Open in Windows Explorer">Open ↗</button>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Organize Downloads into Subfolders</div>
+                    <div class="setting-sub">Save songs into subfolders named after their playlist or album</div>
+                  </div>
+                  <input type="checkbox" id="set-subfolders" class="toggle-switch" />
+                </div>
               </div>
-              <div class="setting-row">
-                <div class="setting-label">Spotify Client Secret</div>
-                <input type="password" id="set-sp-secret" class="sleek-input" style="width: 320px;" placeholder="Optional Client Secret" />
+
+              <div class="settings-card">
+                <h3>Naming Templates</h3>
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Single &amp; Playlist Track Naming Pattern</div>
+                    <div class="setting-sub">Tags: {artist}, {title}, {album}</div>
+                  </div>
+                  <input type="text" id="set-naming-template" class="sleek-input" style="width: 280px;" placeholder="{artist} - {title}" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Album Track Naming Pattern</div>
+                    <div class="setting-sub">Tags: {track_num}, {artist}, {title}, {album}</div>
+                  </div>
+                  <input type="text" id="set-album-naming-template" class="sleek-input" style="width: 280px;" placeholder="{track_num}. {artist} - {title}" />
+                </div>
+              </div>
+
+              <div class="settings-card">
+                <h3>Network &amp; YouTube Cookies</h3>
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">YouTube Cookies File (cookies.txt)</div>
+                    <div class="setting-sub">Exported browser cookies to bypass YouTube bot blocks and age restrictions</div>
+                  </div>
+                  <input type="text" id="set-cookies-file" class="sleek-input" style="width: 320px;" placeholder="Path to cookies.txt (optional)" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Network Proxy (Optional)</div>
+                    <div class="setting-sub">Proxy for YouTube requests (e.g. http://127.0.0.1:10809 or socks5://127.0.0.1:10808)</div>
+                  </div>
+                  <input type="text" id="set-proxy" class="sleek-input" style="width: 320px;" placeholder="Optional proxy" />
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 4: AUTOMATION & WATCH -->
+            <div class="settings-tab-panel hidden" id="stab-automation">
+              <div class="settings-card">
+                <h3>Scheduled Playlist Auto-Sync</h3>
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Enable Background Watcher Auto-Sync</div>
+                    <div class="setting-sub">Periodically poll Spotify for newly added songs in your watched playlists</div>
+                  </div>
+                  <input type="checkbox" id="set-autosync-enabled" class="toggle-switch" />
+                </div>
+
+                <div class="setting-row">
+                  <div>
+                    <div class="setting-label">Auto-Sync Check Interval (Minutes)</div>
+                    <div class="setting-sub">Interval between background sync checks (Default: 30 minutes)</div>
+                  </div>
+                  <input type="number" id="set-autosync-interval" min="5" max="720" class="sleek-input" style="width: 90px;" />
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 5: DIAGNOSTICS & MAINTENANCE -->
+            <div class="settings-tab-panel hidden" id="stab-maintenance">
+              <!-- FFmpeg Card -->
+              <div class="settings-card">
+                <div class="card-header-row">
+                  <div class="card-title-wrap">
+                    <span class="engine-icon">🎬</span>
+                    <div>
+                      <h3>FFmpeg Audio Processing Engine</h3>
+                      <p class="card-subtitle">Required for container extraction, audio transcoding, and true-peak volume normalization.</p>
+                    </div>
+                  </div>
+                  <span id="ffmpeg-status-badge" class="status-pill">Checking...</span>
+                </div>
+
+                <div class="setting-row">
+                  <div id="ffmpeg-path-label" class="setting-sub" style="font-family: monospace;">Checking path...</div>
+                </div>
+
+                <div class="setting-action-row">
+                  <button class="btn-secondary-dark" id="btn-download-ffmpeg">Download / Reinstall Standalone FFmpeg</button>
+                </div>
+
+                <div id="ffmpeg-progress-wrap" class="ffmpeg-progress-wrap hidden">
+                  <div class="prog-bar-track">
+                    <div id="ffmpeg-prog-fill" class="prog-bar-fill" style="width: 0%;"></div>
+                  </div>
+                  <span id="ffmpeg-prog-text" class="prog-bar-text">0%</span>
+                </div>
+              </div>
+
+              <!-- Maintenance Tools Card -->
+              <div class="settings-card">
+                <h3>One-Click Library Maintenance &amp; Repair</h3>
+                <p class="card-subtitle">Run automated audits across your downloaded library to purge invalid files, heal metadata, and balance levels.</p>
+
+                <div class="maint-buttons-grid">
+                  <div class="maint-button-card">
+                    <h4>🧹 Clean Library &amp; Cache</h4>
+                    <p>Purges unplayable corrupted HTML files (&lt;500KB) and cleans dead DB records.</p>
+                    <button class="btn-secondary-dark" id="btn-maint-clean">Clean Library</button>
+                  </div>
+
+                  <div class="maint-button-card">
+                    <h4>🛠️ Scan &amp; Auto-Repair Tracks</h4>
+                    <p>Audits all audio files and re-embeds missing high-res covers and synced lyrics.</p>
+                    <button class="btn-secondary-dark" id="btn-maint-repair">Repair Tracks</button>
+                  </div>
+
+                  <div class="maint-button-card">
+                    <h4>🏷️ Synchronize All Genres</h4>
+                    <p>Scans tracks and updates missing genres using multi-source tag matching.</p>
+                    <button class="btn-secondary-dark" id="btn-maint-retag">Retag Genres</button>
+                  </div>
+
+                  <div class="maint-button-card">
+                    <h4>🔊 Batch Volume Boost &amp; Balance</h4>
+                    <p>Measures and normalizes all audio files to uniform -9.0 LUFS EBU R128 master level.</p>
+                    <button class="btn-primary-emerald" id="btn-maint-boost">Boost Volume</button>
+                  </div>
+
+                  <div class="maint-button-card">
+                    <h4>📊 Calculate ReplayGain 2.0 Tags</h4>
+                    <p>Calculates track gain and peak tags without re-encoding audio.</p>
+                    <button class="btn-secondary-dark" id="btn-maint-replaygain">Calculate ReplayGain</button>
+                  </div>
+                </div>
+
+                <div id="maint-status-banner" class="info-alert-box hidden" style="margin-top: 16px;"></div>
               </div>
             </div>
 
             <div class="settings-footer">
-              <button class="btn-primary-emerald" id="btn-save-settings">Save Settings</button>
+              <button class="btn-primary-emerald" id="btn-save-settings">Save All Changes</button>
             </div>
           </div>
         </section>

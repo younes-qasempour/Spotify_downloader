@@ -557,6 +557,12 @@ function renderVirtualTracks() {
 
       playTrackFromList(state.filteredTracks, idx);
     });
+
+    row.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      const idx = Number(row.getAttribute("data-idx"));
+      playTrackFromList(state.filteredTracks, idx);
+    });
   });
 }
 
@@ -600,13 +606,143 @@ function renderMediaGrid(mode) {
   });
 }
 
+// Non-repeating Shuffle Bag & Play History
+let shuffleBag = [];
+let shuffleHistory = [];
+
+function resetShuffleBag() {
+  shuffleBag = [];
+  shuffleHistory = [];
+}
+
+function getNextShuffleIndex() {
+  if (state.playlist.length <= 1) return 0;
+  if (!shuffleBag.length) {
+    shuffleBag = state.playlist.map((_, i) => i);
+    for (let i = shuffleBag.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffleBag[i], shuffleBag[j]] = [shuffleBag[j], shuffleBag[i]];
+    }
+    if (shuffleBag[0] === state.currentIndex && shuffleBag.length > 1) {
+      const swap = Math.floor(Math.random() * (shuffleBag.length - 1)) + 1;
+      [shuffleBag[0], shuffleBag[swap]] = [shuffleBag[swap], shuffleBag[0]];
+    }
+  }
+  return shuffleBag.shift();
+}
+
+function savePlayerState() {
+  try {
+    localStorage.setItem("flacify_volume", state.volume);
+    localStorage.setItem("flacify_muted", state.isMuted ? "1" : "0");
+    localStorage.setItem("flacify_shuffle", state.shuffle ? "1" : "0");
+    localStorage.setItem("flacify_repeat", state.repeatMode);
+    localStorage.setItem("flacify_eq_preset", state.eq.preset);
+  } catch (e) {}
+}
+
+function loadPlayerState() {
+  try {
+    const vol = localStorage.getItem("flacify_volume");
+    if (vol !== null) {
+      state.volume = parseInt(vol, 10);
+      audioEl.volume = state.volume / 100;
+      const vs = document.getElementById("vol-slider");
+      const vf = document.getElementById("vol-fill");
+      if (vs) vs.value = state.volume;
+      if (vf) vf.style.width = `${state.volume}%`;
+    }
+    const muted = localStorage.getItem("flacify_muted");
+    if (muted === "1") {
+      state.isMuted = true;
+      audioEl.muted = true;
+      const mb = document.getElementById("btn-mute");
+      if (mb) mb.classList.add("active");
+    }
+    const shuf = localStorage.getItem("flacify_shuffle");
+    if (shuf === "1") {
+      state.shuffle = true;
+      const sb = document.getElementById("btn-shuffle");
+      if (sb) sb.classList.add("active");
+    }
+    const rep = localStorage.getItem("flacify_repeat");
+    if (rep && ["off", "all", "one"].includes(rep)) {
+      state.repeatMode = rep;
+      updateRepeatButtonUI();
+    }
+  } catch (e) {}
+}
+
+function updateRepeatButtonUI() {
+  const btn = document.getElementById("btn-repeat");
+  if (!btn) return;
+  btn.classList.toggle("active", state.repeatMode !== "off");
+  if (state.repeatMode === "one") {
+    btn.title = "Repeat One";
+  } else if (state.repeatMode === "all") {
+    btn.title = "Repeat All";
+  } else {
+    btn.title = "Repeat Off";
+  }
+}
+
+// Global Media Controller Hooks (for Windows System Tray & Native Media Keys)
+window.triggerMediaPlayPause = () => {
+  if (!state.currentTrack && state.library.tracks.length > 0) {
+    playTrackFromList(state.filteredTracks.length ? state.filteredTracks : state.library.tracks, 0);
+  } else {
+    const btn = document.getElementById("btn-play-pause");
+    if (btn) btn.click();
+  }
+};
+window.triggerMediaNext = () => playNext();
+window.triggerMediaPrev = () => playPrev();
+window.triggerMediaStop = () => {
+  audioEl.pause();
+  audioEl.currentTime = 0;
+};
+window.triggerMediaVolume = (delta) => {
+  const newVol = Math.max(0, Math.min(100, state.volume + delta));
+  state.volume = newVol;
+  audioEl.volume = newVol / 100;
+  const vs = document.getElementById("vol-slider");
+  const vf = document.getElementById("vol-fill");
+  if (vs) vs.value = newVol;
+  if (vf) vf.style.width = `${newVol}%`;
+  savePlayerState();
+};
+window.triggerMediaSeek = (ms) => {
+  if (audioEl.duration) {
+    audioEl.currentTime = Math.max(0, Math.min(audioEl.duration, audioEl.currentTime + (ms / 1000)));
+  }
+};
+window.triggerMediaMute = () => {
+  const mb = document.getElementById("btn-mute");
+  if (mb) mb.click();
+};
+window.triggerMediaShuffle = () => {
+  const sb = document.getElementById("btn-shuffle");
+  if (sb) sb.click();
+};
+window.triggerMediaRepeat = () => {
+  const rb = document.getElementById("btn-repeat");
+  if (rb) rb.click();
+};
+
 // ==========================================================================
 // Playback & Synchronized Lyrics Engine
 // ==========================================================================
 function playTrackFromList(list, index) {
   if (!list || index < 0 || index >= list.length) return;
   ensureAudioGraph();
-  state.playlist = list.slice();
+  if (state.playlist !== list) {
+    state.playlist = list.slice();
+    resetShuffleBag();
+  }
+  if (state.currentIndex >= 0 && state.currentIndex !== index) {
+    shuffleHistory.push(state.currentIndex);
+    if (shuffleHistory.length > 50) shuffleHistory.shift();
+  }
   state.currentIndex = index;
   const track = state.playlist[index];
   state.currentTrack = track;
@@ -660,7 +796,7 @@ function playTrackFromList(list, index) {
 function playNext() {
   if (!state.playlist.length) return;
   if (state.shuffle && state.playlist.length > 1) {
-    const nextIdx = Math.floor(Math.random() * state.playlist.length);
+    const nextIdx = getNextShuffleIndex();
     playTrackFromList(state.playlist, nextIdx);
     return;
   }
@@ -676,6 +812,11 @@ function playPrev() {
   if (!state.playlist.length) return;
   if (audioEl.currentTime > 3) {
     audioEl.currentTime = 0;
+    return;
+  }
+  if (state.shuffle && shuffleHistory.length > 0) {
+    const prevIdx = shuffleHistory.pop();
+    playTrackFromList(state.playlist, prevIdx);
     return;
   }
   const prevIdx = state.currentIndex > 0 ? state.currentIndex - 1 : state.playlist.length - 1;
@@ -890,6 +1031,16 @@ async function pollBackendState() {
   } catch (_) {}
 }
 
+function getQueueBadgeClass(it) {
+  if (it.status === "Failed") return "qbadge qbadge-fail";
+  const b = (it.quality_badge || it.status || "").toUpperCase();
+  if (b.includes("FLAC") || b.includes("HI-RES") || b.includes("24-BIT") || b.includes("16-BIT")) return "qbadge qbadge-flac";
+  if (b.includes("OPUS") || b.includes("YTM") || b.includes("YOUTUBE")) return "qbadge qbadge-opus";
+  if (b.includes("MELOBOT") || b.includes("TELEGRAM")) return "qbadge qbadge-melobot";
+  if (b.includes("MP3") || b.includes("320") || b.includes("MUSILON")) return "qbadge qbadge-mp3";
+  return "qbadge qbadge-melobot";
+}
+
 function renderQueueList() {
   const wrap = document.getElementById("queue-list-container");
   const f = state.queueFilter;
@@ -920,7 +1071,7 @@ function renderQueueList() {
           <span>${it.progress}%</span>
         </div>
       </div>
-      <div><span class="q-badge melobot">${escapeHtml(it.quality_badge || it.status)}</span></div>
+      <div><span class="${getQueueBadgeClass(it)}">${escapeHtml(it.quality_badge || it.status)}</span></div>
       <div style="display:flex; gap:4px; justify-content:flex-end;">
         ${it.status === "Failed" ? `<button class="row-act-btn" data-qact="retry_item" data-id="${it.item_id}" title="Retry">↻</button>` : ""}
         <button class="row-act-btn" data-qact="remove" data-id="${it.item_id}" title="Remove">✕</button>
@@ -1308,20 +1459,274 @@ function saveEqState() {
 // ==========================================================================
 // Settings Initialization
 // ==========================================================================
+function updateMusilonUI(data) {
+  const badge = document.getElementById("musilon-status-badge");
+  const info = document.getElementById("musilon-info-box");
+  if (!badge) return;
+  badge.className = "status-pill";
+  if (data.is_vip) {
+    badge.classList.add("vip");
+    badge.textContent = "VIP Active";
+  } else if (data.is_authenticated) {
+    badge.classList.add("active");
+    badge.textContent = "Account Active";
+  } else if (data.configured) {
+    badge.classList.add("guest");
+    badge.textContent = "Credentials Saved";
+  } else {
+    badge.classList.add("offline");
+    badge.textContent = "Not Configured";
+  }
+
+  let text = "";
+  if (data.budget && data.budget.quota_text) {
+    text = `👑 Quota: ${data.budget.quota_text}`;
+  } else if (data.message) {
+    text = data.message;
+  }
+  if (info) {
+    if (text) {
+      info.textContent = text;
+      info.classList.remove("hidden");
+    } else {
+      info.classList.add("hidden");
+    }
+  }
+}
+
+function updateTelegramUI(data) {
+  const badge = document.getElementById("telegram-status-badge");
+  const info = document.getElementById("telegram-info-box");
+  if (!badge) return;
+  badge.className = "status-pill";
+  if (data.authorized) {
+    badge.classList.add("connected");
+    const u = data.user || {};
+    const name = u.first_name || u.username || "Connected";
+    badge.textContent = `Connected as ${name}`;
+    if (info) {
+      info.textContent = `✈️ Telegram Authorized: @${u.username || u.phone || "user"} (ID: ${u.id || ""})`;
+      info.classList.remove("hidden");
+    }
+  } else {
+    badge.classList.add("disconnected");
+    badge.textContent = "Disconnected";
+    if (info) info.classList.add("hidden");
+  }
+}
+
+function updateSpotifyUI(data) {
+  const badge = document.getElementById("spotify-status-badge");
+  const info = document.getElementById("spotify-info-box");
+  if (!badge) return;
+  badge.className = "status-pill";
+  if (data.has_user_auth) {
+    badge.classList.add("connected");
+    badge.textContent = `Authorized as @${data.user_name || "User"}`;
+    if (info) {
+      info.textContent = `🟢 Full Spotify metadata access active for playlists beyond 100 tracks.`;
+      info.classList.remove("hidden");
+    }
+  } else if (data.configured) {
+    badge.classList.add("guest");
+    badge.textContent = "Keys Configured";
+    if (info) {
+      info.textContent = `Keys set. Validated for standard catalog queries.`;
+      info.classList.remove("hidden");
+    }
+  } else {
+    badge.classList.add("guest");
+    badge.textContent = "Guest Mode (100 cap)";
+    if (info) info.classList.add("hidden");
+  }
+}
+
+function updateFFmpegUI(data) {
+  const badge = document.getElementById("ffmpeg-status-badge");
+  const lbl = document.getElementById("ffmpeg-path-label");
+  if (!badge) return;
+  badge.className = "status-pill";
+  if (data.installed) {
+    badge.classList.add("connected");
+    badge.textContent = "Installed & Ready";
+    if (lbl) lbl.textContent = `Active binary: ${data.path}`;
+  } else {
+    badge.classList.add("offline");
+    badge.textContent = "Missing";
+    if (lbl) lbl.textContent = "FFmpeg is not installed. Click below to download standalone binary.";
+  }
+}
+
+let maintPollTimer = null;
+async function startMaintenanceJob(url, label) {
+  const banner = document.getElementById("maint-status-banner");
+  if (banner) {
+    banner.textContent = `Starting ${label}...`;
+    banner.classList.remove("hidden");
+  }
+  const r = await apiPost(url);
+  if (!r.ok) {
+    if (banner) banner.textContent = r.error || r.message || "Failed to start.";
+    return;
+  }
+  showToast(`${label} started...`);
+  if (maintPollTimer) clearInterval(maintPollTimer);
+  maintPollTimer = setInterval(async () => {
+    const s = await apiGet("/api/maintenance/status");
+    if (!s || !s.ok) return;
+    if (s.running) {
+      if (banner) banner.textContent = `⏳ [${s.task}] ${s.progress || "In progress..."}`;
+    } else {
+      clearInterval(maintPollTimer);
+      maintPollTimer = null;
+      if (s.result && s.result.ok) {
+        if (banner) banner.textContent = `✅ ${label} completed successfully!`;
+        showToast(`${label} finished!`);
+        loadLibrary(true);
+      } else if (banner) {
+        banner.textContent = `❌ ${s.result ? s.result.error : s.progress}`;
+      }
+    }
+  }, 1000);
+}
+
+let ffmpegPollTimer = null;
+async function downloadFFmpeg() {
+  const wrap = document.getElementById("ffmpeg-progress-wrap");
+  const fill = document.getElementById("ffmpeg-prog-fill");
+  const text = document.getElementById("ffmpeg-prog-text");
+  if (wrap) wrap.classList.remove("hidden");
+  if (fill) fill.style.width = "0%";
+  if (text) text.textContent = "Starting...";
+
+  await apiPost("/api/diagnostics/ffmpeg/download");
+  if (ffmpegPollTimer) clearInterval(ffmpegPollTimer);
+  ffmpegPollTimer = setInterval(async () => {
+    const s = await apiGet("/api/diagnostics/ffmpeg/download_status");
+    if (!s || !s.ok) return;
+    if (fill) fill.style.width = `${s.progress}%`;
+    if (text) text.textContent = `${s.progress}% — ${s.message}`;
+    if (!s.downloading) {
+      clearInterval(ffmpegPollTimer);
+      ffmpegPollTimer = null;
+      if (s.success) {
+        showToast("FFmpeg installed successfully!");
+        const ffRes = await apiGet("/api/diagnostics/ffmpeg");
+        updateFFmpegUI(ffRes);
+      } else {
+        showToast(`FFmpeg download failed: ${s.message}`);
+      }
+    }
+  }, 800);
+}
+
+async function saveAllSettings() {
+  const getVal = (id) => (document.getElementById(id) ? document.getElementById(id).value.trim() : "");
+  const getChk = (id) => (document.getElementById(id) ? document.getElementById(id).checked : false);
+  const getNum = (id, def = 0) => (document.getElementById(id) ? Number(document.getElementById(id).value || def) : def);
+
+  const payload = {
+    output_dir: getVal("set-output-dir"),
+    save_in_subfolders: getChk("set-subfolders"),
+    naming_template: getVal("set-naming-template") || "{artist} - {title}",
+    album_naming_template: getVal("set-album-naming-template") || "{track_num}. {artist} - {title}",
+    concurrency: getNum("set-concurrency", 5),
+    preferred_source: getVal("set-preferred-source"),
+    preferred_quality: getVal("set-preferred-quality"),
+    target_format: getVal("set-target-format"),
+    allow_fallback: getChk("set-fallback"),
+    lyrics_mode: getVal("set-lyrics-mode"),
+    embed_lyrics: getChk("set-embed-lyrics"),
+    embed_cover_art: getChk("set-embed-cover"),
+    generate_m3u8: getChk("set-generate-m3u8"),
+    normalize_volume: getChk("set-normalize"),
+    replaygain_tagging: getChk("set-replaygain"),
+    cookies_file: getVal("set-cookies-file"),
+    proxy: getVal("set-proxy"),
+    auto_sync_enabled: getChk("set-autosync-enabled"),
+    auto_sync_interval_min: getNum("set-autosync-interval", 30),
+    spotify_client_id: getVal("set-sp-id"),
+    spotify_client_secret: getVal("set-sp-secret"),
+    musilon_enabled: getChk("set-musilon-enabled"),
+    musilon_username: getVal("set-musilon-email"),
+    musilon_session_cookie: getVal("set-musilon-cookie"),
+    musilon_safe_mode: getChk("set-musilon-safe-mode"),
+    musilon_cooldown_min_sec: getNum("set-musilon-cd-min", 15),
+    musilon_cooldown_max_sec: getNum("set-musilon-cd-max", 35),
+    telegram_enabled: getChk("set-tg-enabled"),
+    telegram_phone: getVal("set-tg-phone"),
+    telegram_safe_delay_sec: getNum("set-tg-delay", 2),
+  };
+
+  const pwdInput = document.getElementById("set-musilon-password");
+  if (pwdInput && pwdInput.value) payload.musilon_password = pwdInput.value;
+
+  await apiPost("/api/settings", { settings: payload });
+  showToast("All settings saved successfully!");
+  loadLibrary(true);
+}
+
+// ==========================================================================
 async function loadSettings() {
-  const res = await apiGet("/api/settings");
-  if (!res || !res.ok || !res.settings) return;
-  const s = res.settings;
-  document.getElementById("set-output-dir").value = s.output_dir || "";
-  document.getElementById("set-subfolders").checked = Boolean(s.save_in_subfolders);
-  document.getElementById("set-preferred-source").value = s.preferred_source || "melobot";
-  document.getElementById("set-normalize").checked = Boolean(s.normalize_audio);
-  document.getElementById("set-embed-lyrics").checked = Boolean(s.embed_lyrics);
-  document.getElementById("set-concurrency").value = s.concurrency || 5;
-  document.getElementById("set-autosync-enabled").checked = Boolean(s.auto_sync_enabled);
-  document.getElementById("set-autosync-interval").value = s.auto_sync_interval_min || 30;
-  document.getElementById("set-sp-id").value = s.spotify_client_id || "";
-  document.getElementById("set-sp-secret").value = s.spotify_client_secret || "";
+  try {
+    const [res, musilonRes, tgRes, spRes, ffRes] = await Promise.all([
+      apiGet("/api/settings"),
+      apiGet("/api/auth/musilon/status"),
+      apiGet("/api/auth/telegram/status"),
+      apiGet("/api/auth/spotify/status"),
+      apiGet("/api/diagnostics/ffmpeg"),
+    ]);
+
+    if (res && res.ok && res.settings) {
+      const s = res.settings;
+      const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val !== undefined ? val : "";
+      };
+      const setChk = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.checked = Boolean(val);
+      };
+
+      setVal("set-output-dir", s.output_dir);
+      setChk("set-subfolders", s.save_in_subfolders);
+      setVal("set-naming-template", s.naming_template);
+      setVal("set-album-naming-template", s.album_naming_template);
+      setVal("set-concurrency", s.concurrency);
+      setVal("set-preferred-source", s.preferred_source);
+      setVal("set-preferred-quality", s.preferred_quality);
+      setVal("set-target-format", s.target_format);
+      setChk("set-fallback", s.allow_fallback);
+      setVal("set-lyrics-mode", s.lyrics_mode);
+      setChk("set-embed-lyrics", s.embed_lyrics);
+      setChk("set-embed-cover", s.embed_cover_art);
+      setChk("set-generate-m3u8", s.generate_m3u8);
+      setChk("set-normalize", s.normalize_volume);
+      setChk("set-replaygain", s.replaygain_tagging);
+      setVal("set-cookies-file", s.cookies_file);
+      setVal("set-proxy", s.proxy);
+      setChk("set-autosync-enabled", s.auto_sync_enabled);
+      setVal("set-autosync-interval", s.auto_sync_interval_min);
+      setVal("set-sp-id", s.spotify_client_id);
+      setVal("set-sp-secret", s.spotify_client_secret);
+      setVal("set-musilon-email", s.musilon_username);
+      setVal("set-musilon-cookie", s.musilon_session_cookie);
+      setChk("set-musilon-enabled", s.musilon_enabled);
+      setChk("set-musilon-safe-mode", s.musilon_safe_mode);
+      setVal("set-musilon-cd-min", s.musilon_cooldown_min_sec);
+      setVal("set-musilon-cd-max", s.musilon_cooldown_max_sec);
+      setVal("set-tg-phone", s.telegram_phone);
+      setChk("set-tg-enabled", s.telegram_enabled);
+      setVal("set-tg-delay", s.telegram_safe_delay_sec);
+    }
+
+    if (musilonRes && musilonRes.ok) updateMusilonUI(musilonRes);
+    if (tgRes && tgRes.ok) updateTelegramUI(tgRes);
+    if (spRes && spRes.ok) updateSpotifyUI(spRes);
+    if (ffRes && ffRes.ok) updateFFmpegUI(ffRes);
+  } catch (err) {
+    console.error("Error loading settings:", err);
+  }
 }
 
 // ==========================================================================
@@ -1620,8 +2025,20 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // Settings Tab Navigation
+  document.querySelectorAll("#settings-sub-tabs .settings-tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#settings-sub-tabs .settings-tab-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const tab = btn.dataset.tab;
+      document.querySelectorAll(".settings-tab-panel").forEach(p => {
+        p.classList.toggle("hidden", p.id !== `stab-${tab}`);
+      });
+    });
+  });
+
   // Settings Actions
-  document.getElementById("btn-browse-dir").addEventListener("click", async () => {
+  document.getElementById("btn-browse-dir")?.addEventListener("click", async () => {
     const cur = document.getElementById("set-output-dir").value;
     const r = await apiPost("/api/dialog/folder", { current: cur });
     if (r && r.ok && r.path) {
@@ -1629,24 +2046,149 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  document.getElementById("btn-save-settings").addEventListener("click", async () => {
-    await apiPost("/api/settings", {
-      settings: {
-        output_dir: document.getElementById("set-output-dir").value.trim(),
-        save_in_subfolders: document.getElementById("set-subfolders").checked,
-        preferred_source: document.getElementById("set-preferred-source").value,
-        normalize_audio: document.getElementById("set-normalize").checked,
-        embed_lyrics: document.getElementById("set-embed-lyrics").checked,
-        concurrency: Number(document.getElementById("set-concurrency").value || 5),
-        auto_sync_enabled: document.getElementById("set-autosync-enabled").checked,
-        auto_sync_interval_min: Number(document.getElementById("set-autosync-interval").value || 30),
-        spotify_client_id: document.getElementById("set-sp-id").value.trim(),
-        spotify_client_secret: document.getElementById("set-sp-secret").value.trim(),
-      },
-    });
-    showToast("Settings saved!");
-    loadLibrary(true);
+  document.getElementById("btn-open-dir-explorer")?.addEventListener("click", () => {
+    const p = document.getElementById("set-output-dir").value.trim();
+    apiPost("/api/shell/open", { path: p });
   });
+
+  document.getElementById("btn-save-settings")?.addEventListener("click", saveAllSettings);
+  document.getElementById("btn-save-settings-top")?.addEventListener("click", saveAllSettings);
+
+  // Musilon Actions
+  document.getElementById("btn-musilon-login")?.addEventListener("click", async () => {
+    const email = document.getElementById("set-musilon-email").value.trim();
+    const pwd = document.getElementById("set-musilon-password").value.trim();
+    if (!email || !pwd) {
+      showToast("Please enter Musilon email and password.");
+      return;
+    }
+    showToast("Logging in to Musilon...");
+    const r = await apiPost("/api/auth/musilon/login", { username: email, password: pwd });
+    if (r.ok) {
+      showToast("Musilon authenticated successfully!");
+      updateMusilonUI(r);
+      const st = await apiGet("/api/auth/musilon/status");
+      updateMusilonUI(st);
+      if (r.cookie) document.getElementById("set-musilon-cookie").value = r.cookie;
+    } else {
+      showToast(`Login failed: ${r.error || "Unknown error"}`);
+    }
+  });
+
+  document.getElementById("btn-musilon-test")?.addEventListener("click", async () => {
+    showToast("Testing Musilon connection...");
+    const r = await apiPost("/api/auth/musilon/test");
+    updateMusilonUI(r);
+    showToast(r.message || "Test completed.");
+  });
+
+  document.getElementById("btn-paste-musilon-cookie")?.addEventListener("click", async () => {
+    let cookie = document.getElementById("set-musilon-cookie").value.trim();
+    if (!cookie) {
+      try {
+        cookie = await navigator.clipboard.readText();
+        document.getElementById("set-musilon-cookie").value = cookie;
+      } catch (_) {}
+    }
+    if (!cookie) {
+      showToast("Paste a session cookie into the input first.");
+      return;
+    }
+    showToast("Validating session cookie...");
+    const r = await apiPost("/api/auth/musilon/cookie", { cookie });
+    updateMusilonUI(r);
+    showToast(r.message || "Cookie updated.");
+  });
+
+  // Telegram Actions
+  document.getElementById("btn-tg-send-code")?.addEventListener("click", async () => {
+    const phone = document.getElementById("set-tg-phone").value.trim();
+    if (!phone) {
+      showToast("Enter a valid Telegram phone number.");
+      return;
+    }
+    showToast("Sending verification code to Telegram...");
+    const r = await apiPost("/api/auth/telegram/send_code", { phone });
+    if (r.ok) {
+      showToast("Code sent! Check your Telegram app.");
+      const info = document.getElementById("telegram-info-box");
+      if (info) {
+        info.textContent = "Code sent! Check your official Telegram chat for the 5-digit code.";
+        info.classList.remove("hidden");
+      }
+      document.getElementById("set-tg-code").focus();
+    } else {
+      showToast(`Failed to send code: ${r.error}`);
+    }
+  });
+
+  document.getElementById("btn-tg-signin")?.addEventListener("click", async () => {
+    const phone = document.getElementById("set-tg-phone").value.trim();
+    const code = document.getElementById("set-tg-code").value.trim();
+    const pwd = document.getElementById("set-tg-2fa").value.trim();
+    if (!code) {
+      showToast("Please enter the verification code sent to Telegram.");
+      return;
+    }
+    showToast("Connecting to Telegram...");
+    const r = await apiPost("/api/auth/telegram/sign_in", { phone, code, password: pwd });
+    if (r.ok) {
+      showToast("Connected to Telegram successfully!");
+      const st = await apiGet("/api/auth/telegram/status");
+      updateTelegramUI(st);
+    } else {
+      if (r.error && (r.error.toLowerCase().includes("2fa") || r.error.toLowerCase().includes("password"))) {
+        document.getElementById("tg-2fa-row").style.display = "flex";
+        document.getElementById("set-tg-2fa").focus();
+        showToast("Two-Factor Authentication required. Enter your 2FA password.");
+      } else {
+        showToast(`Sign-in failed: ${r.error}`);
+      }
+    }
+  });
+
+  document.getElementById("btn-tg-check")?.addEventListener("click", async () => {
+    const st = await apiGet("/api/auth/telegram/status");
+    updateTelegramUI(st);
+    showToast(st.authorized ? "Telegram is connected!" : "Telegram is disconnected.");
+  });
+
+  document.getElementById("btn-tg-logout")?.addEventListener("click", async () => {
+    if (!confirm("Disconnect and log out of Telegram?")) return;
+    await apiPost("/api/auth/telegram/logout");
+    const st = await apiGet("/api/auth/telegram/status");
+    updateTelegramUI(st);
+    showToast("Logged out of Telegram.");
+  });
+
+  // Spotify Validate Action
+  document.getElementById("btn-sp-validate")?.addEventListener("click", async () => {
+    const cid = document.getElementById("set-sp-id").value.trim();
+    const sec = document.getElementById("set-sp-secret").value.trim();
+    if (!cid || !sec) {
+      showToast("Enter both Spotify Client ID and Client Secret.");
+      return;
+    }
+    showToast("Validating Spotify API keys...");
+    const r = await apiPost("/api/auth/spotify/validate", { client_id: cid, client_secret: sec });
+    if (r.ok) {
+      showToast(r.message || "Spotify keys verified!");
+      const st = await apiGet("/api/auth/spotify/status");
+      updateSpotifyUI(st);
+    } else {
+      showToast(`Validation error: ${r.error}`);
+    }
+  });
+
+  // FFmpeg Actions
+  document.getElementById("btn-download-ffmpeg")?.addEventListener("click", downloadFFmpeg);
+
+  // Maintenance Actions
+  document.getElementById("btn-maint-clean")?.addEventListener("click", () => startMaintenanceJob("/api/maintenance/clean", "Clean Library & Cache"));
+  document.getElementById("btn-maint-repair")?.addEventListener("click", () => startMaintenanceJob("/api/maintenance/repair", "Scan & Auto-Repair"));
+  document.getElementById("btn-maint-retag")?.addEventListener("click", () => startMaintenanceJob("/api/maintenance/retag_genres", "Synchronize Genres"));
+  document.getElementById("btn-maint-boost")?.addEventListener("click", () => startMaintenanceJob("/api/maintenance/boost_volume", "Volume Boost & Balance"));
+  document.getElementById("btn-maint-replaygain")?.addEventListener("click", () => startMaintenanceJob("/api/maintenance/replaygain", "Calculate ReplayGain"));
 
   // Player Bar Transport Events
   document.getElementById("btn-play-pause").addEventListener("click", () => {
@@ -1668,11 +2210,14 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("btn-shuffle").addEventListener("click", (e) => {
     state.shuffle = !state.shuffle;
     e.currentTarget.classList.toggle("active", state.shuffle);
+    if (state.shuffle) resetShuffleBag();
+    savePlayerState();
   });
 
-  document.getElementById("btn-repeat").addEventListener("click", (e) => {
+  document.getElementById("btn-repeat").addEventListener("click", () => {
     state.repeatMode = state.repeatMode === "off" ? "all" : state.repeatMode === "all" ? "one" : "off";
-    e.currentTarget.classList.toggle("active", state.repeatMode !== "off");
+    updateRepeatButtonUI();
+    savePlayerState();
   });
 
   // Audio Element Listeners
@@ -1754,12 +2299,15 @@ document.addEventListener("DOMContentLoaded", () => {
     state.volume = v;
     audioEl.volume = v / 100;
     volFill.style.width = `${v}%`;
+    savePlayerState();
   });
 
   document.getElementById("btn-mute").addEventListener("click", () => {
     state.isMuted = !state.isMuted;
     audioEl.muted = state.isMuted;
     volFill.style.width = state.isMuted ? "0%" : `${state.volume}%`;
+    document.getElementById("btn-mute").classList.toggle("active", state.isMuted);
+    savePlayerState();
   });
 
   // Lyrics Drawer Controls
@@ -1921,6 +2469,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Boot Studio
+  loadPlayerState();
   loadLibrary();
   initEqualizerUI();
   pollBackendState();
