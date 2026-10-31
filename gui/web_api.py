@@ -985,16 +985,29 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             selected_ids = set(body.get("spotify_ids") or [])
             limit = int(body.get("limit") or 0)
             to_queue: List[TrackMetadata] = []
+            queued_ids: List[str] = []
 
             for r in rows:
                 fp = r.get("file_path") or r.get("local_path") or ""
-                is_dl = (r.get("status") == "downloaded") and bool(fp) and os.path.isfile(fp)
+                st = (r.get("status") or "").lower()
+                is_dl = (st == "downloaded") and bool(fp) and os.path.isfile(fp)
                 if not is_dl and fp and os.path.isfile(fp):
                     is_dl = True
-                if action in ("download_missing", "download_batch") and is_dl:
+
+                # Skip already downloaded tracks
+                if is_dl:
                     continue
-                if action == "download_selected" and r.get("spotify_id") not in selected_ids:
-                    continue
+
+                # For batch or missing: only queue tracks that are currently pending (skip already queued/downloading)
+                if action in ("download_missing", "download_batch"):
+                    if st in ("queued", "downloading"):
+                        continue
+
+                # For selected: must be in selected_ids
+                if action == "download_selected":
+                    if r.get("spotify_id") not in selected_ids:
+                        continue
+
                 meta_json = r.get("metadata_json")
                 if meta_json:
                     try:
@@ -1004,9 +1017,11 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                             tm.collection_name = pl["name"]
                             tm.collection_type = "playlist"
                         to_queue.append(tm)
+                        queued_ids.append(tm.id)
                         continue
                     except Exception:
                         pass
+
                 tm = TrackMetadata(
                     id=r.get("spotify_id", ""),
                     title=r.get("title", "Unknown"),
@@ -1018,14 +1033,20 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                     collection_type="playlist",
                 )
                 to_queue.append(tm)
+                queued_ids.append(tm.id)
 
             if limit > 0 and len(to_queue) > limit:
                 to_queue = to_queue[:limit]
+                queued_ids = queued_ids[:limit]
 
             if to_queue:
+                # 1. Update database to mark tracks as 'queued' (matching v1.6.2 behavior)
+                self.state.archive.mark_saved_tracks_queued(pid, queued_ids)
+                # 2. Enqueue into DownloadQueueManager and start downloading
                 self.state.qm.enqueue(to_queue)
-                self.state.qm.start_all()
-            return self._send_json({"ok": True, "queued": len(to_queue), "limit": limit})
+                self.state.qm.start()
+
+            return self._send_json({"ok": True, "queued": len(to_queue), "limit": limit, "queued_ids": queued_ids})
 
         elif action == "edit_playlist" and pid:
             name = (body.get("name") or "").strip()
@@ -1940,6 +1961,7 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             self._send_json({
                 "ok": True,
                 "configured": has_keys,
+                "has_credentials": has_keys,
                 "client_id": cid,
                 "has_user_auth": user_auth,
                 "user_name": user_name,

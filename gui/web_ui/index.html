@@ -283,27 +283,48 @@
 
         <!-- 3. SAVED & WATCHED PLAYLISTS VIEW -->
         <section class="view-page" id="view-saved">
-          <!-- Top Overview & Spotify API Status Bar -->
+          <!-- Top Overview & Spotify API Status Bar (v1.6.2 Metric Cards + Modern GUI) -->
           <div class="saved-top-overview" id="saved-top-overview">
-            <div class="saved-overview-left">
-              <h2>Saved &amp; Watched Playlists</h2>
-              <div class="saved-overview-metrics" id="saved-overview-metrics">
-                <span id="saved-metric-count">0 playlists</span> • <span id="saved-metric-tracks">0 total tracks</span>
+            <div class="saved-overview-header-row">
+              <div class="saved-overview-title-box">
+                <h2>Saved &amp; Watched Playlists</h2>
+                <span class="saved-overview-subtitle">Manage offline Spotify playlists, delta-sync updates, and download in controlled batches.</span>
+              </div>
+              <div class="saved-api-banner" id="saved-api-banner">
+                <span id="saved-api-icon">✓</span>
+                <span id="saved-api-text">Checking Spotify API status...</span>
+                <button class="ghost-pill-btn hidden" id="saved-api-btn">Configure Keys</button>
+                <button class="banner-dismiss-btn" id="btn-dismiss-api-banner" title="Dismiss banner">✕</button>
+              </div>
+              <div class="saved-overview-actions">
+                <button class="btn-primary-emerald" id="btn-add-saved-pl" title="Save new Spotify playlist offline">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                  <span>+ Save Spotify Playlist</span>
+                </button>
+                <button class="btn-secondary-dark" id="btn-sync-all-saved" title="Check all saved playlists for newly added songs online">
+                  ↻ Sync All
+                </button>
               </div>
             </div>
-            <div class="saved-api-banner" id="saved-api-banner">
-              <span id="saved-api-icon">⚡</span>
-              <span id="saved-api-text">Checking Spotify API status...</span>
-              <button class="ghost-pill-btn hidden" id="saved-api-btn">Configure Keys</button>
-            </div>
-            <div class="saved-overview-actions">
-              <button class="btn-primary-emerald" id="btn-add-saved-pl">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-                <span>Save Spotify Playlist</span>
-              </button>
-              <button class="btn-secondary-dark" id="btn-sync-all-saved" title="Check all saved playlists for newly added songs online">
-                ↻ Sync All
-              </button>
+
+            <!-- v1.6.2 Metric Cards Row (Glassmorphic) -->
+            <div class="saved-metrics-bar">
+              <div class="saved-metric-card">
+                <div class="metric-num" id="saved-metric-count">0</div>
+                <div class="metric-label">Saved Playlists</div>
+              </div>
+              <div class="saved-metric-card">
+                <div class="metric-num" id="saved-metric-tracks">0</div>
+                <div class="metric-label">Total Tracks</div>
+              </div>
+              <div class="saved-metric-card emerald-tint">
+                <div class="metric-num" id="saved-metric-downloaded">0</div>
+                <div class="metric-label">Downloaded</div>
+              </div>
+              <div class="saved-metric-card amber-tint">
+                <div class="metric-num" id="saved-metric-pending">0</div>
+                <div class="metric-label">Missing / Pending</div>
+              </div>
             </div>
           </div>
 
@@ -322,7 +343,88 @@
               <div class="empty-state">Select a saved playlist on the left to inspect tracks, configure batch download quotas, or toggle Watch Auto-Sync.</div>
             </div>
           </div>
-          <!-- Tool C: Batch Tag & Metadata Editor -->
+          
+
+              <!-- Filter Search for Tracks -->
+              <div class="batchtag-table-toolbar">
+                <input type="text" id="batchtag-search-input" class="sleek-input" placeholder="Filter library tracks by title, artist, or album..." style="max-width: 380px;" />
+                <div id="batchtag-status-msg" class="batchtag-status-msg"></div>
+              </div>
+
+              <!-- Track Selection Table -->
+              <div class="batchtag-table-wrap">
+                <table class="batchtag-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 40px;"><input type="checkbox" id="chk-batchtag-master" /></th>
+                      <th style="width: 52px;">Cover</th>
+                      <th>Title</th>
+                      <th>Artist</th>
+                      <th>Album</th>
+                      <th>Format</th>
+                      <th>Filename</th>
+                    </tr>
+                  </thead>
+                  <tbody id="batchtag-table-body">
+                    <!-- Dynamic Rows -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4. AUDIO LAB & STUDIO TOOLS VIEW (Spectrum Inspector + Smart Duplicate Merger) -->
+        <section class="view-page" id="view-tools">
+          <div class="tools-header">
+            <div class="segmented-tabs" id="tools-tabs">
+              <button class="seg-tab active" data-tooltab="spectrum">🔬 True Spectrum &amp; Fake-Bitrate Inspector</button>
+              <button class="seg-tab" data-tooltab="duplicates">🧬 Smart Duplicate &amp; Fingerprint Merger</button>
+              <button class="seg-tab" data-tooltab="batchtag">🏷️ Batch Tag &amp; Metadata Editor</button>
+            </div>
+          </div>
+
+          <!-- Tool A: Spectrum Inspector -->
+          <div id="tool-panel-spectrum" class="tool-panel">
+            <div class="tool-card">
+              <div class="tool-card-top">
+                <div>
+                  <h3>True Audio Spectrum &amp; Fake-Bitrate Auditor</h3>
+                  <p>Detect upscaled 128kbps transcodes disguised as 320kbps MP3 or FLAC by measuring actual acoustic energy roll-off up to 22 kHz.</p>
+                </div>
+                <div class="tool-btn-row">
+                  <button class="btn-primary-emerald" id="btn-run-spectrum-batch">Audit Library Sample (60 Tracks)</button>
+                </div>
+              </div>
+              <div id="spectrum-single-result" class="spectrum-single-box hidden"></div>
+              <div id="spectrum-batch-status" class="spectrum-status-bar hidden"></div>
+              <div id="spectrum-results-table" class="spectrum-table-wrap"></div>
+            </div>
+          </div>
+
+          <!-- Tool B: Duplicate Merger -->
+          <div id="tool-panel-duplicates" class="tool-panel hidden">
+            <div class="tool-card">
+              <div class="tool-card-top">
+                <div>
+                  <h3>Smart Duplicate &amp; Acoustic Fingerprint Merger</h3>
+                  <p>Find identical tracks across playlists using ISRC, duration, and Chromaprint acoustic fingerprinting. Reclaim disk space via NTFS Hard-Linking (0 bytes wasted) or Clean Merge.</p>
+                </div>
+                <div class="tool-btn-row">
+                  <label class="checkbox-pill">
+                    <input type="checkbox" id="chk-dup-fingerprint" />
+                    <span>Deep Acoustic Fingerprint</span>
+                  </label>
+                  <button class="btn-secondary-dark" id="btn-scan-duplicates">Scan Library</button>
+                  <button class="btn-primary-emerald hidden" id="btn-hardlink-duplicates">Hard-Link Consolidate</button>
+                  <button class="btn-danger-outline hidden" id="btn-merge-duplicates">Clean Merge</button>
+                </div>
+              </div>
+              <div id="duplicates-summary" class="dup-summary">Click "Scan Library" to detect duplicate songs across folders.</div>
+              <div id="duplicates-list" class="dup-groups-list"></div>
+            </div>
+          </div>
+        <!-- Tool C: Batch Tag & Metadata Editor -->
           <div id="tool-panel-batchtag" class="tool-panel hidden">
             <div class="tool-card">
               <div class="tool-card-top">
@@ -409,86 +511,6 @@
                   </div>
                 </div>
               </div>
-
-              <!-- Filter Search for Tracks -->
-              <div class="batchtag-table-toolbar">
-                <input type="text" id="batchtag-search-input" class="sleek-input" placeholder="Filter library tracks by title, artist, or album..." style="max-width: 380px;" />
-                <div id="batchtag-status-msg" class="batchtag-status-msg"></div>
-              </div>
-
-              <!-- Track Selection Table -->
-              <div class="batchtag-table-wrap">
-                <table class="batchtag-table">
-                  <thead>
-                    <tr>
-                      <th style="width: 40px;"><input type="checkbox" id="chk-batchtag-master" /></th>
-                      <th style="width: 52px;">Cover</th>
-                      <th>Title</th>
-                      <th>Artist</th>
-                      <th>Album</th>
-                      <th>Format</th>
-                      <th>Filename</th>
-                    </tr>
-                  </thead>
-                  <tbody id="batchtag-table-body">
-                    <!-- Dynamic Rows -->
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- 4. AUDIO LAB & STUDIO TOOLS VIEW (Spectrum Inspector + Smart Duplicate Merger) -->
-        <section class="view-page" id="view-tools">
-          <div class="tools-header">
-            <div class="segmented-tabs" id="tools-tabs">
-              <button class="seg-tab active" data-tooltab="spectrum">🔬 True Spectrum &amp; Fake-Bitrate Inspector</button>
-              <button class="seg-tab" data-tooltab="duplicates">🧬 Smart Duplicate &amp; Fingerprint Merger</button>
-              <button class="seg-tab" data-tooltab="batchtag">🏷️ Batch Tag &amp; Metadata Editor</button>
-            </div>
-          </div>
-
-          <!-- Tool A: Spectrum Inspector -->
-          <div id="tool-panel-spectrum" class="tool-panel">
-            <div class="tool-card">
-              <div class="tool-card-top">
-                <div>
-                  <h3>True Audio Spectrum &amp; Fake-Bitrate Auditor</h3>
-                  <p>Detect upscaled 128kbps transcodes disguised as 320kbps MP3 or FLAC by measuring actual acoustic energy roll-off up to 22 kHz.</p>
-                </div>
-                <div class="tool-btn-row">
-                  <button class="btn-primary-emerald" id="btn-run-spectrum-batch">Audit Library Sample (60 Tracks)</button>
-                </div>
-              </div>
-              <div id="spectrum-single-result" class="spectrum-single-box hidden"></div>
-              <div id="spectrum-batch-status" class="spectrum-status-bar hidden"></div>
-              <div id="spectrum-results-table" class="spectrum-table-wrap"></div>
-            </div>
-          </div>
-
-          <!-- Tool B: Duplicate Merger -->
-          <div id="tool-panel-duplicates" class="tool-panel hidden">
-            <div class="tool-card">
-              <div class="tool-card-top">
-                <div>
-                  <h3>Smart Duplicate &amp; Acoustic Fingerprint Merger</h3>
-                  <p>Find identical tracks across playlists using ISRC, duration, and Chromaprint acoustic fingerprinting. Reclaim disk space via NTFS Hard-Linking (0 bytes wasted) or Clean Merge.</p>
-                </div>
-                <div class="tool-btn-row">
-                  <label class="checkbox-pill">
-                    <input type="checkbox" id="chk-dup-fingerprint" />
-                    <span>Deep Acoustic Fingerprint</span>
-                  </label>
-                  <button class="btn-secondary-dark" id="btn-scan-duplicates">Scan Library</button>
-                  <button class="btn-primary-emerald hidden" id="btn-hardlink-duplicates">Hard-Link Consolidate</button>
-                  <button class="btn-danger-outline hidden" id="btn-merge-duplicates">Clean Merge</button>
-                </div>
-              </div>
-              <div id="duplicates-summary" class="dup-summary">Click "Scan Library" to detect duplicate songs across folders.</div>
-              <div id="duplicates-list" class="dup-groups-list"></div>
-            </div>
-          </div>
         </section>
 
         <!-- 5. SETTINGS VIEW -->

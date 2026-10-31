@@ -1100,7 +1100,13 @@ async function pollBackendState() {
     } else {
       qPill.classList.add("hidden");
     }
-    document.getElementById("nav-watch-count").textContent = st.watched_playlists_count || 0;
+    const watchBadge = document.getElementById("nav-watch-count");
+    if (watchBadge) {
+      const savedCount = (state.savedPlaylists && state.savedPlaylists.length) || (st.saved_playlists_count || 0);
+      watchBadge.textContent = savedCount;
+      if (savedCount > 0) watchBadge.classList.remove("hidden");
+      else watchBadge.classList.add("hidden");
+    }
 
     // Queue counts
     document.getElementById("q-cnt-all").textContent = st.counts.all || 0;
@@ -1113,6 +1119,17 @@ async function pollBackendState() {
 
     if (state.activeView === "queue") {
       renderQueueList();
+    } else if (state.activeView === "saved" && state.selectedSavedPlaylistId) {
+      // Live background sync: if completed downloads count changed, refresh track table
+      if (st.counts.completed !== state._lastCompletedCount) {
+        state._lastCompletedCount = st.counts.completed;
+        apiGet(`/api/saved_playlists/tracks?id=${encodeURIComponent(state.selectedSavedPlaylistId)}`).then(res => {
+          if (res && res.ok && res.tracks) {
+            currentSavedTracks = res.tracks;
+            renderFilteredSavedTracks();
+          }
+        }).catch(() => {});
+      }
     }
   } catch (_) {}
 }
@@ -1182,12 +1199,20 @@ async function loadSavedPlaylists() {
   if (!res || !res.ok) return;
   state.savedPlaylists = res.playlists || [];
 
-  // Update Overview Metrics
-  const metricCount = document.getElementById("saved-metric-count");
-  const metricTracks = document.getElementById("saved-metric-tracks");
+  // Update Overview 4-Metric Cards (v1.6.2 Master Stats)
   const totalTracks = state.savedPlaylists.reduce((acc, p) => acc + (p.total_tracks || p.track_count || 0), 0);
-  if (metricCount) metricCount.textContent = `${state.savedPlaylists.length} playlists`;
-  if (metricTracks) metricTracks.textContent = `${totalTracks.toLocaleString()} total tracks`;
+  const totalDownloaded = state.savedPlaylists.reduce((acc, p) => acc + (p.downloaded_count || 0), 0);
+  const totalPending = Math.max(0, totalTracks - totalDownloaded);
+
+  const elCount = document.getElementById("saved-metric-count");
+  const elTracks = document.getElementById("saved-metric-tracks");
+  const elDownloaded = document.getElementById("saved-metric-downloaded");
+  const elPending = document.getElementById("saved-metric-pending");
+
+  if (elCount) elCount.textContent = state.savedPlaylists.length.toLocaleString();
+  if (elTracks) elTracks.textContent = totalTracks.toLocaleString();
+  if (elDownloaded) elDownloaded.textContent = totalDownloaded.toLocaleString();
+  if (elPending) elPending.textContent = totalPending.toLocaleString();
 
   // Update Spotify API Banner Status
   apiGet("/api/auth/spotify/status").then(st => {
@@ -1195,13 +1220,22 @@ async function loadSavedPlaylists() {
     const bannerIcon = document.getElementById("saved-api-icon");
     const bannerText = document.getElementById("saved-api-text");
     const bannerBtn = document.getElementById("saved-api-btn");
+    const dismissBtn = document.getElementById("btn-dismiss-api-banner");
     if (!banner || !st) return;
 
-    if (st.has_credentials) {
+    if (dismissBtn) {
+      dismissBtn.onclick = (e) => {
+        e.stopPropagation();
+        banner.style.display = "none";
+      };
+    }
+
+    const isConfigured = Boolean(st.configured || st.has_credentials || st.has_user_auth);
+    if (isConfigured) {
       banner.className = "saved-api-banner connected";
       bannerIcon.textContent = "✓";
       bannerText.textContent = st.has_user_auth
-        ? `Spotify API Connected (${st.user_name ? "@" + st.user_name : "Authorized"}): Full pagination enabled for large playlists.`
+        ? `Spotify API Connected${st.user_name ? " (@" + st.user_name + ")" : ""}: Full pagination active.`
         : "Spotify API Keys Connected: Full playlist pagination active.";
       if (bannerBtn) bannerBtn.classList.add("hidden");
     } else {
@@ -1215,7 +1249,20 @@ async function loadSavedPlaylists() {
     }
   }).catch(() => {});
 
+  // Update Sidebar Saved Count Pill
+  const watchNav = document.getElementById("nav-watch-count");
+  if (watchNav) {
+    watchNav.textContent = state.savedPlaylists.length;
+    if (state.savedPlaylists.length > 0) watchNav.classList.remove("hidden");
+    else watchNav.classList.add("hidden");
+  }
+
   renderSavedPlaylistsList();
+
+  // Auto-select first playlist if none selected so detail pane is never blank
+  if (!state.selectedSavedPlaylistId && state.savedPlaylists.length > 0) {
+    loadSavedPlaylistDetail(state.savedPlaylists[0].id);
+  }
 }
 
 let savedPlaylistFilterQuery = "";
@@ -1234,15 +1281,21 @@ function renderSavedPlaylistsList() {
     return;
   }
 
-  listEl.innerHTML = filtered.map(p => `
-    <div class="side-coll-row ${state.selectedSavedPlaylistId === p.id ? "active" : ""}" data-pid="${escapeHtml(p.id)}">
-      <img class="side-coll-thumb" src="${coverUrl(p.local_cover || p.cover_url)}" onerror="this.style.visibility='hidden'" />
-      <div class="side-coll-meta">
-        <div class="side-coll-title">${p.auto_sync ? "⏱ " : ""}${escapeHtml(p.name)}</div>
-        <div class="side-coll-sub">${p.downloaded_count || 0} / ${p.total_tracks || p.track_count || 0} downloaded</div>
+  listEl.innerHTML = filtered.map(p => {
+    const total = p.total_tracks || p.track_count || 0;
+    const dl = p.downloaded_count || 0;
+    const pct = total > 0 ? Math.round((dl / total) * 100) : 0;
+    return `
+      <div class="side-coll-row ${state.selectedSavedPlaylistId === p.id ? "active" : ""}" data-pid="${escapeHtml(p.id)}">
+        <img class="side-coll-thumb" src="${coverUrl(p.local_cover || p.cover_url)}" onerror="this.style.visibility='hidden'" />
+        <div class="side-coll-meta">
+          <div class="side-coll-title">${p.auto_sync ? "⏱ " : ""}${escapeHtml(p.name)}</div>
+          <div class="side-coll-sub">${dl.toLocaleString()} / ${total.toLocaleString()} downloaded (${pct}%)</div>
+          <div class="side-coll-prog"><div class="side-coll-prog-fill" style="width: ${pct}%"></div></div>
+        </div>
       </div>
-    </div>
-  `).join("");
+    `;
+  }).join("");
 
   listEl.querySelectorAll(".side-coll-row").forEach(row => {
     row.addEventListener("click", () => {
@@ -1255,7 +1308,7 @@ let currentSavedTracks = [];
 let savedTrackFilter = "all"; // 'all' | 'downloaded' | 'missing' | 'queued'
 let savedTrackQuery = "";
 let savedTrackSort = "default";
-let savedTrackSliceLimit = 200;
+let savedTrackSliceLimit = 250;
 
 async function loadSavedPlaylistDetail(pid) {
   state.selectedSavedPlaylistId = pid;
@@ -1274,15 +1327,14 @@ async function loadSavedPlaylistDetail(pid) {
   const pl = res.playlist;
   const tracks = res.tracks || [];
   currentSavedTracks = tracks;
-  savedTrackFilter = "all";
-  savedTrackQuery = "";
-  savedTrackSliceLimit = 200;
+  savedTrackSliceLimit = 250;
 
   const downloadedCnt = tracks.filter(t => t.is_downloaded).length;
-  const missingCnt = tracks.length - downloadedCnt;
+  const missingCnt = tracks.filter(t => !t.is_downloaded && (t.status || "").toLowerCase() !== "queued" && (t.status || "").toLowerCase() !== "downloading").length;
   const queuedCnt = tracks.filter(t => (t.status || "").toLowerCase() === "queued" || (t.status || "").toLowerCase() === "downloading").length;
   const pct = tracks.length > 0 ? Math.round((downloadedCnt / tracks.length) * 100) : 0;
   const cUrl = coverUrl(pl.local_cover || pl.cover_url);
+  const effBatch = Math.min(state.savedBatchSize, missingCnt || 1);
 
   pane.innerHTML = `
     <!-- Playlist Detail Header -->
@@ -1295,7 +1347,7 @@ async function loadSavedPlaylistDetail(pid) {
             ${pl.spotify_url ? `<button class="ghost-pill-btn" id="btn-pl-copy-url" title="Copy Spotify Link" style="font-size:11px; padding:2px 8px;">🔗 Link</button>` : ""}
           </div>
           <div style="color:var(--text-secondary); font-size:12px; margin-top:4px;">
-            ${tracks.length.toLocaleString()} tracks • <span style="color:#4ade80;">${downloadedCnt.toLocaleString()} downloaded</span>${missingCnt > 0 ? ` • <span style="color:#f87171;">${missingCnt.toLocaleString()} missing</span>` : ""} • ${pct}% complete • Last synced: ${escapeHtml(pl.last_synced_at || "Never")}
+            ${tracks.length.toLocaleString()} tracks • <span style="color:#4ade80;">${downloadedCnt.toLocaleString()} downloaded</span>${missingCnt > 0 ? ` • <span style="color:#fbbf24;">${missingCnt.toLocaleString()} missing</span>` : ""}${queuedCnt > 0 ? ` • <span style="color:#93c5fd;">${queuedCnt.toLocaleString()} queued</span>` : ""} • ${pct}% complete • Last synced: ${escapeHtml(pl.last_synced_at || "Never")}
           </div>
         </div>
       </div>
@@ -1316,30 +1368,38 @@ async function loadSavedPlaylistDetail(pid) {
       </div>
     </div>
 
-    <!-- Batch Download & VIP Quota Control Card (v1.6.2 Restored) -->
+    <!-- Batch Download & VIP Quota Control Card (v1.6.2 Master Controls) -->
     <div class="batch-card">
       <div class="batch-action-col">
         <button class="btn-primary-emerald" id="btn-pl-download-batch" style="padding:6px 14px; font-weight:700;">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="margin-right:4px;"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-          <span id="lbl-batch-btn-text">Download Next Batch (${Math.min(state.savedBatchSize, missingCnt || 1)})</span>
+          <span id="lbl-batch-btn-text">Download Next Batch (${effBatch})</span>
         </button>
+        <button class="btn-secondary-dark" id="btn-pl-download-selected" disabled>
+          Download Selected (0)
+        </button>
+        <button class="btn-secondary-dark" id="btn-pl-pause-queue" title="Pause or resume downloading queue">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          <span id="lbl-pl-pause-text">Pause</span>
+        </button>
+        <button class="btn-secondary-dark" id="btn-pl-stop-queue" title="Stop downloading current queue">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
+          <span>Stop</span>
+        </button>
+        <button class="btn-secondary-dark" id="btn-pl-reset-status" title="Reset queued and failed tracks back to pending status">
+          ↺ Reset Status
+        </button>
+      </div>
+      <div class="batch-action-col">
         <div class="batch-presets-row">
           <span style="font-size:11px; color:#94a3b8; margin-right:2px;">Batch:</span>
           <button class="btn-preset ${state.savedBatchSize === 25 ? "active" : ""}" data-preset="25">25</button>
           <button class="btn-preset ${state.savedBatchSize === 50 ? "active" : ""}" data-preset="50">50</button>
           <button class="btn-preset ${state.savedBatchSize === 100 ? "active" : ""}" data-preset="100">100</button>
           <button class="btn-preset ${state.savedBatchSize === 200 ? "active" : ""}" data-preset="200">200</button>
-          <button class="btn-preset" data-preset="all">All (${missingCnt})</button>
+          <button class="btn-preset" data-preset="all">All Pending (${missingCnt})</button>
           <input type="number" id="input-batch-size" class="batch-size-input" min="1" max="5000" value="${state.savedBatchSize}" title="Set custom batch size" />
         </div>
-      </div>
-      <div class="batch-action-col">
-        <button class="btn-secondary-dark" id="btn-pl-download-selected" disabled>
-          Download Selected (0)
-        </button>
-        <button class="btn-secondary-dark" id="btn-pl-reset-status" title="Reset queued and failed tracks back to pending status">
-          Reset Status
-        </button>
       </div>
     </div>
 
@@ -1349,7 +1409,7 @@ async function loadSavedPlaylistDetail(pid) {
         <button class="seg-tab active" data-sfilter="all">All (${tracks.length})</button>
         <button class="seg-tab" data-sfilter="downloaded">Downloaded (${downloadedCnt})</button>
         <button class="seg-tab" data-sfilter="missing">Missing (${missingCnt})</button>
-        ${queuedCnt > 0 ? `<button class="seg-tab" data-sfilter="queued">Queued (${queuedCnt})</button>` : ""}
+        <button class="seg-tab ${queuedCnt > 0 ? "" : "hidden"}" data-sfilter="queued">Queued (${queuedCnt})</button>
       </div>
       <div style="display:flex; align-items:center; gap:8px; flex:1; max-width:480px; justify-content:flex-end;">
         <select id="saved-track-sort" class="sleek-select" style="height:32px; font-size:11.5px;">
@@ -1471,7 +1531,7 @@ async function loadSavedPlaylistDetail(pid) {
     });
   }
 
-  // 10. Download Next Batch Button
+  // 10. Download Next Batch Button (Stay on playlist page, update statuses immediately)
   document.getElementById("btn-pl-download-batch")?.addEventListener("click", async () => {
     const count = Math.min(state.savedBatchSize, missingCnt || 1);
     const r = await apiPost("/api/saved_playlists/action", {
@@ -1481,13 +1541,19 @@ async function loadSavedPlaylistDetail(pid) {
     });
     if (r && r.ok) {
       showToast(`Queued next ${r.queued || 0} track(s) for download.`);
-      switchView("queue");
+      if (r.queued_ids && r.queued_ids.length > 0) {
+        const qSet = new Set(r.queued_ids);
+        currentSavedTracks.forEach(t => {
+          if (qSet.has(t.spotify_id)) t.status = "queued";
+        });
+      }
+      loadSavedPlaylistDetail(pid);
     } else {
       showToast(r ? r.error : "Batch download failed.");
     }
   });
 
-  // 11. Download Selected Button
+  // 11. Download Selected Button (Stay on playlist page)
   document.getElementById("btn-pl-download-selected")?.addEventListener("click", async () => {
     if (!state.selectedSavedTrackIds.size) return;
     const ids = Array.from(state.selectedSavedTrackIds);
@@ -1499,11 +1565,33 @@ async function loadSavedPlaylistDetail(pid) {
     if (r && r.ok) {
       showToast(`Queued ${r.queued || 0} selected track(s).`);
       state.selectedSavedTrackIds.clear();
-      switchView("queue");
+      if (r.queued_ids && r.queued_ids.length > 0) {
+        const qSet = new Set(r.queued_ids);
+        currentSavedTracks.forEach(t => {
+          if (qSet.has(t.spotify_id)) t.status = "queued";
+        });
+      }
+      loadSavedPlaylistDetail(pid);
     }
   });
 
-  // 12. Reset Status Button
+  // 12. Pause / Resume Download Queue
+  let isQueuePaused = false;
+  document.getElementById("btn-pl-pause-queue")?.addEventListener("click", async () => {
+    isQueuePaused = !isQueuePaused;
+    await apiPost("/api/queue/action", { action: isQueuePaused ? "pause" : "resume" });
+    const lbl = document.getElementById("lbl-pl-pause-text");
+    if (lbl) lbl.textContent = isQueuePaused ? "Resume" : "Pause";
+    showToast(isQueuePaused ? "Paused download queue." : "Resumed download queue.");
+  });
+
+  // 13. Stop Queue
+  document.getElementById("btn-pl-stop-queue")?.addEventListener("click", async () => {
+    await apiPost("/api/queue/action", { action: "stop_all" });
+    showToast("Stopped downloads.");
+  });
+
+  // 14. Reset Status Button
   document.getElementById("btn-pl-reset-status")?.addEventListener("click", async () => {
     const r = await apiPost("/api/saved_playlists/action", { action: "reset_status", playlist_id: pid });
     if (r && r.ok) {
@@ -1512,12 +1600,12 @@ async function loadSavedPlaylistDetail(pid) {
     }
   });
 
-  // 13. Search, Filter Tabs & Sorting
+  // 15. Search, Filter Tabs & Sorting
   const searchInput = document.getElementById("saved-track-search");
   if (searchInput) {
     searchInput.addEventListener("input", (e) => {
       savedTrackQuery = e.target.value.toLowerCase().trim();
-      savedTrackSliceLimit = 200;
+      savedTrackSliceLimit = 250;
       renderFilteredSavedTracks();
     });
   }
@@ -1526,7 +1614,7 @@ async function loadSavedPlaylistDetail(pid) {
     btn.addEventListener("click", () => {
       savedTrackFilter = btn.dataset.sfilter;
       document.querySelectorAll("#saved-filter-tabs .seg-tab").forEach(b => b.classList.toggle("active", b === btn));
-      savedTrackSliceLimit = 200;
+      savedTrackSliceLimit = 250;
       renderFilteredSavedTracks();
     });
   });
@@ -1546,9 +1634,10 @@ function renderFilteredSavedTracks() {
 
   let filtered = currentSavedTracks.filter(t => {
     const st = (t.status || "").toLowerCase();
+    const isQueued = st === "queued" || st === "downloading";
     if (f === "downloaded" && !t.is_downloaded) return false;
-    if (f === "missing" && t.is_downloaded) return false;
-    if (f === "queued" && st !== "queued" && st !== "downloading") return false;
+    if (f === "missing" && (t.is_downloaded || isQueued)) return false;
+    if (f === "queued" && !isQueued) return false;
     if (q) {
       const hay = `${t.title} ${t.artist} ${t.album}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -1579,7 +1668,7 @@ function renderFilteredSavedTracks() {
   const allSelected = sliced.length > 0 && sliced.every(t => state.selectedSavedTrackIds.has(t.spotify_id));
 
   wrap.innerHTML = `
-    <div class="track-table-header" style="grid-template-columns: 32px 40px minmax(200px, 2fr) minmax(130px, 1.2fr) 120px 65px 95px;">
+    <div class="track-table-header" style="grid-template-columns: 32px 40px minmax(200px, 2fr) minmax(130px, 1.2fr) 120px 65px 115px;">
       <div class="col-check"><input type="checkbox" id="chk-saved-select-all" ${allSelected ? "checked" : ""} /></div>
       <div class="col-num">#</div>
       <div class="col-title">Title</div>
@@ -1593,13 +1682,17 @@ function renderFilteredSavedTracks() {
       const qbClass = qbLower.includes("flac") ? "flac" : qbLower.includes("opus") ? "opus" : "melobot";
       const isCur = state.currentTrack && t.file_path && t.file_path === state.currentTrack.file_path;
       const isChecked = state.selectedSavedTrackIds.has(t.spotify_id);
+      const isQueued = (t.status || "").toLowerCase() === "queued" || (t.status || "").toLowerCase() === "downloading";
 
       const numCell = isCur && state.isPlaying
         ? `<div class="eq-bars"><span></span><span></span><span></span><span></span></div>`
         : `<span class="row-idx-text">${t.index || (idx + 1)}</span><span class="row-play-icon">▶</span>`;
 
+      const badgeCls = t.is_downloaded ? qbClass : isQueued ? "queued" : "missing";
+      const badgeText = t.is_downloaded ? escapeHtml(t.quality_badge || "✓ Downloaded") : isQueued ? "⏳ Queued" : "Missing";
+
       return `
-        <div class="track-row ${isCur ? "playing" : ""}" style="grid-template-columns: 32px 40px minmax(200px, 2fr) minmax(130px, 1.2fr) 120px 65px 95px;" data-sidx="${idx}">
+        <div class="track-row ${isCur ? "playing" : ""}" style="grid-template-columns: 32px 40px minmax(200px, 2fr) minmax(130px, 1.2fr) 120px 65px 115px;" data-sidx="${idx}">
           <div class="col-check" onclick="event.stopPropagation();">
             <input type="checkbox" class="chk-track-row" data-sid="${escapeHtml(t.spotify_id || "")}" ${isChecked ? "checked" : ""} />
           </div>
@@ -1613,13 +1706,14 @@ function renderFilteredSavedTracks() {
           </div>
           <div class="col-album">${escapeHtml(t.album || "—")}</div>
           <div class="col-quality">
-            <span class="q-badge ${t.is_downloaded ? qbClass : t.status === "queued" ? "opus" : "missing"}">
-              ${t.is_downloaded ? escapeHtml(t.quality_badge || "✓ Downloaded") : t.status === "queued" ? "⏳ Queued" : "Missing"}
+            <span class="q-badge ${badgeCls}">
+              ${badgeText}
             </span>
           </div>
           <div class="col-dur">${t.duration_str || "--:--"}</div>
           <div class="col-actions" style="display:flex; justify-content:flex-end; gap:4px;" onclick="event.stopPropagation();">
-            ${!t.is_downloaded ? `<button class="mini-row-btn btn-dl-single" data-sid="${escapeHtml(t.spotify_id)}" title="Download track">⤓</button>` : ""}
+            ${!t.is_downloaded && !isQueued ? `<button class="mini-row-btn btn-dl-single" data-sid="${escapeHtml(t.spotify_id)}" title="Download track">⤓</button>` : ""}
+            ${t.is_downloaded ? `<button class="mini-row-btn btn-play-single" data-sidx="${idx}" title="Play track">▶</button>` : ""}
             <button class="mini-row-btn btn-edit-single" data-sid="${escapeHtml(t.spotify_id)}" title="Edit metadata">✎</button>
             <button class="mini-row-btn btn-del-single" data-sid="${escapeHtml(t.spotify_id)}" title="Remove from playlist">✕</button>
           </div>
@@ -1694,12 +1788,30 @@ function renderFilteredSavedTracks() {
         playlist_id: state.selectedSavedPlaylistId,
         spotify_ids: [sid],
       });
-      showToast(r && r.ok ? "Queued track for download." : "Failed to queue track.");
-      if (r && r.ok) switchView("queue");
+      if (r && r.ok) {
+        showToast("Queued track for download.");
+        const tr = currentSavedTracks.find(t => t.spotify_id === sid);
+        if (tr) tr.status = "queued";
+        renderFilteredSavedTracks();
+      } else {
+        showToast("Failed to queue track.");
+      }
     });
   });
 
-  // 5. Edit Track Metadata Action
+  // 5. Play Single Track Action
+  wrap.querySelectorAll(".btn-play-single").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.getAttribute("data-sidx"));
+      const track = sliced[idx];
+      if (track && track.is_downloaded && track.file_path) {
+        const pIdx = playableList.findIndex(x => x.spotify_id === track.spotify_id || x.file_path === track.file_path);
+        playTrackFromList(playableList, pIdx >= 0 ? pIdx : 0);
+      }
+    });
+  });
+
+  // 6. Edit Track Metadata Action
   wrap.querySelectorAll(".btn-edit-single").forEach(btn => {
     btn.addEventListener("click", () => {
       const sid = btn.getAttribute("data-sid");
@@ -1710,7 +1822,7 @@ function renderFilteredSavedTracks() {
     });
   });
 
-  // 6. Delete Single Track Action
+  // 7. Delete Single Track Action
   wrap.querySelectorAll(".btn-del-single").forEach(btn => {
     btn.addEventListener("click", async () => {
       const sid = btn.getAttribute("data-sid");
@@ -1729,7 +1841,7 @@ function renderFilteredSavedTracks() {
     });
   });
 
-  // 7. Load More Tracks Pagination
+  // 8. Load More Tracks Pagination
   const loadMoreBtn = document.getElementById("btn-saved-load-more");
   if (loadMoreBtn) {
     loadMoreBtn.addEventListener("click", () => {
@@ -1739,9 +1851,6 @@ function renderFilteredSavedTracks() {
   }
 }
 
-// --------------------------------------------------------------------------
-// MODAL CONTROLLERS: SAVE PLAYLIST, EDIT PLAYLIST, EDIT TRACK
-// --------------------------------------------------------------------------
 function openSavePlaylistModal() {
   const modal = document.getElementById("modal-save-playlist");
   if (!modal) return;
