@@ -292,6 +292,121 @@
               <div class="empty-state">Select a saved playlist on the left to inspect tracks, toggle Watch Auto-Sync, or download missing songs.</div>
             </div>
           </div>
+          <!-- Tool C: Batch Tag & Metadata Editor -->
+          <div id="tool-panel-batchtag" class="tool-panel hidden">
+            <div class="tool-card">
+              <div class="tool-card-top">
+                <div>
+                  <h3>Batch Tag &amp; Metadata Studio</h3>
+                  <p>Batch edit artist names, replace typos, set album titles, auto-rename files on disk, or fetch missing high-resolution album artwork with one click.</p>
+                </div>
+                <div class="tool-btn-row">
+                  <span id="batchtag-selected-badge" class="selection-pill">0 Tracks Selected</span>
+                  <button class="btn-secondary-dark" id="btn-batchtag-select-all">Select All</button>
+                  <button class="btn-secondary-dark" id="btn-batchtag-select-none">Clear</button>
+                  <button class="btn-secondary-dark" id="btn-batchtag-select-missing-art">Select Missing Covers</button>
+                </div>
+              </div>
+
+              <!-- 4-Grid Action Studio -->
+              <div class="batchtag-studio-grid">
+                <!-- 1. Artist Operations -->
+                <div class="batch-action-card">
+                  <div class="batch-card-title">👤 Artist Fix &amp; Replace</div>
+                  <div class="form-group">
+                    <label>Action</label>
+                    <select id="batch-artist-mode" class="sleek-input">
+                      <option value="set">Set Exact Artist Name</option>
+                      <option value="replace">Find &amp; Replace Text</option>
+                    </select>
+                  </div>
+                  <div class="form-group" id="batch-artist-set-wrap">
+                    <label>New Artist Name</label>
+                    <input type="text" id="batch-artist-name" class="sleek-input" placeholder="e.g. Kenshi Yonezu" />
+                  </div>
+                  <div class="form-grid-2col hidden" id="batch-artist-replace-wrap">
+                    <div class="form-group">
+                      <label>Find</label>
+                      <input type="text" id="batch-artist-find" class="sleek-input" placeholder="e.g. Kensh" />
+                    </div>
+                    <div class="form-group">
+                      <label>Replace With</label>
+                      <input type="text" id="batch-artist-replace" class="sleek-input" placeholder="e.g. Kenshi" />
+                    </div>
+                  </div>
+                  <button class="btn-primary-emerald" id="btn-apply-batch-artist">Apply Artist Changes</button>
+                </div>
+
+                <!-- 2. Album Operations -->
+                <div class="batch-action-card">
+                  <div class="batch-card-title">💿 Album Title &amp; Numbering</div>
+                  <div class="form-group">
+                    <label>Album Title</label>
+                    <input type="text" id="batch-album-title" class="sleek-input" placeholder="e.g. Stray Sheep" />
+                  </div>
+                  <div class="form-group">
+                    <label class="checkbox-pill">
+                      <input type="checkbox" id="chk-batch-renumber" />
+                      <span>Renumber tracks sequentially (1..N)</span>
+                    </label>
+                  </div>
+                  <button class="btn-primary-emerald" id="btn-apply-batch-album">Apply Album Title</button>
+                </div>
+
+                <!-- 3. File Renaming on Disk -->
+                <div class="batch-action-card">
+                  <div class="batch-card-title">📁 Batch Rename Files on Disk</div>
+                  <div class="form-group">
+                    <label>Naming Template</label>
+                    <input type="text" id="batch-rename-template" class="sleek-input" value="{artist} - {title}" />
+                    <div class="template-chips">
+                      <span class="chip" data-tpl="{artist} - {title}">{artist} - {title}</span>
+                      <span class="chip" data-tpl="{track_num}. {artist} - {title}">{track_num}. {artist} - {title}</span>
+                      <span class="chip" data-tpl="{track_num}. {title}">{track_num}. {title}</span>
+                    </div>
+                  </div>
+                  <button class="btn-primary-emerald" id="btn-apply-batch-rename">Rename Selected Files</button>
+                </div>
+
+                <!-- 4. Cover Art & Genres -->
+                <div class="batch-action-card">
+                  <div class="batch-card-title">🎨 Cover Art &amp; Genres</div>
+                  <p class="batch-card-desc">Automatically fetch 600x600 artwork from iTunes/Deezer and embed directly into audio tags.</p>
+                  <button class="btn-primary-emerald" id="btn-apply-batch-covers" style="margin-bottom: 12px;">🎨 Fetch &amp; Embed Missing Covers</button>
+                  <div class="input-with-btn">
+                    <input type="text" id="batch-genre-input" class="sleek-input" placeholder="e.g. J-Pop; Anime" />
+                    <button class="btn-secondary-dark" id="btn-apply-batch-genre">Tag Genre</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Filter Search for Tracks -->
+              <div class="batchtag-table-toolbar">
+                <input type="text" id="batchtag-search-input" class="sleek-input" placeholder="Filter library tracks by title, artist, or album..." style="max-width: 380px;" />
+                <div id="batchtag-status-msg" class="batchtag-status-msg"></div>
+              </div>
+
+              <!-- Track Selection Table -->
+              <div class="batchtag-table-wrap">
+                <table class="batchtag-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 40px;"><input type="checkbox" id="chk-batchtag-master" /></th>
+                      <th style="width: 52px;">Cover</th>
+                      <th>Title</th>
+                      <th>Artist</th>
+                      <th>Album</th>
+                      <th>Format</th>
+                      <th>Filename</th>
+                    </tr>
+                  </thead>
+                  <tbody id="batchtag-table-body">
+                    <!-- Dynamic Rows -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- 4. AUDIO LAB & STUDIO TOOLS VIEW (Spectrum Inspector + Smart Duplicate Merger) -->
@@ -300,6 +415,7 @@
             <div class="segmented-tabs" id="tools-tabs">
               <button class="seg-tab active" data-tooltab="spectrum">🔬 True Spectrum &amp; Fake-Bitrate Inspector</button>
               <button class="seg-tab" data-tooltab="duplicates">🧬 Smart Duplicate &amp; Fingerprint Merger</button>
+              <button class="seg-tab" data-tooltab="batchtag">🏷️ Batch Tag &amp; Metadata Editor</button>
             </div>
           </div>
 
@@ -925,6 +1041,36 @@
         </svg>
       </button>
 
+      <!-- Floating Mini-Player / PiP Mode -->
+      <button class="utility-btn" id="btn-mini-player" title="Floating Mini-Player / PiP Mode (Always-on-Top)">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+          <rect x="12" y="9" width="8" height="6" rx="1" ry="1" fill="currentColor"/>
+        </svg>
+      </button>
+
+      <!-- Sleep Timer Popover Anchor -->
+      <div class="popover-anchor" id="sleep-timer-anchor">
+        <button class="utility-btn" id="btn-sleep-timer" title="Sleep Timer (Gradually fade out & pause playback)">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+          </svg>
+          <span id="sleep-timer-badge" class="sleep-badge hidden">30m</span>
+        </button>
+        <div class="glass-popover-menu hidden" id="sleep-timer-menu">
+          <div class="popover-header">
+            <span>🌙 Sleep Timer</span>
+            <span class="popover-sub">Fade out volume and pause</span>
+          </div>
+          <button class="popover-item active" data-sleep="off">Off (Cancel)</button>
+          <button class="popover-item" data-sleep="15">15 Minutes</button>
+          <button class="popover-item" data-sleep="30">30 Minutes</button>
+          <button class="popover-item" data-sleep="45">45 Minutes</button>
+          <button class="popover-item" data-sleep="60">1 Hour (60 Min)</button>
+          <button class="popover-item" data-sleep="end_playlist">End of Current Playlist</button>
+        </div>
+      </div>
+
       <button class="utility-btn" id="btn-mute" title="Mute / Unmute">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
@@ -960,13 +1106,23 @@
         </div>
 
         <div class="drawer-actions">
+          <!-- Direct Time-Offset Nudge Controls -->
+          <div class="lyrics-offset-group" title="Nudge lyrics synchronization timing">
+            <button class="offset-btn" id="btn-lyrics-offset-minus" title="Nudge earlier (-0.5s)">-0.5s</button>
+            <span class="offset-label" id="lbl-lyrics-offset" title="Click to reset offset to 0.0s">Offset: 0.0s</span>
+            <button class="offset-btn" id="btn-lyrics-offset-plus" title="Nudge later (+0.5s)">+0.5s</button>
+          </div>
+
+          <button class="ghost-pill-btn" id="btn-lyrics-edit-toggle" title="Open Synchronized Lyrics Text Editor">
+            <span>✎ Edit Lyrics</span>
+          </button>
           <button class="ghost-pill-btn" id="btn-lyrics-sync" title="Fetch Synchronized Lyrics from LRCLIB">
             <span>↻ Sync LRCLIB</span>
           </button>
           <button class="ghost-pill-btn" id="btn-lyrics-copy" title="Copy Lyrics + Translation">
             <span>Copy</span>
           </button>
-          <button class="ghost-pill-btn" id="btn-lyrics-save" title="Export .lrc File">
+          <button class="ghost-pill-btn" id="btn-lyrics-save" title="Export .lrc File & Embed in Audio">
             <span>Save .lrc</span>
           </button>
           <button class="icon-circle-btn" id="btn-close-lyrics" title="Close Lyrics (Esc)">✕</button>
@@ -975,6 +1131,22 @@
 
       <div class="lyrics-scroll-area" id="lyrics-scroll-area">
         <div class="lyrics-lines-list" id="lyrics-lines-list"></div>
+      </div>
+
+      <!-- Direct Synchronized Lyrics Inline Text Editor -->
+      <div class="lyrics-editor-wrap hidden" id="lyrics-editor-wrap">
+        <div class="editor-subbar">
+          <div class="editor-tools-left">
+            <button class="btn-micro" id="btn-lrc-stamp-time" title="Insert Current Playback Time at Cursor">⏱ Stamp Time (<span id="lrc-cur-time-display">00:00.00</span>)</button>
+            <button class="btn-micro" id="btn-lrc-shift-minus" title="Shift all timestamps earlier by 0.5s">-0.5s All</button>
+            <button class="btn-micro" id="btn-lrc-shift-plus" title="Shift all timestamps later by 0.5s">+0.5s All</button>
+          </div>
+          <div class="editor-tools-right">
+            <button class="btn-micro-cancel" id="btn-lrc-editor-cancel">Cancel</button>
+            <button class="btn-primary-emerald btn-micro-save" id="btn-lrc-editor-save">💾 Save to .lrc &amp; Embed Tags</button>
+          </div>
+        </div>
+        <textarea id="lyrics-editor-textarea" class="lrc-textarea" spellcheck="false" placeholder="[00:01.00] Enter synchronized lyrics here..."></textarea>
       </div>
     </div>
   </div>
@@ -1032,6 +1204,57 @@
   <audio id="audio-element" crossorigin="anonymous" preload="auto"></audio>
 
   <script src="/app.js"></script>
+
+  <!-- COMPACT ALWAYS-ON-TOP FLOATING MINI-PLAYER -->
+  <div class="floating-mini-player hidden" id="floating-mini-player">
+    <div class="mini-player-handle" id="mini-player-handle">
+      <div class="mini-brand">
+        <span class="mini-dot"></span>
+        <span>Flacify Mini</span>
+      </div>
+      <div class="mini-window-actions">
+        <button class="mini-win-btn" id="btn-mini-pip-out" title="Pop out to OS-Level PiP (Over games & apps)">⤢</button>
+        <button class="mini-win-btn" id="btn-mini-close" title="Close Mini-Player">✕</button>
+      </div>
+    </div>
+    <div class="mini-player-content">
+      <img id="mini-cover-art" src="" alt="" class="mini-cover" />
+      <div class="mini-info">
+        <div class="mini-title-wrap">
+          <div id="mini-track-title" class="mini-track-title">No Track Playing</div>
+          <div id="mini-track-artist" class="mini-track-artist">Select a song</div>
+        </div>
+        <div class="mini-lyrics-ticker" id="mini-lyrics-ticker">♫ Live Synchronized Lyrics ♫</div>
+        <div class="mini-progress-row">
+          <span id="mini-time-cur">0:00</span>
+          <div class="mini-progress-bar" id="mini-progress-bar">
+            <div class="mini-progress-fill" id="mini-progress-fill" style="width: 0%;"></div>
+          </div>
+          <span id="mini-time-dur">0:00</span>
+        </div>
+        <div class="mini-controls-row">
+          <button class="mini-ctrl-btn" id="btn-mini-prev" title="Previous Track">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+          </button>
+          <button class="mini-ctrl-btn-play" id="btn-mini-play" title="Play / Pause">
+            <svg id="mini-icon-play" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <svg id="mini-icon-pause" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button class="mini-ctrl-btn" id="btn-mini-next" title="Next Track">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+          </button>
+          <div class="mini-vol-wrap">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="opacity: 0.7;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg>
+            <input type="range" id="mini-vol-slider" min="0" max="100" value="100" class="mini-range" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden Canvas & Video for OS-Level Picture-in-Picture Rendering -->
+  <canvas id="pip-canvas" width="512" height="288" style="display: none;"></canvas>
+  <video id="pip-video" muted playsinline style="display: none;"></video>
 </body>
 </html>
 

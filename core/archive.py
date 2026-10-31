@@ -561,6 +561,57 @@ class ArchiveManager:
             logger.error(f"Failed to update track genre in archive: {e}")
             return False
 
+    def update_track_record(
+        self,
+        old_file_path: str,
+        new_file_path: str = "",
+        title: Optional[str] = None,
+        artist: Optional[str] = None,
+        album: Optional[str] = None,
+        genre: Optional[str] = None,
+        track_number: Optional[int] = None,
+    ) -> bool:
+        """
+        Updates metadata and/or file_path for a track in SQLite archive.
+        """
+        norm_old = normalize_path(old_file_path) if old_file_path else ""
+        norm_new = normalize_path(new_file_path) if new_file_path else norm_old
+        if not norm_old:
+            return False
+        try:
+            with self.connection() as conn:
+                with conn:
+                    clauses = []
+                    params = []
+                    if norm_new and norm_new != norm_old:
+                        clauses.append("file_path = ?")
+                        params.append(norm_new)
+                    if title is not None:
+                        clauses.append("title = ?")
+                        params.append(title)
+                    if artist is not None:
+                        clauses.append("artist = ?")
+                        params.append(artist)
+                    if album is not None:
+                        clauses.append("album = ?")
+                        params.append(album)
+                    if genre is not None:
+                        clauses.append("genre = ?")
+                        params.append(genre)
+                    if track_number is not None:
+                        clauses.append("track_number = ?")
+                        params.append(track_number)
+                    if clauses:
+                        params.append(norm_old)
+                        sql = f"UPDATE downloaded_tracks SET {', '.join(clauses)} WHERE file_path = ?"
+                        conn.execute(sql, tuple(params))
+                        sql_saved = f"UPDATE saved_playlist_tracks SET {', '.join(clauses)} WHERE file_path = ?"
+                        conn.execute(sql_saved, tuple(params))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update track record in archive: {e}")
+            return False
+
     def find_track(
         self,
         spotify_id: Any = "",

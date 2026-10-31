@@ -19,7 +19,7 @@ from core.config import config
 from core.lyrics import LyricsData, LyricsEngine
 from core.melobot import MeloBotEngine
 from core.musilon import MusilonEngine
-from core.paths import get_cache_dir
+from core.paths import get_cache_dir, get_covers_dir
 from core.queue_manager import DownloadQueueManager, QueueItem
 from core.spotify_client import SpotifyClient, TrackMetadata
 from core.tagger import AudioTagger
@@ -34,6 +34,7 @@ from core.utils import (
     format_bytes,
     format_duration,
     inspect_audio_spectrum,
+    sanitize_filename,
     normalize_audio_loudness,
 )
 
@@ -653,6 +654,8 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 return self._handle_duplicates_scan(body)
             elif path == "/api/tools/duplicates/merge":
                 return self._handle_duplicates_merge(body)
+            elif path == "/api/tools/batch_tag":
+                return self._handle_batch_tag(body)
             elif path == "/api/settings":
                 return self._handle_save_settings(body)
             elif path == "/api/shell/open":
@@ -1192,12 +1195,33 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
     def _handle_lyrics_save(self, body: Dict[str, Any]):
         fp = (body.get("file_path") or "").strip()
         raw_text = body.get("raw_text") or ""
+        embed = bool(body.get("embed", True))
         if not fp or not raw_text:
             return self._send_json({"ok": False, "error": "Missing file_path or lyrics text"}, status=400)
         lrc_p = os.path.splitext(fp)[0] + ".lrc"
-        with open(lrc_p, "w", encoding="utf-8") as f:
-            f.write(raw_text)
-        self._send_json({"ok": True, "lrc_path": lrc_p})
+        try:
+            with open(lrc_p, "w", encoding="utf-8") as f:
+                f.write(raw_text)
+        except Exception as e:
+            return self._send_json({"ok": False, "error": f"Failed to save .lrc: {e}"}, status=500)
+
+        embedded = False
+        if embed and os.path.isfile(fp):
+            try:
+                AudioTagger().embed_lyrics_only(fp, raw_text)
+                embedded = True
+            except Exception as e:
+                logger.debug(f"Failed to embed lyrics in {fp}: {e}")
+
+        synced, lines = self._parse_lrc_text(raw_text)
+        self._send_json({
+            "ok": True,
+            "lrc_path": lrc_p,
+            "embedded": embedded,
+            "synced": synced,
+            "lines": lines,
+            "raw_text": raw_text,
+        })
 
     # ------------------------------------------------------------------
     # Handlers: 10-Band Equalizer & Audio Studio Tools
@@ -1318,6 +1342,212 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         stats["bytes_saved_str"] = format_bytes(int(stats.get("bytes_saved") or 0))
         self.state.invalidate_library_cache()
         self._send_json({"ok": True, "stats": stats})
+
+
+    def _fetch_online_cover_art(self, query: str) -> Optional[bytes]:
+        try:
+            import urllib.parse
+            clean_q = re.sub(r"^\d+[\.\s-]+", "", query).strip()
+            enc = urllib.parse.quote(clean_q)
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            # 1. Try iTunes Search API (Fast, no key required, 600x600 high res)
+            url = f"https://itunes.apple.com/search?term={enc}&entity=song&limit=1"
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                results = data.get("results") or []
+                if results and "artworkUrl100" in results[0]:
+                    art_url = results[0]["artworkUrl100"].replace("100x100bb", "600x600bb")
+                    img_res = requests.get(art_url, headers=headers, timeout=8)
+                    if img_res.status_code == 200 and len(img_res.content) > 1000:
+                        return img_res.content
+
+            # 2. Fallback to Deezer API
+            url_dz = f"https://api.deezer.com/search?q={enc}&limit=1"
+            r_dz = requests.get(url_dz, headers=headers, timeout=5)
+            if r_dz.status_code == 200:
+                dz_data = r_dz.json()
+                items = dz_data.get("data") or []
+                if items and "album" in items[0]:
+                    cover_url = items[0]["album"].get("cover_xl") or items[0]["album"].get("cover_big")
+                    if cover_url:
+                        img_res = requests.get(cover_url, headers=headers, timeout=8)
+                        if img_res.status_code == 200 and len(img_res.content) > 1000:
+                            return img_res.content
+        except Exception as e:
+            logger.debug(f"Cover search error for '{query}': {e}")
+        return None
+
+    def _handle_batch_tag(self, body: Dict[str, Any]):
+        action = (body.get("action") or "").strip().lower()
+        file_paths = body.get("file_paths") or []
+        if not file_paths or not isinstance(file_paths, list):
+            return self._send_json({"ok": False, "error": "No tracks selected for batch operation."}, status=400)
+
+        results = []
+        tagger = AudioTagger()
+        archive = self.archive
+
+        if action == "set_artist":
+            new_artist = (body.get("new_artist") or "").strip()
+            if not new_artist:
+                return self._send_json({"ok": False, "error": "New artist name cannot be empty."}, status=400)
+            for fp in file_paths:
+                if not os.path.isfile(fp):
+                    continue
+                ok = tagger.tag_metadata_in_place(fp, artist=new_artist)
+                if ok and hasattr(archive, "update_track_record"):
+                    archive.update_track_record(fp, artist=new_artist)
+                results.append({"file_path": fp, "success": ok, "new_artist": new_artist})
+
+        elif action == "replace_artist":
+            find_str = (body.get("find_str") or "").strip()
+            replace_str = (body.get("replace_str") or "").strip()
+            if not find_str:
+                return self._send_json({"ok": False, "error": "Text to find cannot be empty."}, status=400)
+            for fp in file_paths:
+                if not os.path.isfile(fp):
+                    continue
+                cur_artist = ""
+                try:
+                    with archive.connection() as conn:
+                        r = conn.execute("SELECT artist FROM downloaded_tracks WHERE file_path = ? LIMIT 1", (fp,)).fetchone()
+                        if r and r[0]:
+                            cur_artist = r[0]
+                except Exception:
+                    pass
+                if not cur_artist:
+                    try:
+                        ext = os.path.splitext(fp)[1].lower()
+                        if ext == ".flac":
+                            cur_artist = FLAC(fp).get("ARTIST", [""])[0]
+                        elif ext == ".mp3":
+                            cur_artist = str(ID3(fp).get("TPE1", ""))
+                        elif ext == ".m4a":
+                            cur_artist = str(MP4(fp).get("\xa9ART", [""])[0])
+                    except Exception:
+                        pass
+                if not cur_artist:
+                    cur_artist = os.path.basename(fp).split(" - ")[0] if " - " in os.path.basename(fp) else ""
+                new_art = re.sub(re.escape(find_str), replace_str, cur_artist, flags=re.IGNORECASE)
+                ok = tagger.tag_metadata_in_place(fp, artist=new_art)
+                if ok and hasattr(archive, "update_track_record"):
+                    archive.update_track_record(fp, artist=new_art)
+                results.append({"file_path": fp, "success": ok, "old_artist": cur_artist, "new_artist": new_art})
+
+        elif action == "set_album":
+            new_album = (body.get("new_album") or "").strip()
+            renumber = bool(body.get("renumber", False))
+            if not new_album:
+                return self._send_json({"ok": False, "error": "New album name cannot be empty."}, status=400)
+            for idx, fp in enumerate(file_paths, start=1):
+                if not os.path.isfile(fp):
+                    continue
+                trkn = idx if renumber else None
+                ok = tagger.tag_metadata_in_place(fp, album=new_album, track_num=trkn)
+                if ok and hasattr(archive, "update_track_record"):
+                    archive.update_track_record(fp, album=new_album, track_number=trkn)
+                results.append({"file_path": fp, "success": ok, "new_album": new_album, "track_number": trkn})
+
+        elif action == "set_genre":
+            genre = (body.get("genre") or "").strip()
+            if not genre:
+                return self._send_json({"ok": False, "error": "Genre cannot be empty."}, status=400)
+            for fp in file_paths:
+                if not os.path.isfile(fp):
+                    continue
+                ok = tagger.tag_genre_only(fp, [genre])
+                if ok and hasattr(archive, "update_track_record"):
+                    archive.update_track_record(fp, genre=genre)
+                results.append({"file_path": fp, "success": ok, "genre": genre})
+
+        elif action == "rename_files":
+            template = (body.get("template") or config.get("download.naming_template", "{artist} - {title}")).strip()
+            renamed_list = []
+            for fp in file_paths:
+                if not os.path.isfile(fp):
+                    continue
+                dir_name = os.path.dirname(fp)
+                ext = os.path.splitext(fp)[1]
+                cur_artist = ""
+                cur_title = ""
+                cur_album = ""
+                cur_num = 1
+                # Try SQLite archive first
+                try:
+                    with archive.connection() as conn:
+                        r = conn.execute("SELECT title, artist, album, track_number FROM downloaded_tracks WHERE file_path = ? LIMIT 1", (fp,)).fetchone()
+                        if r:
+                            cur_title = r[0] or ""
+                            cur_artist = r[1] or ""
+                            cur_album = r[2] or ""
+                            cur_num = r[3] or 1
+                except Exception:
+                    pass
+                if not cur_artist or not cur_title:
+                    try:
+                        ext_low = ext.lower()
+                        if ext_low == ".flac":
+                            fl = FLAC(fp)
+                            cur_artist = fl.get("ARTIST", [""])[0]
+                            cur_title = fl.get("TITLE", [""])[0]
+                            cur_album = fl.get("ALBUM", [""])[0]
+                        elif ext_low == ".mp3":
+                            id3 = ID3(fp)
+                            cur_artist = str(id3.get("TPE1", ""))
+                            cur_title = str(id3.get("TIT2", ""))
+                            cur_album = str(id3.get("TALB", ""))
+                    except Exception:
+                        pass
+                if not cur_artist or not cur_title:
+                    base = os.path.splitext(os.path.basename(fp))[0]
+                    if " - " in base:
+                        parts = base.split(" - ", 1)
+                        cur_artist = cur_artist or parts[0]
+                        cur_title = cur_title or parts[1]
+                    else:
+                        cur_title = cur_title or base
+                        cur_artist = cur_artist or "Unknown Artist"
+
+                new_stem = template.replace("{artist}", cur_artist).replace("{title}", cur_title).replace("{album}", cur_album).replace("{track_num}", str(cur_num).zfill(2))
+                new_stem = sanitize_filename(new_stem)
+                new_path = os.path.join(dir_name, new_stem + ext)
+                if os.path.normpath(new_path) != os.path.normpath(fp):
+                    if not os.path.exists(new_path):
+                        os.rename(fp, new_path)
+                        if hasattr(archive, "update_track_record"):
+                            archive.update_track_record(fp, new_file_path=new_path)
+                        renamed_list.append({"old_path": fp, "new_path": new_path, "success": True})
+                    else:
+                        renamed_list.append({"old_path": fp, "new_path": new_path, "success": False, "error": "Target filename already exists"})
+                else:
+                    renamed_list.append({"old_path": fp, "new_path": fp, "success": True})
+            results = renamed_list
+
+        elif action == "fetch_covers":
+            for fp in file_paths:
+                if not os.path.isfile(fp):
+                    continue
+                base = os.path.splitext(os.path.basename(fp))[0]
+                art_bytes = self._fetch_online_cover_art(base)
+                if art_bytes:
+                    ok = tagger.tag_metadata_in_place(fp, cover_bytes=art_bytes)
+                    # Also save to covers directory cache
+                    try:
+                        safe_stem = sanitize_filename(base, max_length=50)
+                        cov_p = os.path.join(str(get_covers_dir()), f"{safe_stem}.jpg")
+                        with open(cov_p, "wb") as f_cov:
+                            f_cov.write(art_bytes)
+                    except Exception:
+                        pass
+                    results.append({"file_path": fp, "success": ok})
+                else:
+                    results.append({"file_path": fp, "success": False, "error": "No cover found online"})
+        else:
+            return self._send_json({"ok": False, "error": f"Unknown action: {action}"}, status=400)
+
+        self.state.invalidate_library_cache()
+        self._send_json({"ok": True, "action": action, "processed": len(results), "results": results})
 
     # ------------------------------------------------------------------
     # Handlers: Settings & OS Integration

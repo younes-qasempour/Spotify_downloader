@@ -40,6 +40,30 @@ const state = {
     translated: [],
     transLang: "none", // 'none' | 'en' | 'fa'
     activeIdx: -1,
+    offsetMs: 0,
+    isEditing: false,
+  },
+
+  // Sleep Timer
+  sleepTimer: {
+    mode: "off",
+    targetTimestamp: null,
+    initialVolume: 1.0,
+    intervalId: null,
+  },
+
+  // Floating Mini Player
+  miniPlayer: {
+    active: false,
+    pipWindow: null,
+    isDragging: false,
+    dragOffset: { x: 0, y: 0 },
+  },
+
+  // Batch Tag & Metadata Editor
+  batchTag: {
+    selectedPaths: new Set(),
+    filterQuery: "",
   },
 
   // 10-Band Equalizer State
@@ -787,6 +811,24 @@ function playTrackFromList(list, index) {
   pImg.classList.remove("hidden");
   pFall.classList.add("hidden");
 
+  // Update Mini Player UI
+  const miniT = document.getElementById("mini-track-title");
+  if (miniT) miniT.textContent = track.title;
+  const miniA = document.getElementById("mini-track-artist");
+  if (miniA) miniA.textContent = track.artist;
+  const miniCov = document.getElementById("mini-cover-art");
+  if (miniCov) miniCov.src = cUrl;
+  const miniDur = document.getElementById("mini-time-dur");
+  if (miniDur) miniDur.textContent = track.duration_str || "0:00";
+  if (state.miniPlayer.pipWindow) {
+    const pTitle = state.miniPlayer.pipWindow.document.getElementById("pip-title");
+    const pArtist = state.miniPlayer.pipWindow.document.getElementById("pip-artist");
+    const pCover = state.miniPlayer.pipWindow.document.getElementById("pip-cover");
+    if (pTitle) pTitle.textContent = track.title;
+    if (pArtist) pArtist.textContent = track.artist;
+    if (pCover) pCover.src = cUrl;
+  }
+
   // Update Lyrics Drawer Header
   document.getElementById("lyrics-title").textContent = track.title;
   document.getElementById("lyrics-artist").textContent = track.artist;
@@ -817,8 +859,15 @@ function playNext() {
   const nextIdx = state.currentIndex + 1;
   if (nextIdx < state.playlist.length) {
     playTrackFromList(state.playlist, nextIdx);
-  } else if (state.repeatMode === "all") {
+  } else if (state.repeatMode === "all" && state.sleepTimer.mode !== "end_playlist") {
     playTrackFromList(state.playlist, 0);
+  } else {
+    if (state.sleepTimer.mode === "end_playlist") {
+      audioEl.pause();
+      if (state.sleepTimer.initialVolume !== undefined) audioEl.volume = state.sleepTimer.initialVolume;
+      setSleepTimer("off");
+      showToast("🌙 End of playlist reached. Sleep timer paused playback.");
+    }
   }
 }
 
@@ -945,7 +994,8 @@ function updateActiveLyricTicker() {
   const lines = state.lyrics.lines;
   if (!lines.length) return;
 
-  const posMs = audioEl.currentTime * 1000;
+  const offset = state.lyrics.offsetMs || 0;
+  const posMs = (audioEl.currentTime * 1000) - offset;
   let idx = 0;
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].time_ms <= posMs) idx = i;
@@ -957,6 +1007,12 @@ function updateActiveLyricTicker() {
 
   const orig = lines[idx].text;
   document.getElementById("ticker-orig").textContent = orig;
+  const miniTicker = document.getElementById("mini-lyrics-ticker");
+  if (miniTicker) miniTicker.textContent = orig;
+  if (state.miniPlayer.pipWindow) {
+    const pipLyr = state.miniPlayer.pipWindow.document.getElementById("pip-lyrics");
+    if (pipLyr) pipLyr.textContent = orig;
+  }
 
   const hasTrans = (state.lyrics.transLang === "en" || state.lyrics.transLang === "fa")
     && state.lyrics.translated.length === lines.length;
@@ -1778,6 +1834,320 @@ async function loadSettings() {
     .catch((err) => updateFFmpegUI({ ok: false, error: String(err) }));
 }
 
+
+// ==========================================================================
+// FEATURE 1: SLEEP TIMER
+// ==========================================================================
+function setSleepTimer(mode) {
+  if (state.sleepTimer.intervalId) {
+    clearInterval(state.sleepTimer.intervalId);
+    state.sleepTimer.intervalId = null;
+  }
+
+  const badge = document.getElementById("sleep-timer-badge");
+  document.querySelectorAll("#sleep-timer-menu .popover-item").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.sleep === mode);
+  });
+
+  if (mode === "off") {
+    state.sleepTimer.mode = "off";
+    state.sleepTimer.targetTimestamp = null;
+    if (badge) badge.classList.add("hidden");
+    if (state.sleepTimer.initialVolume !== undefined) {
+      audioEl.volume = state.sleepTimer.initialVolume;
+      const volSlider = document.getElementById("vol-slider");
+      const volFill = document.getElementById("vol-fill");
+      if (volSlider) volSlider.value = Math.round(audioEl.volume * 100);
+      if (volFill) volFill.style.width = `${audioEl.volume * 100}%`;
+    }
+    showToast("Sleep timer turned off.");
+    return;
+  }
+
+  state.sleepTimer.initialVolume = audioEl.volume;
+
+  if (mode === "end_playlist") {
+    state.sleepTimer.mode = "end_playlist";
+    state.sleepTimer.targetTimestamp = null;
+    if (badge) {
+      badge.textContent = "End";
+      badge.classList.remove("hidden");
+    }
+    showToast("🌙 Sleep timer set: playback will stop at end of current playlist.");
+    return;
+  }
+
+  const mins = Number(mode);
+  state.sleepTimer.mode = mode;
+  state.sleepTimer.targetTimestamp = Date.now() + mins * 60 * 1000;
+
+  if (badge) {
+    badge.textContent = `${mins}m`;
+    badge.classList.remove("hidden");
+  }
+  showToast(`🌙 Sleep timer set for ${mins} minutes.`);
+
+  state.sleepTimer.intervalId = setInterval(() => {
+    const remaining = state.sleepTimer.targetTimestamp - Date.now();
+    if (remaining <= 0) {
+      clearInterval(state.sleepTimer.intervalId);
+      state.sleepTimer.intervalId = null;
+      audioEl.pause();
+      audioEl.volume = state.sleepTimer.initialVolume;
+      setSleepTimer("off");
+      showToast("🌙 Sleep timer ended. Playback paused. Goodnight!");
+      return;
+    }
+
+    // Smooth linear volume fade-out over final 30 seconds
+    if (remaining <= 30000) {
+      const ratio = Math.max(0, remaining / 30000);
+      audioEl.volume = state.sleepTimer.initialVolume * ratio;
+      const volSlider = document.getElementById("vol-slider");
+      const volFill = document.getElementById("vol-fill");
+      if (volSlider) volSlider.value = Math.round(audioEl.volume * 100);
+      if (volFill) volFill.style.width = `${audioEl.volume * 100}%`;
+      if (badge) badge.textContent = `${Math.ceil(remaining / 1000)}s`;
+    } else {
+      if (badge) badge.textContent = `${Math.ceil(remaining / 60000)}m`;
+    }
+  }, 1000);
+}
+
+// ==========================================================================
+// FEATURE 2: SYNCHRONIZED LYRICS OFFSET & INLINE EDITOR
+// ==========================================================================
+function nudgeLyricsOffset(deltaMs, reset = false) {
+  if (reset) {
+    state.lyrics.offsetMs = 0;
+  } else {
+    state.lyrics.offsetMs = (state.lyrics.offsetMs || 0) + deltaMs;
+  }
+  const sec = (state.lyrics.offsetMs / 1000).toFixed(1);
+  const sign = state.lyrics.offsetMs > 0 ? "+" : "";
+  const lbl = document.getElementById("lbl-lyrics-offset");
+  if (lbl) lbl.textContent = `Offset: ${sign}${sec}s`;
+  updateActiveLyricTicker();
+  showToast(`Lyrics timing offset: ${sign}${sec}s`);
+}
+
+function toggleLyricsEditor(forceOpen = null) {
+  const editorWrap = document.getElementById("lyrics-editor-wrap");
+  const scrollArea = document.getElementById("lyrics-scroll-area");
+  const toggleBtn = document.getElementById("btn-lyrics-edit-toggle");
+  if (!editorWrap || !scrollArea) return;
+
+  const shouldOpen = forceOpen !== null ? forceOpen : editorWrap.classList.contains("hidden");
+  if (shouldOpen) {
+    editorWrap.classList.remove("hidden");
+    scrollArea.classList.add("hidden");
+    if (toggleBtn) toggleBtn.innerHTML = "<span>✕ Close Editor</span>";
+
+    // Populate textarea
+    const textarea = document.getElementById("lyrics-editor-textarea");
+    if (textarea) {
+      if (state.lyrics.rawText) {
+        textarea.value = state.lyrics.rawText;
+      } else if (state.lyrics.lines.length) {
+        textarea.value = state.lyrics.lines.map(l => {
+          const m = String(Math.floor(l.time_ms / 60000)).padStart(2, "0");
+          const s = ((l.time_ms % 60000) / 1000).toFixed(2).padStart(5, "0");
+          return `[${m}:${s}] ${l.text}`;
+        }).join("\n");
+      } else {
+        textarea.value = "";
+      }
+      textarea.focus();
+    }
+  } else {
+    editorWrap.classList.add("hidden");
+    scrollArea.classList.remove("hidden");
+    if (toggleBtn) toggleBtn.innerHTML = "<span>✎ Edit Lyrics</span>";
+  }
+}
+
+function shiftTextareaTimestamps(deltaSec) {
+  const textarea = document.getElementById("lyrics-editor-textarea");
+  if (!textarea) return;
+  const regex = /\[(\d+):(\d+(?:\.\d+)?)\]/g;
+  textarea.value = textarea.value.replace(regex, (match, mStr, sStr) => {
+    let totalSec = Number(mStr) * 60 + Number(sStr) + deltaSec;
+    if (totalSec < 0) totalSec = 0;
+    const m = String(Math.floor(totalSec / 60)).padStart(2, "0");
+    const s = (totalSec % 60).toFixed(2).padStart(5, "0");
+    return `[${m}:${s}]`;
+  });
+  showToast(`Shifted all timestamps by ${deltaSec > 0 ? "+" : ""}${deltaSec}s`);
+}
+
+// ==========================================================================
+// FEATURE 3: FLOATING MINI-PLAYER / PIP MODE
+// ==========================================================================
+function toggleFloatingMiniPlayer() {
+  const el = document.getElementById("floating-mini-player");
+  if (!el) return;
+  const isHidden = el.classList.contains("hidden");
+  el.classList.toggle("hidden", !isHidden);
+  state.miniPlayer.active = isHidden;
+
+  if (isHidden && state.currentTrack) {
+    const t = state.currentTrack;
+    document.getElementById("mini-track-title").textContent = t.title;
+    document.getElementById("mini-track-artist").textContent = t.artist;
+    document.getElementById("mini-cover-art").src = coverUrl(t.cover_key || t.file_path);
+    document.getElementById("mini-time-dur").textContent = t.duration_str || "0:00";
+    const miniP = document.getElementById("mini-icon-play");
+    const miniPa = document.getElementById("mini-icon-pause");
+    if (miniP) miniP.classList.toggle("hidden", state.isPlaying);
+    if (miniPa) miniPa.classList.toggle("hidden", !state.isPlaying);
+  }
+}
+
+function initMiniPlayerDrag() {
+  const el = document.getElementById("floating-mini-player");
+  const handle = document.getElementById("mini-player-handle");
+  if (!el || !handle) return;
+
+  let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
+
+  handle.addEventListener("mousedown", (e) => {
+    if (e.target.closest(".mini-win-btn")) return;
+    state.miniPlayer.isDragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = el.getBoundingClientRect();
+    initialLeft = rect.left;
+    initialTop = rect.top;
+
+    const onMouseMove = (moveEv) => {
+      if (!state.miniPlayer.isDragging) return;
+      const dx = moveEv.clientX - startX;
+      const dy = moveEv.clientY - startY;
+      const newLeft = Math.max(10, Math.min(window.innerWidth - el.offsetWidth - 10, initialLeft + dx));
+      const newTop = Math.max(10, Math.min(window.innerHeight - el.offsetHeight - 10, initialTop + dy));
+      el.style.left = `${newLeft}px`;
+      el.style.top = `${newTop}px`;
+      el.style.right = "auto";
+      el.style.bottom = "auto";
+    };
+
+    const onMouseUp = () => {
+      state.miniPlayer.isDragging = false;
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  });
+}
+
+async function requestPipMiniPlayer() {
+  if ("documentPictureInPicture" in window) {
+    try {
+      const pipWin = await window.documentPictureInPicture.requestWindow({
+        width: 380,
+        height: 220,
+      });
+      state.miniPlayer.pipWindow = pipWin;
+
+      document.querySelectorAll("link[rel='stylesheet'], style").forEach(node => {
+        pipWin.document.head.appendChild(node.cloneNode(true));
+      });
+
+      const track = state.currentTrack || { title: "No Track Playing", artist: "Select a song" };
+      const cUrl = coverUrl(track.cover_key || track.file_path);
+
+      pipWin.document.body.innerHTML = `
+        <div style="background:#0f0f13; color:#fff; font-family:var(--font-sans, system-ui); height:100vh; display:flex; flex-direction:column; padding:12px; box-sizing:border-box; user-select:none; justify-content:space-between;">
+          <div style="display:flex; gap:12px; align-items:center;">
+            <img id="pip-cover" src="${cUrl}" style="width:68px; height:68px; border-radius:8px; object-fit:cover; background:#1e1e24;" />
+            <div style="flex:1; min-width:0;">
+              <div id="pip-title" style="font-size:13px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(track.title)}</div>
+              <div id="pip-artist" style="font-size:11px; color:#94a3b8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(track.artist)}</div>
+              <div id="pip-lyrics" style="font-size:11px; font-weight:600; color:#1ed760; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">♫ Synchronized Lyrics Active ♫</div>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; justify-content:center; gap:18px; margin-top:8px;">
+            <button id="pip-btn-prev" style="background:transparent; border:none; color:#cbd5e1; cursor:pointer; font-size:16px;">⏮</button>
+            <button id="pip-btn-play" style="width:34px; height:34px; border-radius:50%; background:#1ed760; color:#000; border:none; cursor:pointer; font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center;">${state.isPlaying ? "⏸" : "▶"}</button>
+            <button id="pip-btn-next" style="background:transparent; border:none; color:#cbd5e1; cursor:pointer; font-size:16px;">⏭</button>
+          </div>
+        </div>
+      `;
+
+      pipWin.document.getElementById("pip-btn-play").addEventListener("click", () => {
+        document.getElementById("btn-play-pause").click();
+        pipWin.document.getElementById("pip-btn-play").textContent = audioEl.paused ? "▶" : "⏸";
+      });
+      pipWin.document.getElementById("pip-btn-prev").addEventListener("click", playPrev);
+      pipWin.document.getElementById("pip-btn-next").addEventListener("click", playNext);
+
+      pipWin.addEventListener("pagehide", () => {
+        state.miniPlayer.pipWindow = null;
+      });
+      showToast("Floating Mini-Player active in OS Picture-in-Picture window!");
+      return;
+    } catch (e) {
+      console.warn("Document PiP failed, falling back to In-App Mini Player:", e);
+    }
+  }
+
+  toggleFloatingMiniPlayer();
+  showToast("In-App Floating Mini-Player active. Drag anywhere to position!");
+}
+
+// ==========================================================================
+// FEATURE 4: BATCH TAG & METADATA STUDIO
+// ==========================================================================
+function renderBatchTagTable() {
+  const tbody = document.getElementById("batchtag-table-body");
+  if (!tbody) return;
+
+  const q = (state.batchTag.filterQuery || "").toLowerCase();
+  const tracks = state.libraryTracks.filter(t => {
+    if (!q) return true;
+    return (t.title && t.title.toLowerCase().includes(q))
+      || (t.artist && t.artist.toLowerCase().includes(q))
+      || (t.album && t.album.toLowerCase().includes(q));
+  });
+
+  tbody.innerHTML = tracks.map(t => {
+    const isChecked = state.batchTag.selectedPaths.has(t.file_path);
+    const cUrl = coverUrl(t.cover_key || t.file_path);
+    const fname = t.file_path ? t.file_path.split(/[/\\]/).pop() : "";
+    return `
+      <tr data-fp="${escapeHtml(t.file_path)}">
+        <td><input type="checkbox" class="chk-batch-row" data-fp="${escapeHtml(t.file_path)}" ${isChecked ? "checked" : ""} /></td>
+        <td><img src="${cUrl}" class="batchtag-thumb" alt="" /></td>
+        <td style="font-weight:600; color:#fff;">${escapeHtml(t.title)}</td>
+        <td>${escapeHtml(t.artist)}</td>
+        <td>${escapeHtml(t.album || "—")}</td>
+        <td><span class="q-badge melobot">${escapeHtml(t.quality_badge || "AUDIO")}</span></td>
+        <td style="font-family:var(--font-mono); font-size:11px; color:#94a3b8;">${escapeHtml(fname)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  tbody.querySelectorAll(".chk-batch-row").forEach(chk => {
+    chk.addEventListener("change", (e) => {
+      const fp = chk.dataset.fp;
+      if (chk.checked) state.batchTag.selectedPaths.add(fp);
+      else state.batchTag.selectedPaths.delete(fp);
+      updateBatchTagBadge();
+    });
+  });
+
+  updateBatchTagBadge();
+}
+
+function updateBatchTagBadge() {
+  const badge = document.getElementById("batchtag-selected-badge");
+  if (badge) {
+    badge.textContent = `${state.batchTag.selectedPaths.size} Tracks Selected`;
+  }
+}
+
 // ==========================================================================
 // Navigation & Event Wiring
 // ==========================================================================
@@ -2274,6 +2644,10 @@ document.addEventListener("DOMContentLoaded", () => {
     state.isPlaying = true;
     document.getElementById("icon-play").classList.add("hidden");
     document.getElementById("icon-pause").classList.remove("hidden");
+    const miniP = document.getElementById("mini-icon-play");
+    const miniPa = document.getElementById("mini-icon-pause");
+    if (miniP) miniP.classList.add("hidden");
+    if (miniPa) miniPa.classList.remove("hidden");
     renderVirtualTracks();
   });
 
@@ -2281,6 +2655,10 @@ document.addEventListener("DOMContentLoaded", () => {
     state.isPlaying = false;
     document.getElementById("icon-play").classList.remove("hidden");
     document.getElementById("icon-pause").classList.add("hidden");
+    const miniP = document.getElementById("mini-icon-play");
+    const miniPa = document.getElementById("mini-icon-pause");
+    if (miniP) miniP.classList.remove("hidden");
+    if (miniPa) miniPa.classList.add("hidden");
     renderVirtualTracks();
   });
 
@@ -2318,8 +2696,24 @@ document.addEventListener("DOMContentLoaded", () => {
       const pct = (audioEl.currentTime / audioEl.duration) * 100;
       seekSlider.value = Math.round(pct * 10);
       seekFill.style.width = `${pct}%`;
-      document.getElementById("lbl-curr-time").textContent = formatMs(audioEl.currentTime * 1000);
-      document.getElementById("lbl-total-time").textContent = formatMs(audioEl.duration * 1000);
+      const curMs = audioEl.currentTime * 1000;
+      const durMs = audioEl.duration * 1000;
+      document.getElementById("lbl-curr-time").textContent = formatMs(curMs);
+      document.getElementById("lbl-total-time").textContent = formatMs(durMs);
+
+      // Mini Player Progress
+      const miniFill = document.getElementById("mini-progress-fill");
+      if (miniFill) miniFill.style.width = `${pct}%`;
+      const miniCur = document.getElementById("mini-time-cur");
+      if (miniCur) miniCur.textContent = formatMs(curMs);
+
+      // Lyrics Editor Stamp Time Display
+      const stampDisp = document.getElementById("lrc-cur-time-display");
+      if (stampDisp) {
+        const mm = String(Math.floor(audioEl.currentTime / 60)).padStart(2, "0");
+        const ss = (audioEl.currentTime % 60).toFixed(2).padStart(5, "0");
+        stampDisp.textContent = `${mm}:${ss}`;
+      }
     }
     updateActiveLyricTicker();
   });
@@ -2515,6 +2909,293 @@ document.addEventListener("DOMContentLoaded", () => {
     } else if (e.code === "ArrowLeft") {
       if (audioEl.duration) audioEl.currentTime = Math.max(0, audioEl.currentTime - 5);
     }
+  });
+
+
+  // Sleep Timer Event Wiring
+  const sleepBtn = document.getElementById("btn-sleep-timer");
+  const sleepMenu = document.getElementById("sleep-timer-menu");
+  if (sleepBtn && sleepMenu) {
+    sleepBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      sleepMenu.classList.toggle("hidden");
+    });
+    document.addEventListener("click", (e) => {
+      if (!sleepMenu.contains(e.target) && e.target !== sleepBtn) {
+        sleepMenu.classList.add("hidden");
+      }
+    });
+    sleepMenu.querySelectorAll(".popover-item").forEach(btn => {
+      btn.addEventListener("click", () => {
+        setSleepTimer(btn.dataset.sleep);
+        sleepMenu.classList.add("hidden");
+      });
+    });
+  }
+
+  // Lyrics Offset Nudge Event Wiring
+  document.getElementById("btn-lyrics-offset-minus")?.addEventListener("click", () => nudgeLyricsOffset(-500));
+  document.getElementById("btn-lyrics-offset-plus")?.addEventListener("click", () => nudgeLyricsOffset(500));
+  document.getElementById("lbl-lyrics-offset")?.addEventListener("click", () => nudgeLyricsOffset(0, true));
+
+  // Lyrics Inline Editor Event Wiring
+  document.getElementById("btn-lyrics-edit-toggle")?.addEventListener("click", () => toggleLyricsEditor());
+  document.getElementById("btn-lrc-editor-cancel")?.addEventListener("click", () => toggleLyricsEditor(false));
+
+  document.getElementById("btn-lrc-stamp-time")?.addEventListener("click", () => {
+    const textarea = document.getElementById("lyrics-editor-textarea");
+    if (!textarea) return;
+    const mm = String(Math.floor(audioEl.currentTime / 60)).padStart(2, "0");
+    const ss = (audioEl.currentTime % 60).toFixed(2).padStart(5, "0");
+    const tag = `[${mm}:${ss}] `;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const val = textarea.value;
+    textarea.value = val.substring(0, start) + tag + val.substring(end);
+    textarea.selectionStart = textarea.selectionEnd = start + tag.length;
+    textarea.focus();
+  });
+
+  document.getElementById("btn-lrc-shift-minus")?.addEventListener("click", () => shiftTextareaTimestamps(-0.5));
+  document.getElementById("btn-lrc-shift-plus")?.addEventListener("click", () => shiftTextareaTimestamps(0.5));
+
+  document.getElementById("btn-lrc-editor-save")?.addEventListener("click", async () => {
+    if (!state.currentTrack) return;
+    const textarea = document.getElementById("lyrics-editor-textarea");
+    const text = textarea ? textarea.value : "";
+    if (!text.trim()) {
+      showToast("Cannot save empty lyrics.");
+      return;
+    }
+    showToast("Saving lyrics & embedding into audio file...");
+    const r = await apiPost("/api/lyrics/save", {
+      file_path: state.currentTrack.file_path,
+      raw_text: text,
+      embed: true,
+    });
+    if (r && r.ok) {
+      state.lyrics.rawText = r.raw_text;
+      state.lyrics.lines = r.lines || [];
+      state.lyrics.synced = r.synced;
+      renderLyricsDrawerLines();
+      toggleLyricsEditor(false);
+      showToast("Lyrics saved to .lrc and embedded in audio tags!");
+    } else {
+      showToast(`Save failed: ${r ? r.error : "Unknown error"}`);
+    }
+  });
+
+  // Mini Player Event Wiring
+  document.getElementById("btn-mini-player")?.addEventListener("click", toggleFloatingMiniPlayer);
+  document.getElementById("btn-mini-pip-out")?.addEventListener("click", requestPipMiniPlayer);
+  document.getElementById("btn-mini-close")?.addEventListener("click", () => toggleFloatingMiniPlayer());
+  document.getElementById("btn-mini-play")?.addEventListener("click", () => document.getElementById("btn-play-pause").click());
+  document.getElementById("btn-mini-prev")?.addEventListener("click", playPrev);
+  document.getElementById("btn-mini-next")?.addEventListener("click", playNext);
+
+  const miniVol = document.getElementById("mini-vol-slider");
+  if (miniVol) {
+    miniVol.addEventListener("input", (e) => {
+      const v = Number(e.target.value) / 100;
+      audioEl.volume = v;
+      const volSlider = document.getElementById("vol-slider");
+      const volFill = document.getElementById("vol-fill");
+      if (volSlider) volSlider.value = Math.round(v * 100);
+      if (volFill) volFill.style.width = `${v * 100}%`;
+    });
+  }
+
+  const miniProgress = document.getElementById("mini-progress-bar");
+  if (miniProgress) {
+    miniProgress.addEventListener("click", (e) => {
+      if (!audioEl.duration) return;
+      const rect = miniProgress.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      audioEl.currentTime = pct * audioEl.duration;
+    });
+  }
+
+  initMiniPlayerDrag();
+
+  // Batch Tag & Metadata Studio Event Wiring
+  document.getElementById("batchtag-search-input")?.addEventListener("input", (e) => {
+    state.batchTag.filterQuery = e.target.value.trim();
+    renderBatchTagTable();
+  });
+
+  document.getElementById("chk-batchtag-master")?.addEventListener("change", (e) => {
+    const isChecked = e.target.checked;
+    document.querySelectorAll(".chk-batch-row").forEach(chk => {
+      chk.checked = isChecked;
+      const fp = chk.dataset.fp;
+      if (isChecked) state.batchTag.selectedPaths.add(fp);
+      else state.batchTag.selectedPaths.delete(fp);
+    });
+    updateBatchTagBadge();
+  });
+
+  document.getElementById("btn-batchtag-select-all")?.addEventListener("click", () => {
+    state.libraryTracks.forEach(t => state.batchTag.selectedPaths.add(t.file_path));
+    renderBatchTagTable();
+  });
+
+  document.getElementById("btn-batchtag-select-none")?.addEventListener("click", () => {
+    state.batchTag.selectedPaths.clear();
+    renderBatchTagTable();
+  });
+
+  document.getElementById("btn-batchtag-select-missing-art")?.addEventListener("click", () => {
+    state.batchTag.selectedPaths.clear();
+    state.libraryTracks.forEach(t => {
+      if (!t.cover_key || t.cover_key === "default") {
+        state.batchTag.selectedPaths.add(t.file_path);
+      }
+    });
+    renderBatchTagTable();
+    showToast(`Selected ${state.batchTag.selectedPaths.size} tracks missing album artwork.`);
+  });
+
+  document.getElementById("batch-artist-mode")?.addEventListener("change", (e) => {
+    const mode = e.target.value;
+    document.getElementById("batch-artist-set-wrap").classList.toggle("hidden", mode !== "set");
+    document.getElementById("batch-artist-replace-wrap").classList.toggle("hidden", mode !== "replace");
+  });
+
+  // Batch Artist Action
+  document.getElementById("btn-apply-batch-artist")?.addEventListener("click", async () => {
+    if (!state.batchTag.selectedPaths.size) {
+      showToast("Please select at least one track to edit.");
+      return;
+    }
+    const mode = document.getElementById("batch-artist-mode").value;
+    const paths = Array.from(state.batchTag.selectedPaths);
+    showToast(`Applying artist changes to ${paths.length} tracks...`);
+    let res;
+    if (mode === "set") {
+      const newArtist = document.getElementById("batch-artist-name").value.trim();
+      if (!newArtist) {
+        showToast("Enter a new artist name.");
+        return;
+      }
+      res = await apiPost("/api/tools/batch_tag", { action: "set_artist", file_paths: paths, new_artist: newArtist });
+    } else {
+      const findStr = document.getElementById("batch-artist-find").value.trim();
+      const repStr = document.getElementById("batch-artist-replace").value.trim();
+      if (!findStr) {
+        showToast("Enter the artist text to find.");
+        return;
+      }
+      res = await apiPost("/api/tools/batch_tag", { action: "replace_artist", file_paths: paths, find_str: findStr, replace_str: repStr });
+    }
+    if (res && res.ok) {
+      showToast(`Successfully updated artist on ${res.processed} tracks!`);
+      await loadLibrary(true);
+      renderBatchTagTable();
+    } else {
+      showToast(`Batch update error: ${res ? res.error : "Unknown"}`);
+    }
+  });
+
+  // Batch Album Action
+  document.getElementById("btn-apply-batch-album")?.addEventListener("click", async () => {
+    if (!state.batchTag.selectedPaths.size) {
+      showToast("Please select at least one track to edit.");
+      return;
+    }
+    const newAlbum = document.getElementById("batch-album-title").value.trim();
+    if (!newAlbum) {
+      showToast("Enter a new album title.");
+      return;
+    }
+    const renumber = document.getElementById("chk-batch-renumber").checked;
+    const paths = Array.from(state.batchTag.selectedPaths);
+    showToast(`Updating album title on ${paths.length} tracks...`);
+    const res = await apiPost("/api/tools/batch_tag", { action: "set_album", file_paths: paths, new_album: newAlbum, renumber });
+    if (res && res.ok) {
+      showToast(`Successfully updated album on ${res.processed} tracks!`);
+      await loadLibrary(true);
+      renderBatchTagTable();
+    } else {
+      showToast(`Batch update error: ${res ? res.error : "Unknown"}`);
+    }
+  });
+
+  // Batch Rename Action
+  document.getElementById("btn-apply-batch-rename")?.addEventListener("click", async () => {
+    if (!state.batchTag.selectedPaths.size) {
+      showToast("Please select at least one track to rename.");
+      return;
+    }
+    const tpl = document.getElementById("batch-rename-template").value.trim();
+    const paths = Array.from(state.batchTag.selectedPaths);
+    showToast(`Renaming ${paths.length} files on disk...`);
+    const res = await apiPost("/api/tools/batch_tag", { action: "rename_files", file_paths: paths, template: tpl });
+    if (res && res.ok) {
+      showToast(`Successfully renamed ${res.processed} files!`);
+      state.batchTag.selectedPaths.clear();
+      await loadLibrary(true);
+      renderBatchTagTable();
+    } else {
+      showToast(`Batch rename error: ${res ? res.error : "Unknown"}`);
+    }
+  });
+
+  document.querySelectorAll(".template-chips .chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      document.getElementById("batch-rename-template").value = chip.dataset.tpl;
+    });
+  });
+
+  // Batch Cover Art Action
+  document.getElementById("btn-apply-batch-covers")?.addEventListener("click", async () => {
+    if (!state.batchTag.selectedPaths.size) {
+      showToast("Please select at least one track.");
+      return;
+    }
+    const paths = Array.from(state.batchTag.selectedPaths);
+    showToast(`Searching & embedding cover art for ${paths.length} tracks...`);
+    const res = await apiPost("/api/tools/batch_tag", { action: "fetch_covers", file_paths: paths });
+    if (res && res.ok) {
+      showToast(`Cover art fetched and embedded for ${res.processed} tracks!`);
+      await loadLibrary(true);
+      renderBatchTagTable();
+    } else {
+      showToast(`Cover fetch error: ${res ? res.error : "Unknown"}`);
+    }
+  });
+
+  // Batch Genre Action
+  document.getElementById("btn-apply-batch-genre")?.addEventListener("click", async () => {
+    if (!state.batchTag.selectedPaths.size) {
+      showToast("Please select at least one track.");
+      return;
+    }
+    const genre = document.getElementById("batch-genre-input").value.trim();
+    if (!genre) {
+      showToast("Enter a genre name.");
+      return;
+    }
+    const paths = Array.from(state.batchTag.selectedPaths);
+    const res = await apiPost("/api/tools/batch_tag", { action: "set_genre", file_paths: paths, genre });
+    if (res && res.ok) {
+      showToast(`Genre applied to ${res.processed} tracks!`);
+      await loadLibrary(true);
+      renderBatchTagTable();
+    } else {
+      showToast(`Genre update error: ${res ? res.error : "Unknown"}`);
+    }
+  });
+
+  // Tab switching inside view-tools
+  document.querySelectorAll("#tools-tabs .seg-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.tooltab;
+      document.querySelectorAll("#tools-tabs .seg-tab").forEach(b => b.classList.toggle("active", b === btn));
+      document.getElementById("tool-panel-spectrum")?.classList.toggle("hidden", tab !== "spectrum");
+      document.getElementById("tool-panel-duplicates")?.classList.toggle("hidden", tab !== "duplicates");
+      document.getElementById("tool-panel-batchtag")?.classList.toggle("hidden", tab !== "batchtag");
+      if (tab === "batchtag") renderBatchTagTable();
+    });
   });
 
   // Boot Studio

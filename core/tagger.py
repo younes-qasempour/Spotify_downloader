@@ -657,3 +657,203 @@ class AudioTagger:
         return False
 
 
+
+    def embed_lyrics_only(self, file_path: str, lyrics_data: Any) -> bool:
+        """
+        Embeds synchronized and plain lyrics into an audio file on disk,
+        preserving all other existing tags and album covers.
+        """
+        if not file_path or not os.path.isfile(file_path):
+            return False
+
+        plain_lyrics = ""
+        synced_lyrics = ""
+        if isinstance(lyrics_data, str):
+            if "[" in lyrics_data and "]" in lyrics_data:
+                synced_lyrics = lyrics_data
+                plain_lyrics = re.sub(r"\[\d+:\d+\.\d+\]\s*", "", lyrics_data).strip()
+            else:
+                plain_lyrics = lyrics_data
+        elif hasattr(lyrics_data, "synced_lyrics") or hasattr(lyrics_data, "plain_lyrics"):
+            plain_lyrics = getattr(lyrics_data, "plain_lyrics", "") or ""
+            synced_lyrics = getattr(lyrics_data, "synced_lyrics", "") or ""
+            if not plain_lyrics and synced_lyrics:
+                plain_lyrics = re.sub(r"\[\d+:\d+\.\d+\]\s*", "", synced_lyrics).strip()
+
+        plain_lyrics = self._normalize_crlf(plain_lyrics)
+        synced_lyrics = self._normalize_crlf(synced_lyrics)
+
+        ext = os.path.splitext(file_path)[1].lower()
+        try:
+            if ext == ".flac":
+                audio = FLAC(file_path)
+                lyr = synced_lyrics or plain_lyrics
+                if lyr:
+                    audio["LYRICS"] = lyr
+                    audio["lyrics"] = lyr
+                if synced_lyrics:
+                    audio["SYNCEDLYRICS"] = synced_lyrics
+                    audio["SYNCED LYRICS"] = synced_lyrics
+                if plain_lyrics:
+                    audio["UNSYNCEDLYRICS"] = plain_lyrics
+                    audio["UNSYNCED LYRICS"] = plain_lyrics
+                audio.save()
+                return True
+            elif ext == ".mp3":
+                try:
+                    audio = ID3(file_path)
+                except Exception:
+                    audio = ID3()
+                lyr = synced_lyrics or plain_lyrics
+                if lyr:
+                    audio.delall("USLT")
+                    audio.add(USLT(encoding=3, lang="eng", desc="", text=lyr))
+                audio.save(file_path, v2_version=4)
+                return True
+            elif ext == ".m4a":
+                audio = MP4(file_path)
+                lyr = synced_lyrics or plain_lyrics
+                if lyr:
+                    audio["\xa9lyr"] = lyr
+                audio.save()
+                return True
+            elif ext in (".opus", ".ogg"):
+                try:
+                    audio = OggOpus(file_path)
+                except Exception:
+                    from mutagen.oggvorbis import OggVorbis
+                    audio = OggVorbis(file_path)
+                lyr = synced_lyrics or plain_lyrics
+                if lyr:
+                    audio["LYRICS"] = lyr
+                    audio["lyrics"] = lyr
+                if synced_lyrics:
+                    audio["SYNCEDLYRICS"] = synced_lyrics
+                    audio["SYNCED LYRICS"] = synced_lyrics
+                audio.save()
+                return True
+        except Exception as e:
+            logger.error(f"Error embedding lyrics only in {file_path}: {e}")
+        return False
+
+    _embed_lyrics_only = embed_lyrics_only
+
+    def tag_metadata_in_place(
+        self,
+        file_path: str,
+        title: Optional[str] = None,
+        artist: Optional[str] = None,
+        album: Optional[str] = None,
+        track_num: Optional[int] = None,
+        genre: Optional[str] = None,
+        cover_bytes: Optional[bytes] = None,
+    ) -> bool:
+        """
+        Updates specific tags in an audio file on disk in place, preserving all existing
+        untouched tags (e.g. lyrics, replaygain, year, etc.).
+        """
+        if not file_path or not os.path.isfile(file_path):
+            return False
+        ext = os.path.splitext(file_path)[1].lower()
+        try:
+            if ext == ".flac":
+                audio = FLAC(file_path)
+                if title is not None:
+                    audio["TITLE"] = [title]
+                    audio["title"] = [title]
+                if artist is not None:
+                    audio["ARTIST"] = [artist]
+                    audio["artist"] = [artist]
+                if album is not None:
+                    audio["ALBUM"] = [album]
+                    audio["album"] = [album]
+                if track_num is not None:
+                    audio["TRACKNUMBER"] = [str(track_num)]
+                    audio["tracknumber"] = [str(track_num)]
+                if genre is not None:
+                    audio["GENRE"] = [genre]
+                    audio["genre"] = [genre]
+                if cover_bytes:
+                    pic = Picture()
+                    pic.type = 3
+                    pic.mime = "image/jpeg"
+                    pic.data = cover_bytes
+                    audio.clear_pictures()
+                    audio.add_picture(pic)
+                audio.save()
+                return True
+            elif ext == ".mp3":
+                try:
+                    audio = ID3(file_path)
+                except Exception:
+                    audio = ID3()
+                if title is not None:
+                    audio.delall("TIT2")
+                    audio.add(TIT2(encoding=3, text=title))
+                if artist is not None:
+                    audio.delall("TPE1")
+                    audio.add(TPE1(encoding=3, text=artist))
+                if album is not None:
+                    audio.delall("TALB")
+                    audio.add(TALB(encoding=3, text=album))
+                if track_num is not None:
+                    audio.delall("TRCK")
+                    audio.add(TRCK(encoding=3, text=str(track_num)))
+                if genre is not None:
+                    audio.delall("TCON")
+                    audio.add(TCON(encoding=3, text=genre))
+                if cover_bytes:
+                    audio.delall("APIC")
+                    audio.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=cover_bytes))
+                audio.save(file_path, v2_version=4)
+                return True
+            elif ext == ".m4a":
+                audio = MP4(file_path)
+                if title is not None:
+                    audio["\xa9nam"] = title
+                if artist is not None:
+                    audio["\xa9ART"] = artist
+                if album is not None:
+                    audio["\xa9alb"] = album
+                if track_num is not None:
+                    audio["trkn"] = [(track_num, 0)]
+                if genre is not None:
+                    audio["\xa9gen"] = genre
+                if cover_bytes:
+                    audio["covr"] = [MP4Cover(cover_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
+                audio.save()
+                return True
+            elif ext in (".opus", ".ogg"):
+                try:
+                    audio = OggOpus(file_path)
+                except Exception:
+                    from mutagen.oggvorbis import OggVorbis
+                    audio = OggVorbis(file_path)
+                if title is not None:
+                    audio["TITLE"] = [title]
+                    audio["title"] = [title]
+                if artist is not None:
+                    audio["ARTIST"] = [artist]
+                    audio["artist"] = [artist]
+                if album is not None:
+                    audio["ALBUM"] = [album]
+                    audio["album"] = [album]
+                if track_num is not None:
+                    audio["TRACKNUMBER"] = [str(track_num)]
+                    audio["tracknumber"] = [str(track_num)]
+                if genre is not None:
+                    audio["GENRE"] = [genre]
+                    audio["genre"] = [genre]
+                if cover_bytes:
+                    import base64
+                    pic = Picture()
+                    pic.type = 3
+                    pic.mime = "image/jpeg"
+                    pic.data = cover_bytes
+                    b64_data = base64.b64encode(pic.write()).decode("ascii")
+                    audio["METADATA_BLOCK_PICTURE"] = [b64_data]
+                audio.save()
+                return True
+        except Exception as e:
+            logger.error(f"Error tagging metadata in place for {file_path}: {e}")
+        return False
