@@ -283,48 +283,33 @@
 
         <!-- 3. SAVED & WATCHED PLAYLISTS VIEW -->
         <section class="view-page" id="view-saved">
-          <!-- Top Overview & Spotify API Status Bar (v1.6.2 Metric Cards + Modern GUI) -->
-          <div class="saved-top-overview" id="saved-top-overview">
-            <div class="saved-overview-header-row">
-              <div class="saved-overview-title-box">
-                <h2>Saved &amp; Watched Playlists</h2>
-                <span class="saved-overview-subtitle">Manage offline Spotify playlists, delta-sync updates, and download in controlled batches.</span>
-              </div>
-              <div class="saved-api-banner" id="saved-api-banner">
-                <span id="saved-api-icon">✓</span>
-                <span id="saved-api-text">Checking Spotify API status...</span>
-                <button class="ghost-pill-btn hidden" id="saved-api-btn">Configure Keys</button>
-                <button class="banner-dismiss-btn" id="btn-dismiss-api-banner" title="Dismiss banner">✕</button>
-              </div>
-              <div class="saved-overview-actions">
-                <button class="btn-primary-emerald" id="btn-add-saved-pl" title="Save new Spotify playlist offline">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-                  <span>+ Save Spotify Playlist</span>
-                </button>
-                <button class="btn-secondary-dark" id="btn-sync-all-saved" title="Check all saved playlists for newly added songs online">
-                  ↻ Sync All
-                </button>
+          <!-- Ultra-Compact Single-Tier Overview Bar (Max Table Vertical Room) -->
+          <div class="saved-top-overview-compact" id="saved-top-overview">
+            <div class="saved-top-left">
+              <h2>Saved Playlists</h2>
+              <div class="saved-top-stats" id="saved-overview-metrics">
+                <span id="saved-metric-count">0</span> playlists • 
+                <span id="saved-metric-tracks">0</span> tracks • 
+                <span class="stat-emerald"><span id="saved-metric-downloaded">0</span> downloaded</span> • 
+                <span class="stat-amber"><span id="saved-metric-pending">0</span> missing</span>
               </div>
             </div>
 
-            <!-- v1.6.2 Metric Cards Row (Glassmorphic) -->
-            <div class="saved-metrics-bar">
-              <div class="saved-metric-card">
-                <div class="metric-num" id="saved-metric-count">0</div>
-                <div class="metric-label">Saved Playlists</div>
-              </div>
-              <div class="saved-metric-card">
-                <div class="metric-num" id="saved-metric-tracks">0</div>
-                <div class="metric-label">Total Tracks</div>
-              </div>
-              <div class="saved-metric-card emerald-tint">
-                <div class="metric-num" id="saved-metric-downloaded">0</div>
-                <div class="metric-label">Downloaded</div>
-              </div>
-              <div class="saved-metric-card amber-tint">
-                <div class="metric-num" id="saved-metric-pending">0</div>
-                <div class="metric-label">Missing / Pending</div>
-              </div>
+            <div class="saved-api-banner compact" id="saved-api-banner">
+              <span id="saved-api-icon">✓</span>
+              <span id="saved-api-text">Spotify API Connected</span>
+              <button class="ghost-pill-btn hidden" id="saved-api-btn">Configure Keys</button>
+              <button class="banner-dismiss-btn" id="btn-dismiss-api-banner" title="Dismiss">✕</button>
+            </div>
+
+            <div class="saved-top-actions">
+              <button class="btn-primary-emerald btn-sm" id="btn-add-saved-pl" title="Save new Spotify playlist offline">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                <span>Save Playlist</span>
+              </button>
+              <button class="btn-secondary-dark btn-sm" id="btn-sync-all-saved" title="Check all saved playlists for newly added songs online">
+                ↻ Sync All
+              </button>
             </div>
           </div>
 

@@ -1330,89 +1330,95 @@ async function loadSavedPlaylistDetail(pid) {
   savedTrackSliceLimit = 250;
 
   const downloadedCnt = tracks.filter(t => t.is_downloaded).length;
-  const missingCnt = tracks.filter(t => !t.is_downloaded && (t.status || "").toLowerCase() !== "queued" && (t.status || "").toLowerCase() !== "downloading").length;
+  const unqueuedMissing = tracks.filter(t => !t.is_downloaded && (t.status || "").toLowerCase() !== "queued" && (t.status || "").toLowerCase() !== "downloading").length;
   const queuedCnt = tracks.filter(t => (t.status || "").toLowerCase() === "queued" || (t.status || "").toLowerCase() === "downloading").length;
   const pct = tracks.length > 0 ? Math.round((downloadedCnt / tracks.length) * 100) : 0;
   const cUrl = coverUrl(pl.local_cover || pl.cover_url);
-  const effBatch = Math.min(state.savedBatchSize, missingCnt || 1);
+  const effBatch = Math.min(state.savedBatchSize, unqueuedMissing);
+  const isBatchDisabled = unqueuedMissing === 0;
+  const batchBtnText = unqueuedMissing > 0
+    ? `Download Batch (${effBatch})`
+    : queuedCnt > 0
+      ? `All Queued (${queuedCnt})`
+      : `✓ All Downloaded`;
 
   pane.innerHTML = `
-    <!-- Playlist Detail Header -->
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.08);">
-      <div style="display:flex; align-items:center; gap:16px;">
-        <img src="${cUrl}" style="width:72px; height:72px; border-radius:10px; object-fit:cover; background:#222; box-shadow:0 8px 24px rgba(0,0,0,0.6);" onerror="this.style.display='none'" />
-        <div>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <h2 style="font-size:22px; font-weight:800; color:#fff; margin:0;">${escapeHtml(pl.name)}</h2>
-            ${pl.spotify_url ? `<button class="ghost-pill-btn" id="btn-pl-copy-url" title="Copy Spotify Link" style="font-size:11px; padding:2px 8px;">🔗 Link</button>` : ""}
+    <!-- 1. Ultra-Compact Playlist Header (Height ~44px) -->
+    <div class="saved-header-compact">
+      <div class="sh-info">
+        <img src="${cUrl}" class="sh-thumb" onerror="this.style.display='none'" />
+        <div class="sh-meta">
+          <div class="sh-title-row">
+            <h3 class="sh-title" title="${escapeHtml(pl.name)}">${escapeHtml(pl.name)}</h3>
+            ${pl.spotify_url ? `<button class="ghost-pill-btn sh-link-btn" id="btn-pl-copy-url" title="Copy Spotify Link">🔗 Link</button>` : ""}
           </div>
-          <div style="color:var(--text-secondary); font-size:12px; margin-top:4px;">
-            ${tracks.length.toLocaleString()} tracks • <span style="color:#4ade80;">${downloadedCnt.toLocaleString()} downloaded</span>${missingCnt > 0 ? ` • <span style="color:#fbbf24;">${missingCnt.toLocaleString()} missing</span>` : ""}${queuedCnt > 0 ? ` • <span style="color:#93c5fd;">${queuedCnt.toLocaleString()} queued</span>` : ""} • ${pct}% complete • Last synced: ${escapeHtml(pl.last_synced_at || "Never")}
+          <div class="sh-sub">
+            ${tracks.length.toLocaleString()} tracks • <span style="color:#4ade80;">${downloadedCnt.toLocaleString()} downloaded</span>${unqueuedMissing > 0 ? ` • <span style="color:#fbbf24;">${unqueuedMissing.toLocaleString()} missing</span>` : ""}${queuedCnt > 0 ? ` • <span style="color:#93c5fd;">${queuedCnt.toLocaleString()} queued</span>` : ""} • ${pct}%
           </div>
         </div>
       </div>
-      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-        <button class="btn-primary-emerald" id="btn-pl-play-all" title="Play downloaded tracks from this playlist">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7 5v14l11-7z"/></svg>
-          <span>Play Playlist (${downloadedCnt})</span>
+      <div class="sh-actions">
+        <button class="btn-primary-emerald btn-sm" id="btn-pl-play-all" title="Play downloaded tracks">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M7 5v14l11-7z"/></svg>
+          <span>Play (${downloadedCnt})</span>
         </button>
-        <label class="checkbox-pill" title="Automatically watch and sync newly added tracks on Spotify">
+        <label class="checkbox-pill compact-pill" title="Auto delta-sync when tracks are added on Spotify">
           <input type="checkbox" id="chk-pl-watch" ${pl.auto_sync ? "checked" : ""} />
-          <span>⏱ Watch Auto-Sync</span>
+          <span>⏱ Auto-Sync</span>
         </label>
-        <button class="btn-secondary-dark" id="btn-pl-sync-now" title="Check Spotify for new or removed songs">↻ Sync</button>
-        <button class="btn-secondary-dark" id="btn-pl-open-folder" title="Open download folder on disk">📁 Folder</button>
-        <button class="btn-secondary-dark" id="btn-pl-edit" title="Rename or edit playlist & artwork">⚙ Edit</button>
-        <button class="btn-secondary-dark" id="btn-pl-export-m3u" title="Export this playlist to a .m3u8 file">⤓ M3U8</button>
-        <button class="btn-danger-outline" id="btn-pl-delete" title="Delete this saved playlist">Delete</button>
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-sync-now" title="Check Spotify for updates">↻ Sync</button>
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-open-folder" title="Open download folder">📁 Folder</button>
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-edit" title="Edit playlist metadata">⚙ Edit</button>
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-export-m3u" title="Export .m3u8">⤓ M3U8</button>
+        <button class="btn-danger-outline btn-sm" id="btn-pl-delete" title="Delete playlist">✕</button>
       </div>
     </div>
 
-    <!-- Batch Download & VIP Quota Control Card (v1.6.2 Master Controls) -->
-    <div class="batch-card">
-      <div class="batch-action-col">
-        <button class="btn-primary-emerald" id="btn-pl-download-batch" style="padding:6px 14px; font-weight:700;">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="margin-right:4px;"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-          <span id="lbl-batch-btn-text">Download Next Batch (${effBatch})</span>
+    <!-- 2. Integrated Sleek Batch Toolbar (Height ~34px, all in one line!) -->
+    <div class="saved-batch-toolbar">
+      <div class="sb-left">
+        <button class="btn-primary-emerald btn-sm" id="btn-pl-download-batch" ${isBatchDisabled ? "disabled style='opacity:0.6; cursor:default;'" : ""}>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          <span id="lbl-batch-btn-text">${batchBtnText}</span>
         </button>
-        <button class="btn-secondary-dark" id="btn-pl-download-selected" disabled>
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-download-selected" disabled>
           Download Selected (0)
         </button>
-        <button class="btn-secondary-dark" id="btn-pl-pause-queue" title="Pause or resume downloading queue">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+        <div class="sb-presets">
+          <span class="sb-presets-lbl">Batch:</span>
+          <button class="btn-preset-mini ${state.savedBatchSize === 25 ? "active" : ""}" data-preset="25">25</button>
+          <button class="btn-preset-mini ${state.savedBatchSize === 50 ? "active" : ""}" data-preset="50">50</button>
+          <button class="btn-preset-mini ${state.savedBatchSize === 100 ? "active" : ""}" data-preset="100">100</button>
+          <button class="btn-preset-mini ${state.savedBatchSize === 200 ? "active" : ""}" data-preset="200">200</button>
+          <button class="btn-preset-mini" data-preset="all">All (${unqueuedMissing})</button>
+          <input type="number" id="input-batch-size" class="batch-size-input-mini" min="1" max="5000" value="${state.savedBatchSize}" />
+        </div>
+      </div>
+      <div class="sb-right">
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-pause-queue" title="Pause or resume downloading queue">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
           <span id="lbl-pl-pause-text">Pause</span>
         </button>
-        <button class="btn-secondary-dark" id="btn-pl-stop-queue" title="Stop downloading current queue">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-stop-queue" title="Stop downloading current queue">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
           <span>Stop</span>
         </button>
-        <button class="btn-secondary-dark" id="btn-pl-reset-status" title="Reset queued and failed tracks back to pending status">
-          ↺ Reset Status
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-reset-status" title="Reset queued and failed tracks back to pending status">
+          ↺ Reset
         </button>
-      </div>
-      <div class="batch-action-col">
-        <div class="batch-presets-row">
-          <span style="font-size:11px; color:#94a3b8; margin-right:2px;">Batch:</span>
-          <button class="btn-preset ${state.savedBatchSize === 25 ? "active" : ""}" data-preset="25">25</button>
-          <button class="btn-preset ${state.savedBatchSize === 50 ? "active" : ""}" data-preset="50">50</button>
-          <button class="btn-preset ${state.savedBatchSize === 100 ? "active" : ""}" data-preset="100">100</button>
-          <button class="btn-preset ${state.savedBatchSize === 200 ? "active" : ""}" data-preset="200">200</button>
-          <button class="btn-preset" data-preset="all">All Pending (${missingCnt})</button>
-          <input type="number" id="input-batch-size" class="batch-size-input" min="1" max="5000" value="${state.savedBatchSize}" title="Set custom batch size" />
-        </div>
       </div>
     </div>
 
-    <!-- Quick Search, Tabs & Sorting Controls -->
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; flex-wrap:wrap;">
-      <div class="segmented-tabs" id="saved-filter-tabs">
+    <!-- 3. Filter Tabs & Search Bar (Height ~30px) -->
+    <div class="saved-filter-row">
+      <div class="segmented-tabs compact-tabs" id="saved-filter-tabs">
         <button class="seg-tab active" data-sfilter="all">All (${tracks.length})</button>
         <button class="seg-tab" data-sfilter="downloaded">Downloaded (${downloadedCnt})</button>
-        <button class="seg-tab" data-sfilter="missing">Missing (${missingCnt})</button>
+        <button class="seg-tab" data-sfilter="missing">Missing (${unqueuedMissing})</button>
         <button class="seg-tab ${queuedCnt > 0 ? "" : "hidden"}" data-sfilter="queued">Queued (${queuedCnt})</button>
       </div>
-      <div style="display:flex; align-items:center; gap:8px; flex:1; max-width:480px; justify-content:flex-end;">
-        <select id="saved-track-sort" class="sleek-select" style="height:32px; font-size:11.5px;">
+      <div class="saved-filter-controls">
+        <select id="saved-track-sort" class="sleek-select compact-select">
           <option value="default">Default Order</option>
           <option value="title_asc">Title (A-Z)</option>
           <option value="artist_asc">Artist (A-Z)</option>
@@ -1420,7 +1426,7 @@ async function loadSavedPlaylistDetail(pid) {
           <option value="dur_asc">Duration (Shortest)</option>
           <option value="dur_desc">Duration (Longest)</option>
         </select>
-        <input type="text" id="saved-track-search" class="sidebar-search-wrap" style="width:200px; height:32px; background:#202020; border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:0 12px; color:#fff; font-size:12px;" placeholder="Search in playlist..." autocomplete="off" />
+        <input type="text" id="saved-track-search" class="sidebar-search-wrap compact-search" placeholder="Search tracks..." autocomplete="off" />
       </div>
     </div>
 
@@ -1503,22 +1509,38 @@ async function loadSavedPlaylistDetail(pid) {
   const batchInput = document.getElementById("input-batch-size");
   const updateBatchLabel = () => {
     const btnText = document.getElementById("lbl-batch-btn-text");
-    if (btnText) {
-      const eff = Math.min(state.savedBatchSize, missingCnt || 1);
-      btnText.textContent = `Download Next Batch (${eff})`;
+    const dlBtn = document.getElementById("btn-pl-download-batch");
+    if (btnText && dlBtn) {
+      if (unqueuedMissing > 0) {
+        const eff = Math.min(state.savedBatchSize, unqueuedMissing);
+        btnText.textContent = `Download Batch (${eff})`;
+        dlBtn.disabled = false;
+        dlBtn.style.opacity = "";
+        dlBtn.style.cursor = "";
+      } else if (queuedCnt > 0) {
+        btnText.textContent = `All Queued (${queuedCnt})`;
+        dlBtn.disabled = true;
+        dlBtn.style.opacity = "0.6";
+        dlBtn.style.cursor = "default";
+      } else {
+        btnText.textContent = `✓ All Downloaded`;
+        dlBtn.disabled = true;
+        dlBtn.style.opacity = "0.6";
+        dlBtn.style.cursor = "default";
+      }
     }
   };
 
-  document.querySelectorAll(".batch-card .btn-preset").forEach(b => {
+  document.querySelectorAll(".sb-presets .btn-preset-mini").forEach(b => {
     b.addEventListener("click", () => {
       const val = b.dataset.preset;
       if (val === "all") {
-        state.savedBatchSize = Math.max(1, missingCnt);
+        state.savedBatchSize = Math.max(1, unqueuedMissing);
       } else {
         state.savedBatchSize = Number(val) || 50;
       }
       if (batchInput) batchInput.value = state.savedBatchSize;
-      document.querySelectorAll(".batch-card .btn-preset").forEach(x => x.classList.toggle("active", x === b));
+      document.querySelectorAll(".sb-presets .btn-preset-mini").forEach(x => x.classList.toggle("active", x === b));
       updateBatchLabel();
     });
   });
@@ -1526,7 +1548,7 @@ async function loadSavedPlaylistDetail(pid) {
   if (batchInput) {
     batchInput.addEventListener("input", (e) => {
       state.savedBatchSize = Math.max(1, parseInt(e.target.value) || 1);
-      document.querySelectorAll(".batch-card .btn-preset").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".sb-presets .btn-preset-mini").forEach(x => x.classList.remove("active"));
       updateBatchLabel();
     });
   }
