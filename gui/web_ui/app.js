@@ -117,17 +117,31 @@ function showToast(msg) {
 }
 
 async function apiGet(url) {
-  const res = await fetch(url);
-  return res.json();
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`GET ${url} returned HTTP ${res.status}`);
+      return { ok: false, status: res.status };
+    }
+    return await res.json();
+  } catch (err) {
+    console.warn(`GET ${url} network error:`, err);
+    return { ok: false, error: String(err) };
+  }
 }
 
 async function apiPost(url, data = {}) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  return res.json();
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return await res.json();
+  } catch (err) {
+    console.warn(`POST ${url} network error:`, err);
+    return { ok: false, error: String(err) };
+  }
 }
 
 function updateAmbientFromImage(imgUrl) {
@@ -1464,6 +1478,14 @@ function updateMusilonUI(data) {
   const info = document.getElementById("musilon-info-box");
   if (!badge) return;
   badge.className = "status-pill";
+
+  if (!data || !data.ok) {
+    badge.classList.add("offline");
+    badge.textContent = "Offline";
+    if (info) info.classList.add("hidden");
+    return;
+  }
+
   if (data.is_vip) {
     badge.classList.add("vip");
     badge.textContent = "VIP Active";
@@ -1499,6 +1521,14 @@ function updateTelegramUI(data) {
   const info = document.getElementById("telegram-info-box");
   if (!badge) return;
   badge.className = "status-pill";
+
+  if (!data || !data.ok) {
+    badge.classList.add("disconnected");
+    badge.textContent = "Offline";
+    if (info) info.classList.add("hidden");
+    return;
+  }
+
   if (data.authorized) {
     badge.classList.add("connected");
     const u = data.user || {};
@@ -1508,9 +1538,13 @@ function updateTelegramUI(data) {
       info.textContent = `✈️ Telegram Authorized: @${u.username || u.phone || "user"} (ID: ${u.id || ""})`;
       info.classList.remove("hidden");
     }
+  } else if (data.phone) {
+    badge.classList.add("disconnected");
+    badge.textContent = "Logged Out";
+    if (info) info.classList.add("hidden");
   } else {
     badge.classList.add("disconnected");
-    badge.textContent = "Disconnected";
+    badge.textContent = "Not Connected";
     if (info) info.classList.add("hidden");
   }
 }
@@ -1520,6 +1554,14 @@ function updateSpotifyUI(data) {
   const info = document.getElementById("spotify-info-box");
   if (!badge) return;
   badge.className = "status-pill";
+
+  if (!data || !data.ok) {
+    badge.classList.add("guest");
+    badge.textContent = "Guest Mode (100 cap)";
+    if (info) info.classList.add("hidden");
+    return;
+  }
+
   if (data.has_user_auth) {
     badge.classList.add("connected");
     badge.textContent = `Authorized as @${data.user_name || "User"}`;
@@ -1528,10 +1570,10 @@ function updateSpotifyUI(data) {
       info.classList.remove("hidden");
     }
   } else if (data.configured) {
-    badge.classList.add("guest");
+    badge.classList.add("active");
     badge.textContent = "Keys Configured";
     if (info) {
-      info.textContent = `Keys set. Validated for standard catalog queries.`;
+      info.textContent = `API keys active. Validated for unlimited track queries.`;
       info.classList.remove("hidden");
     }
   } else {
@@ -1546,15 +1588,17 @@ function updateFFmpegUI(data) {
   const lbl = document.getElementById("ffmpeg-path-label");
   if (!badge) return;
   badge.className = "status-pill";
-  if (data.installed) {
-    badge.classList.add("connected");
-    badge.textContent = "Installed & Ready";
-    if (lbl) lbl.textContent = `Active binary: ${data.path}`;
-  } else {
+
+  if (!data || !data.ok || !data.installed) {
     badge.classList.add("offline");
     badge.textContent = "Missing";
     if (lbl) lbl.textContent = "FFmpeg is not installed. Click below to download standalone binary.";
+    return;
   }
+
+  badge.classList.add("connected");
+  badge.textContent = "Installed & Ready";
+  if (lbl) lbl.textContent = `Active binary: ${data.path}`;
 }
 
 let maintPollTimer = null;
@@ -1669,19 +1713,12 @@ async function saveAllSettings() {
 // ==========================================================================
 async function loadSettings() {
   try {
-    const [res, musilonRes, tgRes, spRes, ffRes] = await Promise.all([
-      apiGet("/api/settings"),
-      apiGet("/api/auth/musilon/status"),
-      apiGet("/api/auth/telegram/status"),
-      apiGet("/api/auth/spotify/status"),
-      apiGet("/api/diagnostics/ffmpeg"),
-    ]);
-
+    const res = await apiGet("/api/settings");
     if (res && res.ok && res.settings) {
       const s = res.settings;
       const setVal = (id, val) => {
         const el = document.getElementById(id);
-        if (el) el.value = val !== undefined ? val : "";
+        if (el) el.value = val !== undefined && val !== null ? val : "";
       };
       const setChk = (id, val) => {
         const el = document.getElementById(id);
@@ -1719,14 +1756,26 @@ async function loadSettings() {
       setChk("set-tg-enabled", s.telegram_enabled);
       setVal("set-tg-delay", s.telegram_safe_delay_sec);
     }
-
-    if (musilonRes && musilonRes.ok) updateMusilonUI(musilonRes);
-    if (tgRes && tgRes.ok) updateTelegramUI(tgRes);
-    if (spRes && spRes.ok) updateSpotifyUI(spRes);
-    if (ffRes && ffRes.ok) updateFFmpegUI(ffRes);
   } catch (err) {
-    console.error("Error loading settings:", err);
+    console.error("Error loading /api/settings:", err);
   }
+
+  // Query each status independently so one service delay never blocks others or UI
+  apiGet("/api/auth/musilon/status")
+    .then(updateMusilonUI)
+    .catch((err) => updateMusilonUI({ ok: false, error: String(err) }));
+
+  apiGet("/api/auth/telegram/status")
+    .then(updateTelegramUI)
+    .catch((err) => updateTelegramUI({ ok: false, error: String(err) }));
+
+  apiGet("/api/auth/spotify/status")
+    .then(updateSpotifyUI)
+    .catch((err) => updateSpotifyUI({ ok: false, error: String(err) }));
+
+  apiGet("/api/diagnostics/ffmpeg")
+    .then(updateFFmpegUI)
+    .catch((err) => updateFFmpegUI({ ok: false, error: String(err) }));
 }
 
 // ==========================================================================
@@ -2471,6 +2520,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Boot Studio
   loadPlayerState();
   loadLibrary();
+  loadSettings();
   initEqualizerUI();
   pollBackendState();
   setInterval(pollBackendState, 1200);

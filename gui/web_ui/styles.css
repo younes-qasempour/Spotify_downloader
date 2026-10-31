@@ -2074,6 +2074,12 @@ html, body {
   border: 1px solid rgba(239, 68, 68, 0.4);
 }
 
+.status-pill.checking {
+  background: rgba(234, 179, 8, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
 .form-grid-2col {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -101,7 +101,6 @@ class GlobalMediaKeyFilter(QObject):
             has_alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)
 
             player_bar = getattr(self.main_window, "player_bar", None)
-            is_web = hasattr(self.main_window, "web_studio_view")
 
             # ---------------------------------------------------------
             # 1. Hardware Media Keys (ALWAYS handled regardless of focus)
@@ -136,6 +135,9 @@ class GlobalMediaKeyFilter(QObject):
             # ---------------------------------------------------------
             if is_text_input_widget(QApplication.focusWidget()) or is_text_input_widget(watched):
                 return super().eventFilter(watched, event)
+
+            player_bar = getattr(self.main_window, "player_bar", None)
+            is_web = hasattr(self.main_window, "web_studio_view")
 
             # ---------------------------------------------------------
             # 3. In-App Keyboard Shortcuts (Active when not editing text)

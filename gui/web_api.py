@@ -1421,28 +1421,55 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
     # Handlers: Authentication & Diagnostics
     # ------------------------------------------------------------------
     def _handle_musilon_status(self):
-        musilon = self.state.musilon
-        has_user = bool(config.get("musilon.username", ""))
-        has_pwd = bool(config.get("musilon.password", ""))
-        cookie = config.get("musilon.session_cookie", "")
-        has_cookie = bool(cookie.strip())
-        budget = musilon.get_download_budget() or {}
-        is_auth = musilon.is_authenticated() if hasattr(musilon, "is_authenticated") else False
-        is_vip = getattr(musilon, "is_vip", False)
-        self._send_json({
-            "ok": True,
-            "configured": has_user or has_cookie,
-            "has_credentials": has_user and has_pwd,
-            "has_cookie": has_cookie,
-            "username": config.get("musilon.username", ""),
-            "is_authenticated": is_auth,
-            "is_vip": is_vip,
-            "budget": budget,
-            "enabled": bool(config.get("musilon.enabled", True)),
-            "safe_mode": bool(config.get("musilon.safe_mode", True)),
-            "cooldown_min_sec": int(config.get("musilon.cooldown_min_sec", 15)),
-            "cooldown_max_sec": int(config.get("musilon.cooldown_max_sec", 35)),
-        })
+        try:
+            musilon = self.state.musilon
+            has_user = bool(config.get("musilon.username", ""))
+            has_pwd = bool(config.get("musilon.password", ""))
+            cookie = config.get("musilon.session_cookie", "")
+            has_cookie = bool(cookie.strip())
+            budget = {}
+            is_auth = False
+            is_vip = False
+            if musilon:
+                try:
+                    budget = musilon.get_download_budget() or {}
+                except Exception:
+                    budget = {}
+                try:
+                    is_auth = musilon.is_authenticated() if hasattr(musilon, "is_authenticated") else False
+                except Exception:
+                    is_auth = False
+                is_vip = getattr(musilon, "is_vip", False)
+            self._send_json({
+                "ok": True,
+                "configured": has_user or has_cookie,
+                "has_credentials": has_user and has_pwd,
+                "has_cookie": has_cookie,
+                "username": config.get("musilon.username", ""),
+                "is_authenticated": is_auth,
+                "is_vip": is_vip,
+                "budget": budget,
+                "enabled": bool(config.get("musilon.enabled", True)),
+                "safe_mode": bool(config.get("musilon.safe_mode", True)),
+                "cooldown_min_sec": int(config.get("musilon.cooldown_min_sec", 15)),
+                "cooldown_max_sec": int(config.get("musilon.cooldown_max_sec", 35)),
+            })
+        except Exception as e:
+            logger.error(f"Musilon status error: {e}", exc_info=True)
+            self._send_json({
+                "ok": True,
+                "configured": False,
+                "has_credentials": False,
+                "has_cookie": False,
+                "username": "",
+                "is_authenticated": False,
+                "is_vip": False,
+                "budget": {},
+                "enabled": True,
+                "safe_mode": True,
+                "cooldown_min_sec": 15,
+                "cooldown_max_sec": 35,
+            })
 
     def _handle_musilon_login(self, body: Dict[str, Any]):
         user = (body.get("username") or "").strip()
@@ -1503,17 +1530,28 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_telegram_status(self):
-        melobot = self.state.melobot
-        authorized = melobot.is_authorized()
-        user = melobot.get_me() if authorized else None
-        self._send_json({
-            "ok": True,
-            "authorized": authorized,
-            "user": user,
-            "phone": config.get("telegram.phone", ""),
-            "enabled": bool(config.get("telegram.enabled", False)),
-            "safe_delay_sec": int(config.get("telegram.safe_delay_sec", 2)),
-        })
+        try:
+            melobot = self.state.melobot
+            authorized = melobot.is_authorized() if melobot else False
+            user = melobot.get_me() if (melobot and authorized) else None
+            self._send_json({
+                "ok": True,
+                "authorized": authorized,
+                "user": user,
+                "phone": config.get("telegram.phone", ""),
+                "enabled": bool(config.get("telegram.enabled", False)),
+                "safe_delay_sec": int(config.get("telegram.safe_delay_sec", 2)),
+            })
+        except Exception as e:
+            logger.error(f"Telegram status error: {e}", exc_info=True)
+            self._send_json({
+                "ok": True,
+                "authorized": False,
+                "user": None,
+                "phone": config.get("telegram.phone", ""),
+                "enabled": bool(config.get("telegram.enabled", False)),
+                "safe_delay_sec": int(config.get("telegram.safe_delay_sec", 2)),
+            })
 
     def _handle_telegram_send_code(self, body: Dict[str, Any]):
         phone = (body.get("phone") or "").strip()
@@ -1551,25 +1589,35 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": bool(ok)})
 
     def _handle_spotify_status(self):
-        cid = config.get("spotify.client_id", "")
-        sec = config.get("spotify.client_secret", "")
-        has_keys = bool(cid and sec)
-        user_auth = False
-        user_name = ""
-        if has_keys:
-            try:
-                sp = SpotifyClient(client_id=cid, client_secret=sec)
-                user_auth = sp.has_user_auth(allow_network=False)
-                user_name = sp._cached_user_name or ""
-            except Exception:
-                pass
-        self._send_json({
-            "ok": True,
-            "configured": has_keys,
-            "client_id": cid,
-            "has_user_auth": user_auth,
-            "user_name": user_name,
-        })
+        try:
+            cid = config.get("spotify.client_id", "")
+            sec = config.get("spotify.client_secret", "")
+            has_keys = bool(cid and sec)
+            user_auth = False
+            user_name = ""
+            if has_keys:
+                try:
+                    sp = SpotifyClient(client_id=cid, client_secret=sec)
+                    user_auth = sp.has_user_auth(allow_network=False)
+                    user_name = sp._cached_user_name or ""
+                except Exception:
+                    pass
+            self._send_json({
+                "ok": True,
+                "configured": has_keys,
+                "client_id": cid,
+                "has_user_auth": user_auth,
+                "user_name": user_name,
+            })
+        except Exception as e:
+            logger.error(f"Spotify status error: {e}", exc_info=True)
+            self._send_json({
+                "ok": True,
+                "configured": False,
+                "client_id": "",
+                "has_user_auth": False,
+                "user_name": "",
+            })
 
     def _handle_spotify_validate(self, body: Dict[str, Any]):
         cid = (body.get("client_id") or config.get("spotify.client_id", "")).strip()
