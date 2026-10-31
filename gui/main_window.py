@@ -347,6 +347,18 @@ class MainWindow(FluentWindow):
         elif getattr(self, "player_bar", None):
             self.player_bar.seek_relative(ms)
 
+    def media_seek_to(self, ms: int):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript(f"if (typeof window.triggerMediaSeekTo === 'function') window.triggerMediaSeekTo({ms});")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.player.setPosition(ms)
+
+    def media_set_volume(self, pct: int):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript(f"if (typeof window.triggerMediaSetVolume === 'function') window.triggerMediaSetVolume({pct});")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.set_volume(pct)
+
     def _restore_from_tray(self):
         self.showNormal()
         self.activateWindow()

@@ -1042,7 +1042,7 @@
       </button>
 
       <!-- Floating Mini-Player / PiP Mode -->
-      <button class="utility-btn" id="btn-mini-player" title="Floating Mini-Player / PiP Mode (Always-on-Top)">
+      <button class="utility-btn" id="btn-mini-player" title="Floating Mini-Player (Always-on-Top Outside App)">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
           <rect x="12" y="9" width="8" height="6" rx="1" ry="1" fill="currentColor"/>
@@ -1205,56 +1205,7 @@
 
   <script src="/app.js"></script>
 
-  <!-- COMPACT ALWAYS-ON-TOP FLOATING MINI-PLAYER -->
-  <div class="floating-mini-player hidden" id="floating-mini-player">
-    <div class="mini-player-handle" id="mini-player-handle">
-      <div class="mini-brand">
-        <span class="mini-dot"></span>
-        <span>Flacify Mini</span>
-      </div>
-      <div class="mini-window-actions">
-        <button class="mini-win-btn" id="btn-mini-pip-out" title="Pop out to OS-Level PiP (Over games & apps)">⤢</button>
-        <button class="mini-win-btn" id="btn-mini-close" title="Close Mini-Player">✕</button>
-      </div>
-    </div>
-    <div class="mini-player-content">
-      <img id="mini-cover-art" src="" alt="" class="mini-cover" />
-      <div class="mini-info">
-        <div class="mini-title-wrap">
-          <div id="mini-track-title" class="mini-track-title">No Track Playing</div>
-          <div id="mini-track-artist" class="mini-track-artist">Select a song</div>
-        </div>
-        <div class="mini-lyrics-ticker" id="mini-lyrics-ticker">♫ Live Synchronized Lyrics ♫</div>
-        <div class="mini-progress-row">
-          <span id="mini-time-cur">0:00</span>
-          <div class="mini-progress-bar" id="mini-progress-bar">
-            <div class="mini-progress-fill" id="mini-progress-fill" style="width: 0%;"></div>
-          </div>
-          <span id="mini-time-dur">0:00</span>
-        </div>
-        <div class="mini-controls-row">
-          <button class="mini-ctrl-btn" id="btn-mini-prev" title="Previous Track">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
-          </button>
-          <button class="mini-ctrl-btn-play" id="btn-mini-play" title="Play / Pause">
-            <svg id="mini-icon-play" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            <svg id="mini-icon-pause" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-          </button>
-          <button class="mini-ctrl-btn" id="btn-mini-next" title="Next Track">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-          </button>
-          <div class="mini-vol-wrap">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="opacity: 0.7;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg>
-            <input type="range" id="mini-vol-slider" min="0" max="100" value="100" class="mini-range" />
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <!-- Hidden Canvas & Video for OS-Level Picture-in-Picture Rendering -->
-  <canvas id="pip-canvas" width="512" height="288" style="display: none;"></canvas>
-  <video id="pip-video" muted playsinline style="display: none;"></video>
 </body>
 </html>
 

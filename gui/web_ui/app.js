@@ -766,6 +766,41 @@ window.triggerMediaRepeat = () => {
   const rb = document.getElementById("btn-repeat");
   if (rb) rb.click();
 };
+window.triggerMediaSeekTo = (ms) => {
+  if (audioEl) {
+    audioEl.currentTime = Math.max(0, ms / 1000);
+  }
+};
+window.triggerMediaSetVolume = (pct) => {
+  const newVol = Math.max(0, Math.min(100, Number(pct)));
+  state.volume = newVol;
+  if (audioEl) audioEl.volume = newVol / 100;
+  const vs = document.getElementById("vol-slider");
+  const vf = document.getElementById("vol-fill");
+  if (vs) vs.value = newVol;
+  if (vf) vf.style.width = `${newVol}%`;
+  savePlayerState();
+};
+window.getMiniPlayerState = () => {
+  const t = state.currentTrack;
+  const lines = state.lyrics.lines;
+  let lyric = "";
+  if (lines && lines.length && state.lyrics.activeIdx >= 0 && state.lyrics.activeIdx < lines.length) {
+    lyric = lines[state.lyrics.activeIdx].text || "";
+  }
+  return {
+    hasTrack: !!t,
+    title: t ? (t.title || "No Track Playing") : "No Track Playing",
+    artist: t ? (t.artist || "Select a song in Flacify") : "Select a song in Flacify",
+    album: t ? (t.album || "") : "",
+    cover_key: t ? (t.cover_key || t.file_path || "") : "",
+    is_playing: state.isPlaying,
+    position_ms: Math.round((audioEl.currentTime || 0) * 1000),
+    duration_ms: Math.round((audioEl.duration || (t ? t.duration_ms / 1000 : 0) || 0) * 1000),
+    lyric: lyric,
+    volume: Math.round((audioEl.volume !== undefined ? audioEl.volume : 1.0) * 100)
+  };
+};
 
 // ==========================================================================
 // Playback & Synchronized Lyrics Engine
@@ -811,23 +846,7 @@ function playTrackFromList(list, index) {
   pImg.classList.remove("hidden");
   pFall.classList.add("hidden");
 
-  // Update Mini Player UI
-  const miniT = document.getElementById("mini-track-title");
-  if (miniT) miniT.textContent = track.title;
-  const miniA = document.getElementById("mini-track-artist");
-  if (miniA) miniA.textContent = track.artist;
-  const miniCov = document.getElementById("mini-cover-art");
-  if (miniCov) miniCov.src = cUrl;
-  const miniDur = document.getElementById("mini-time-dur");
-  if (miniDur) miniDur.textContent = track.duration_str || "0:00";
-  if (state.miniPlayer.pipWindow) {
-    const pTitle = state.miniPlayer.pipWindow.document.getElementById("pip-title");
-    const pArtist = state.miniPlayer.pipWindow.document.getElementById("pip-artist");
-    const pCover = state.miniPlayer.pipWindow.document.getElementById("pip-cover");
-    if (pTitle) pTitle.textContent = track.title;
-    if (pArtist) pArtist.textContent = track.artist;
-    if (pCover) pCover.src = cUrl;
-  }
+
 
   // Update Lyrics Drawer Header
   document.getElementById("lyrics-title").textContent = track.title;
@@ -1007,12 +1026,7 @@ function updateActiveLyricTicker() {
 
   const orig = lines[idx].text;
   document.getElementById("ticker-orig").textContent = orig;
-  const miniTicker = document.getElementById("mini-lyrics-ticker");
-  if (miniTicker) miniTicker.textContent = orig;
-  if (state.miniPlayer.pipWindow) {
-    const pipLyr = state.miniPlayer.pipWindow.document.getElementById("pip-lyrics");
-    if (pipLyr) pipLyr.textContent = orig;
-  }
+
 
   const hasTrans = (state.lyrics.transLang === "en" || state.lyrics.transLang === "fa")
     && state.lyrics.translated.length === lines.length;
@@ -1981,120 +1995,35 @@ function shiftTextareaTimestamps(deltaSec) {
 }
 
 // ==========================================================================
-// FEATURE 3: FLOATING MINI-PLAYER / PIP MODE
+// FEATURE 3: OUT-OF-APP FLOATING MINI-PLAYER (Always-on-top desktop PiP window)
 // ==========================================================================
-function toggleFloatingMiniPlayer() {
-  const el = document.getElementById("floating-mini-player");
-  if (!el) return;
-  const isHidden = el.classList.contains("hidden");
-  el.classList.toggle("hidden", !isHidden);
-  state.miniPlayer.active = isHidden;
-
-  if (isHidden && state.currentTrack) {
-    const t = state.currentTrack;
-    document.getElementById("mini-track-title").textContent = t.title;
-    document.getElementById("mini-track-artist").textContent = t.artist;
-    document.getElementById("mini-cover-art").src = coverUrl(t.cover_key || t.file_path);
-    document.getElementById("mini-time-dur").textContent = t.duration_str || "0:00";
-    const miniP = document.getElementById("mini-icon-play");
-    const miniPa = document.getElementById("mini-icon-pause");
-    if (miniP) miniP.classList.toggle("hidden", state.isPlaying);
-    if (miniPa) miniPa.classList.toggle("hidden", !state.isPlaying);
-  }
-}
-
-function initMiniPlayerDrag() {
-  const el = document.getElementById("floating-mini-player");
-  const handle = document.getElementById("mini-player-handle");
-  if (!el || !handle) return;
-
-  let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
-
-  handle.addEventListener("mousedown", (e) => {
-    if (e.target.closest(".mini-win-btn")) return;
-    state.miniPlayer.isDragging = true;
-    startX = e.clientX;
-    startY = e.clientY;
-    const rect = el.getBoundingClientRect();
-    initialLeft = rect.left;
-    initialTop = rect.top;
-
-    const onMouseMove = (moveEv) => {
-      if (!state.miniPlayer.isDragging) return;
-      const dx = moveEv.clientX - startX;
-      const dy = moveEv.clientY - startY;
-      const newLeft = Math.max(10, Math.min(window.innerWidth - el.offsetWidth - 10, initialLeft + dx));
-      const newTop = Math.max(10, Math.min(window.innerHeight - el.offsetHeight - 10, initialTop + dy));
-      el.style.left = `${newLeft}px`;
-      el.style.top = `${newTop}px`;
-      el.style.right = "auto";
-      el.style.bottom = "auto";
-    };
-
-    const onMouseUp = () => {
-      state.miniPlayer.isDragging = false;
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-  });
-}
-
-async function requestPipMiniPlayer() {
-  if ("documentPictureInPicture" in window) {
-    try {
-      const pipWin = await window.documentPictureInPicture.requestWindow({
-        width: 380,
-        height: 220,
-      });
-      state.miniPlayer.pipWindow = pipWin;
-
-      document.querySelectorAll("link[rel='stylesheet'], style").forEach(node => {
-        pipWin.document.head.appendChild(node.cloneNode(true));
-      });
-
-      const track = state.currentTrack || { title: "No Track Playing", artist: "Select a song" };
-      const cUrl = coverUrl(track.cover_key || track.file_path);
-
-      pipWin.document.body.innerHTML = `
-        <div style="background:#0f0f13; color:#fff; font-family:var(--font-sans, system-ui); height:100vh; display:flex; flex-direction:column; padding:12px; box-sizing:border-box; user-select:none; justify-content:space-between;">
-          <div style="display:flex; gap:12px; align-items:center;">
-            <img id="pip-cover" src="${cUrl}" style="width:68px; height:68px; border-radius:8px; object-fit:cover; background:#1e1e24;" />
-            <div style="flex:1; min-width:0;">
-              <div id="pip-title" style="font-size:13px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(track.title)}</div>
-              <div id="pip-artist" style="font-size:11px; color:#94a3b8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(track.artist)}</div>
-              <div id="pip-lyrics" style="font-size:11px; font-weight:600; color:#1ed760; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">♫ Synchronized Lyrics Active ♫</div>
-            </div>
-          </div>
-          <div style="display:flex; align-items:center; justify-content:center; gap:18px; margin-top:8px;">
-            <button id="pip-btn-prev" style="background:transparent; border:none; color:#cbd5e1; cursor:pointer; font-size:16px;">⏮</button>
-            <button id="pip-btn-play" style="width:34px; height:34px; border-radius:50%; background:#1ed760; color:#000; border:none; cursor:pointer; font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center;">${state.isPlaying ? "⏸" : "▶"}</button>
-            <button id="pip-btn-next" style="background:transparent; border:none; color:#cbd5e1; cursor:pointer; font-size:16px;">⏭</button>
-          </div>
-        </div>
-      `;
-
-      pipWin.document.getElementById("pip-btn-play").addEventListener("click", () => {
-        document.getElementById("btn-play-pause").click();
-        pipWin.document.getElementById("pip-btn-play").textContent = audioEl.paused ? "▶" : "⏸";
-      });
-      pipWin.document.getElementById("pip-btn-prev").addEventListener("click", playPrev);
-      pipWin.document.getElementById("pip-btn-next").addEventListener("click", playNext);
-
-      pipWin.addEventListener("pagehide", () => {
-        state.miniPlayer.pipWindow = null;
-      });
-      showToast("Floating Mini-Player active in OS Picture-in-Picture window!");
+async function toggleFloatingMiniPlayer() {
+  try {
+    const res = await apiPost("/api/window/mini_player/toggle");
+    if (res && res.ok && res.native) {
+      showToast("Floating Mini-Player active over games & desktop!");
       return;
-    } catch (e) {
-      console.warn("Document PiP failed, falling back to In-App Mini Player:", e);
     }
+  } catch (err) {
+    console.warn("Native mini-player toggle exception:", err);
   }
+  // Standalone Browser Pop-up Fallback (if accessed outside desktop PyQt)
+  openBrowserMiniPlayer();
+}
 
-  toggleFloatingMiniPlayer();
-  showToast("In-App Floating Mini-Player active. Drag anywhere to position!");
+function openBrowserMiniPlayer() {
+  const w = 390, h = 180;
+  const left = Math.max(0, window.screen.width - w - 40);
+  const top = Math.max(0, window.screen.height - h - 60);
+  const win = window.open(
+    "/mini.html",
+    "FlacifyMiniPlayer",
+    `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes`
+  );
+  if (win) {
+    win.focus();
+    showToast("Floating Mini-Player opened in pop-up window!");
+  }
 }
 
 // ==========================================================================
@@ -2644,10 +2573,7 @@ document.addEventListener("DOMContentLoaded", () => {
     state.isPlaying = true;
     document.getElementById("icon-play").classList.add("hidden");
     document.getElementById("icon-pause").classList.remove("hidden");
-    const miniP = document.getElementById("mini-icon-play");
-    const miniPa = document.getElementById("mini-icon-pause");
-    if (miniP) miniP.classList.add("hidden");
-    if (miniPa) miniPa.classList.remove("hidden");
+
     renderVirtualTracks();
   });
 
@@ -2655,10 +2581,7 @@ document.addEventListener("DOMContentLoaded", () => {
     state.isPlaying = false;
     document.getElementById("icon-play").classList.remove("hidden");
     document.getElementById("icon-pause").classList.add("hidden");
-    const miniP = document.getElementById("mini-icon-play");
-    const miniPa = document.getElementById("mini-icon-pause");
-    if (miniP) miniP.classList.remove("hidden");
-    if (miniPa) miniPa.classList.add("hidden");
+
     renderVirtualTracks();
   });
 
@@ -2701,11 +2624,7 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("lbl-curr-time").textContent = formatMs(curMs);
       document.getElementById("lbl-total-time").textContent = formatMs(durMs);
 
-      // Mini Player Progress
-      const miniFill = document.getElementById("mini-progress-fill");
-      if (miniFill) miniFill.style.width = `${pct}%`;
-      const miniCur = document.getElementById("mini-time-cur");
-      if (miniCur) miniCur.textContent = formatMs(curMs);
+
 
       // Lyrics Editor Stamp Time Display
       const stampDisp = document.getElementById("lrc-cur-time-display");
@@ -2985,37 +2904,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Mini Player Event Wiring
+  // Mini Player Event Wiring (Opens True Out-of-App Floating Desktop Widget)
   document.getElementById("btn-mini-player")?.addEventListener("click", toggleFloatingMiniPlayer);
-  document.getElementById("btn-mini-pip-out")?.addEventListener("click", requestPipMiniPlayer);
-  document.getElementById("btn-mini-close")?.addEventListener("click", () => toggleFloatingMiniPlayer());
-  document.getElementById("btn-mini-play")?.addEventListener("click", () => document.getElementById("btn-play-pause").click());
-  document.getElementById("btn-mini-prev")?.addEventListener("click", playPrev);
-  document.getElementById("btn-mini-next")?.addEventListener("click", playNext);
-
-  const miniVol = document.getElementById("mini-vol-slider");
-  if (miniVol) {
-    miniVol.addEventListener("input", (e) => {
-      const v = Number(e.target.value) / 100;
-      audioEl.volume = v;
-      const volSlider = document.getElementById("vol-slider");
-      const volFill = document.getElementById("vol-fill");
-      if (volSlider) volSlider.value = Math.round(v * 100);
-      if (volFill) volFill.style.width = `${v * 100}%`;
-    });
-  }
-
-  const miniProgress = document.getElementById("mini-progress-bar");
-  if (miniProgress) {
-    miniProgress.addEventListener("click", (e) => {
-      if (!audioEl.duration) return;
-      const rect = miniProgress.getBoundingClientRect();
-      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      audioEl.currentTime = pct * audioEl.duration;
-    });
-  }
-
-  initMiniPlayerDrag();
 
   // Batch Tag & Metadata Studio Event Wiring
   document.getElementById("batchtag-search-input")?.addEventListener("input", (e) => {

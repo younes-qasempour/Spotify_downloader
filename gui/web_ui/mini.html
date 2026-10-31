@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flacify Mini Player</title>
+  <style>
+    :root {
+      --bg: #121216;
+      --card-bg: #18181f;
+      --accent: #1ed760;
+      --accent-hover: #22e668;
+      --text: #ffffff;
+      --text-muted: #94a3b8;
+      --border: #282834;
+      --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 12px;
+      overflow: hidden;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .dot {
+      width: 6px;
+      height: 6px;
+      background: var(--accent);
+      border-radius: 50%;
+      box-shadow: 0 0 6px var(--accent);
+    }
+    .content-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .cover {
+      width: 60px;
+      height: 60px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: #1e1e24;
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .info {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .title {
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .artist {
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .lyrics {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 3px;
+    }
+    .progress-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      color: #71717a;
+      margin-top: 8px;
+    }
+    .progress-bar {
+      flex: 1;
+      height: 4px;
+      background: #27272a;
+      border-radius: 2px;
+      cursor: pointer;
+      position: relative;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      width: 0%;
+    }
+    .controls-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 8px;
+    }
+    .transport {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-ctrl {
+      background: transparent;
+      border: none;
+      color: #cbd5e1;
+      font-size: 14px;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-ctrl:hover {
+      background: var(--border);
+      color: #fff;
+    }
+    .btn-play {
+      background: var(--accent);
+      color: #000;
+      font-size: 13px;
+      font-weight: bold;
+      width: 30px;
+      height: 30px;
+    }
+    .btn-play:hover {
+      background: var(--accent-hover);
+      transform: scale(1.06);
+    }
+    .vol-wrap {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .vol-slider {
+      width: 60px;
+      height: 3px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <span class="dot"></span>
+      <span>FLACIFY MINI</span>
+    </div>
+    <div style="font-size: 9px; color: #64748b;">POP-UP DESKTOP</div>
+  </div>
+
+  <div class="content-row">
+    <img id="m-cover" class="cover" src="" alt="Album Art" />
+    <div class="info">
+      <div id="m-title" class="title">Ready to Play</div>
+      <div id="m-artist" class="artist">Select any song in Flacify</div>
+      <div id="m-lyrics" class="lyrics">♫ Synchronized Lyrics Active ♫</div>
+    </div>
+  </div>
+
+  <div class="progress-row">
+    <span id="m-cur-time">0:00</span>
+    <div class="progress-bar" id="m-prog-bar">
+      <div class="progress-fill" id="m-prog-fill"></div>
+    </div>
+    <span id="m-dur-time">0:00</span>
+  </div>
+
+  <div class="controls-row">
+    <div class="transport">
+      <button class="btn-ctrl" id="m-prev" title="Previous Track">⏮</button>
+      <button class="btn-ctrl btn-play" id="m-play" title="Play/Pause">▶</button>
+      <button class="btn-ctrl" id="m-next" title="Next Track">⏭</button>
+    </div>
+    <div class="vol-wrap">
+      <span style="font-size: 11px; color: #94a3b8;">🔊</span>
+      <input type="range" id="m-vol" min="0" max="100" value="100" class="vol-slider" />
+    </div>
+  </div>
+
+  <script>
+    function formatMs(ms) {
+      if (!ms || ms < 0) return "0:00";
+      const totalSec = Math.floor(ms / 1000);
+      const min = Math.floor(totalSec / 60);
+      const sec = totalSec % 60;
+      return `${min}:${String(sec).padStart(2, '0')}`;
+    }
+
+    function syncFromOpener() {
+      try {
+        if (window.opener && typeof window.opener.getMiniPlayerState === 'function') {
+          const st = window.opener.getMiniPlayerState();
+          if (st) {
+            document.getElementById("m-title").textContent = st.title || "No Track Playing";
+            document.getElementById("m-artist").textContent = st.artist || "Select a song in Flacify";
+            document.getElementById("m-lyrics").textContent = st.lyric || "♫ Flacify Audio Studio ♫";
+            document.getElementById("m-play").textContent = st.is_playing ? "⏸" : "▶";
+
+            const pos = st.position_ms || 0;
+            const dur = Math.max(1, st.duration_ms || 0);
+            const pct = Math.min(100, (pos / dur) * 100);
+
+            document.getElementById("m-prog-fill").style.width = pct + "%";
+            document.getElementById("m-cur-time").textContent = formatMs(pos);
+            document.getElementById("m-dur-time").textContent = formatMs(dur);
+
+            if (st.cover_key) {
+              document.getElementById("m-cover").src = `/api/cover?key=${encodeURIComponent(st.cover_key)}`;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    setInterval(syncFromOpener, 250);
+
+    document.getElementById("m-play").addEventListener("click", () => {
+      try { if (window.opener && window.opener.triggerMediaPlayPause) window.opener.triggerMediaPlayPause(); } catch (e) {}
+    });
+    document.getElementById("m-prev").addEventListener("click", () => {
+      try { if (window.opener && window.opener.triggerMediaPrev) window.opener.triggerMediaPrev(); } catch (e) {}
+    });
+    document.getElementById("m-next").addEventListener("click", () => {
+      try { if (window.opener && window.opener.triggerMediaNext) window.opener.triggerMediaNext(); } catch (e) {}
+    });
+    document.getElementById("m-vol").addEventListener("input", (e) => {
+      try { if (window.opener && window.opener.triggerMediaSetVolume) window.opener.triggerMediaSetVolume(Number(e.target.value)); } catch (e) {}
+    });
+    document.getElementById("m-prog-bar").addEventListener("click", (e) => {
+      try {
+        if (window.opener && window.opener.getMiniPlayerState && window.opener.triggerMediaSeekTo) {
+          const st = window.opener.getMiniPlayerState();
+          const dur = st.duration_ms || 0;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+          window.opener.triggerMediaSeekTo(pct * dur);
+        }
+      } catch (e) {}
+    });
+  </script>
+</body>
+</html>

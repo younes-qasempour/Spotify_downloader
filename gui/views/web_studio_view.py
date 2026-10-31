@@ -11,6 +11,7 @@ from core.archive import ArchiveManager
 from core.paths import get_asset_path
 from core.queue_manager import DownloadQueueManager
 from gui.web_api import FlacifyWebServer
+from gui.floating_mini_player import FloatingMiniPlayerWindow
 
 logger = logging.getLogger("gui.views.web_studio_view")
 
@@ -22,6 +23,7 @@ class WebStudioView(QWidget):
     """
 
     _sig_request_folder = pyqtSignal(str)
+    _sig_toggle_mini_player = pyqtSignal()
 
     def __init__(
         self,
@@ -45,11 +47,14 @@ class WebStudioView(QWidget):
         if not os.path.isdir(web_root):
             web_root = str(get_asset_path("gui/web_ui"))
 
+        self._sig_toggle_mini_player.connect(self._on_toggle_mini_player)
+
         self.web_server = FlacifyWebServer(
             queue_manager=self.qm,
             archive_manager=self.archive,
             web_root=web_root,
             folder_picker_cb=self._pick_folder_threadsafe,
+            mini_player_toggle_cb=self._sig_toggle_mini_player.emit,
             musilon_engine=musilon_engine,
             melobot_engine=melobot_engine,
         )
@@ -80,6 +85,11 @@ class WebStudioView(QWidget):
             except Exception as e:
                 logger.error(f"Could not initialize QWebEngineView: {e}")
 
+        # True OS-Level Floating Mini-Player outside the main application
+        self.floating_mini_player = FloatingMiniPlayerWindow(web_studio_view=self, parent=None)
+        if parent:
+            self.floating_mini_player.set_main_window(parent)
+
     def _pick_folder_threadsafe(self, current_dir: str) -> str:
         self._chosen_folder = ""
         self._folder_event.clear()
@@ -101,6 +111,17 @@ class WebStudioView(QWidget):
         finally:
             self._folder_event.set()
 
+    def _on_toggle_mini_player(self):
+        if hasattr(self, "floating_mini_player") and self.floating_mini_player:
+            if not self.floating_mini_player.main_window:
+                self.floating_mini_player.set_main_window(self.window() or self)
+            self.floating_mini_player.toggle_visibility()
+
     def shutdown(self):
+        if hasattr(self, "floating_mini_player") and self.floating_mini_player:
+            try:
+                self.floating_mini_player.close()
+            except Exception:
+                pass
         if self.web_server:
             self.web_server.stop()
