@@ -95,6 +95,32 @@ class TestFloatingMiniPlayer(unittest.TestCase):
         state.mini_player_toggle_cb()
         mock_cb.assert_called_once()
 
+    def test_resizing_and_adaptive_modes(self):
+        # Minimum size check (ultra compact)
+        self.assertEqual(self.mini_player.minimumWidth(), 200)
+        self.assertEqual(self.mini_player.minimumHeight(), 52)
+
+        # 1. Compact Bar Mode (h < 110)
+        self.mini_player.resize(220, 60)
+        self.assertEqual(self.mini_player._active_mode, "compact")
+        self.assertTrue(self.mini_player.header_widget.isHidden())
+        self.assertTrue(self.mini_player.lbl_lyrics.isHidden())
+        self.assertTrue(self.mini_player.ctrl_row.isHidden())
+
+        # 2. Standard Studio Mode (110 <= h < 240)
+        self.mini_player.resize(380, 168)
+        self.assertEqual(self.mini_player._active_mode, "standard")
+        self.assertFalse(self.mini_player.header_widget.isHidden())
+        self.assertFalse(self.mini_player.lbl_lyrics.isHidden())
+        self.assertFalse(self.mini_player.ctrl_row.isHidden())
+
+        # 3. Large Album Art Mode (h >= 240 and w >= 260)
+        self.mini_player.resize(450, 400)
+        self.assertEqual(self.mini_player._active_mode, "large")
+        self.assertFalse(self.mini_player.header_widget.isHidden())
+        self.assertFalse(self.mini_player.lbl_cover.isHidden())
+        self.assertGreaterEqual(self.mini_player.lbl_cover.width(), 80)
+
 
 if __name__ == "__main__":
     unittest.main()

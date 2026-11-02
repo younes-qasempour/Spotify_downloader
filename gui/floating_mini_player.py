@@ -2,13 +2,16 @@ import logging
 import os
 from typing import Optional, Any, Dict
 
-from PyQt6.QtCore import Qt, QPoint, QTimer, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, pyqtSignal, QSize, QEvent
 from PyQt6.QtGui import (
     QColor, QFont, QIcon, QImage, QPainter, QPainterPath, QPixmap, QPen
 )
 from PyQt6.QtWidgets import (
-    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QSizePolicy
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QBoxLayout, QLabel,
+    QPushButton, QSlider, QSizePolicy, QSizeGrip
 )
+
+from core.config import config
 
 logger = logging.getLogger("gui.floating_mini_player")
 
@@ -77,32 +80,45 @@ class FloatingSeekSlider(QSlider):
 
 class FloatingMiniPlayerWindow(QWidget):
     """
-    True OS-Level Floating Mini-Player / PiP Window.
+    True OS-Level Floating Mini-Player / PiP Window modeled after the Spotify Miniplayer.
     Floats freely on top of games, browsers, and desktop apps.
+    Fully resizable from ultra-compact micro-bar (200x52) to large high-res album studio (850x850).
     Features:
+      - Multi-direction edge/corner resizing + bottom-right sleek grip handle
+      - Adaptive 3-tier layout (Compact Bar, Standard Studio, Large Cover Art)
       - Always-on-top toggle (pinned/unpinned)
       - Frameless sleek dark glassmorphic Spotify design
-      - Album artwork with smooth rounded corners
-      - Track title & artist
+      - Dynamically scaled album artwork with smooth anti-aliased rounded corners
+      - Real-time text eliding for track title & artist
       - LIVE glowing synchronized karaoke lyrics line
       - Interactive seek bar and duration counter
       - Previous, Play/Pause, Next controls
       - Volume slider & mute
       - Restore main Flacify window button
+      - Size memory across sessions
     """
 
+    RESIZE_BORDER = 8
+
     def __init__(self, web_studio_view: Optional[Any] = None, parent: Optional[QWidget] = None):
-        # Top-level window outside main app
         super().__init__(parent)
         self.web_studio_view = web_studio_view
         self.main_window: Optional[QWidget] = None
         self._is_pinned = True
         self._drag_pos = QPoint()
         self._current_cover_key = ""
-        self._cached_pixmap: Optional[QPixmap] = None
+        self._cached_qimage: Optional[QImage] = None
         self._is_seeking = False
         self._last_title = ""
         self._last_artist = ""
+        self._last_lyric = ""
+        self._active_mode = "standard"
+
+        # Edge resizing state
+        self._resizing = False
+        self._resize_edge = None
+        self._press_pos = QPoint()
+        self._start_geom = QRect()
 
         self._init_window_flags()
         self._init_ui()
@@ -123,16 +139,25 @@ class FloatingMiniPlayerWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setWindowTitle("Flacify Mini Player")
-        self.setFixedSize(390, 168)
+        self.setMouseTracking(True)
+        self.setMinimumSize(200, 52)
+        self.setMaximumSize(850, 850)
+
+        # Restore user's preferred mini player size or default to 380x168
+        saved_w = int(config.get("gui.mini_player_w", 380))
+        saved_h = int(config.get("gui.mini_player_h", 168))
+        self.resize(max(200, min(850, saved_w)), max(52, min(850, saved_h)))
 
     def _init_ui(self):
-        root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
+        self.root_layout = QVBoxLayout(self)
+        self.root_layout.setContentsMargins(0, 0, 0, 0)
+        self.root_layout.setSpacing(0)
 
         # Main styled card container
         self.card = QFrame(self)
         self.card.setObjectName("mini_card")
+        self.card.setMouseTracking(True)
+        self.card.installEventFilter(self)
         self.card.setStyleSheet("""
             QFrame#mini_card {
                 background-color: #121216;
@@ -140,44 +165,47 @@ class FloatingMiniPlayerWindow(QWidget):
                 border-radius: 14px;
             }
         """)
-        card_layout = QVBoxLayout(self.card)
-        card_layout.setContentsMargins(12, 10, 12, 12)
-        card_layout.setSpacing(8)
+
+        self.card_layout = QVBoxLayout(self.card)
+        self.card_layout.setContentsMargins(12, 10, 12, 12)
+        self.card_layout.setSpacing(6)
 
         # -------------------------------------------------------------
         # 1. Header Bar: Brand + Controls (Pin, Restore, Close)
         # -------------------------------------------------------------
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(6)
+        self.header_widget = QWidget(self.card)
+        self.header_widget.setMouseTracking(True)
+        self.header_layout = QHBoxLayout(self.header_widget)
+        self.header_layout.setContentsMargins(0, 0, 0, 0)
+        self.header_layout.setSpacing(6)
 
         # Glowing dot + title
-        dot = QLabel("●", self.card)
-        dot.setStyleSheet("color: #1ed760; font-size: 10px; margin-right: 2px;")
-        header.addWidget(dot)
+        self.dot = QLabel("●", self.header_widget)
+        self.dot.setStyleSheet("color: #1ed760; font-size: 10px; margin-right: 2px;")
+        self.header_layout.addWidget(self.dot)
 
-        brand_lbl = QLabel("FLACIFY MINI", self.card)
-        brand_lbl.setStyleSheet("""
+        self.brand_lbl = QLabel("FLACIFY MINI", self.header_widget)
+        self.brand_lbl.setStyleSheet("""
             color: #94a3b8;
             font-size: 10px;
             font-weight: 700;
             letter-spacing: 1px;
             font-family: 'Segoe UI', system-ui, sans-serif;
         """)
-        header.addWidget(brand_lbl)
-        header.addStretch(1)
+        self.header_layout.addWidget(self.brand_lbl)
+        self.header_layout.addStretch(1)
 
         # Pin / Always on Top button
-        self.btn_pin = QPushButton("📌", self.card)
+        self.btn_pin = QPushButton("📌", self.header_widget)
         self.btn_pin.setToolTip("Always on Top (Keep pinned over games & apps)")
         self.btn_pin.setFixedSize(22, 22)
         self.btn_pin.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_pin.setStyleSheet(self._get_pin_style(True))
         self.btn_pin.clicked.connect(self._toggle_pinned)
-        header.addWidget(self.btn_pin)
+        self.header_layout.addWidget(self.btn_pin)
 
         # Restore / Focus Main Window button
-        self.btn_restore = QPushButton("⤢", self.card)
+        self.btn_restore = QPushButton("⤢", self.header_widget)
         self.btn_restore.setToolTip("Restore & Bring Flacify Studio to Front")
         self.btn_restore.setFixedSize(22, 22)
         self.btn_restore.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -195,10 +223,10 @@ class FloatingMiniPlayerWindow(QWidget):
             }
         """)
         self.btn_restore.clicked.connect(self._restore_main_window)
-        header.addWidget(self.btn_restore)
+        self.header_layout.addWidget(self.btn_restore)
 
         # Close button
-        self.btn_close = QPushButton("✕", self.card)
+        self.btn_close = QPushButton("✕", self.header_widget)
         self.btn_close.setToolTip("Close Mini-Player")
         self.btn_close.setFixedSize(22, 22)
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -216,19 +244,21 @@ class FloatingMiniPlayerWindow(QWidget):
             }
         """)
         self.btn_close.clicked.connect(self.hide_mini_player)
-        header.addWidget(self.btn_close)
+        self.header_layout.addWidget(self.btn_close)
 
-        card_layout.addLayout(header)
+        self.card_layout.addWidget(self.header_widget)
 
         # -------------------------------------------------------------
-        # 2. Track Info & Live Lyrics Row
+        # 2. Track Info & Cover Area
         # -------------------------------------------------------------
-        mid_row = QHBoxLayout()
-        mid_row.setContentsMargins(0, 0, 0, 0)
-        mid_row.setSpacing(10)
+        self.mid_row = QWidget(self.card)
+        self.mid_row.setMouseTracking(True)
+        self.mid_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self.mid_row)
+        self.mid_layout.setContentsMargins(0, 0, 0, 0)
+        self.mid_layout.setSpacing(10)
 
-        # Cover Art Thumbnail
-        self.lbl_cover = QLabel(self.card)
+        # Cover Art Thumbnail / Large Display
+        self.lbl_cover = QLabel(self.mid_row)
         self.lbl_cover.setFixedSize(60, 60)
         self.lbl_cover.setStyleSheet("""
             background-color: #1a1a22;
@@ -236,71 +266,76 @@ class FloatingMiniPlayerWindow(QWidget):
             border: 1px solid #282834;
         """)
         self.lbl_cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._set_default_cover()
-        mid_row.addWidget(self.lbl_cover)
+        self.mid_layout.addWidget(self.lbl_cover)
 
         # Details Column
-        info_col = QVBoxLayout()
-        info_col.setContentsMargins(0, 0, 0, 0)
-        info_col.setSpacing(2)
+        self.info_col = QWidget(self.mid_row)
+        self.info_col.setMouseTracking(True)
+        self.info_layout = QVBoxLayout(self.info_col)
+        self.info_layout.setContentsMargins(0, 0, 0, 0)
+        self.info_layout.setSpacing(2)
 
-        self.lbl_title = QLabel("Ready to Play", self.card)
+        self.lbl_title = QLabel("Ready to Play", self.info_col)
         self.lbl_title.setStyleSheet("""
             color: #ffffff;
             font-size: 13px;
             font-weight: 700;
             font-family: 'Segoe UI', system-ui, sans-serif;
         """)
-        info_col.addWidget(self.lbl_title)
+        self.info_layout.addWidget(self.lbl_title)
 
-        self.lbl_artist = QLabel("Select any song in Flacify", self.card)
+        self.lbl_artist = QLabel("Select any song in Flacify", self.info_col)
         self.lbl_artist.setStyleSheet("""
             color: #94a3b8;
             font-size: 11px;
             font-family: 'Segoe UI', system-ui, sans-serif;
         """)
-        info_col.addWidget(self.lbl_artist)
+        self.info_layout.addWidget(self.lbl_artist)
 
         # Live Synchronized Lyrics ticker
-        self.lbl_lyrics = QLabel("♫ Synchronized Karaoke Studio ♫", self.card)
+        self.lbl_lyrics = QLabel("♫ Synchronized Karaoke Studio ♫", self.info_col)
         self.lbl_lyrics.setStyleSheet("""
             color: #1ed760;
             font-size: 11px;
             font-weight: 600;
             font-family: 'Segoe UI', system-ui, sans-serif;
         """)
-        info_col.addWidget(self.lbl_lyrics)
+        self.info_layout.addWidget(self.lbl_lyrics)
 
-        mid_row.addLayout(info_col, 1)
-        card_layout.addLayout(mid_row)
+        self.mid_layout.addWidget(self.info_col, 1)
+        self.card_layout.addWidget(self.mid_row)
 
         # -------------------------------------------------------------
         # 3. Interactive Seek & Progress Bar
         # -------------------------------------------------------------
-        progress_row = QHBoxLayout()
-        progress_row.setContentsMargins(0, 0, 0, 0)
-        progress_row.setSpacing(6)
+        self.progress_row = QWidget(self.card)
+        self.progress_row.setMouseTracking(True)
+        self.progress_layout = QHBoxLayout(self.progress_row)
+        self.progress_layout.setContentsMargins(0, 0, 0, 0)
+        self.progress_layout.setSpacing(6)
 
-        self.lbl_cur_time = QLabel("0:00", self.card)
+        self.lbl_cur_time = QLabel("0:00", self.progress_row)
         self.lbl_cur_time.setStyleSheet("color: #71717a; font-size: 10px; font-family: monospace;")
-        progress_row.addWidget(self.lbl_cur_time)
+        self.progress_layout.addWidget(self.lbl_cur_time)
 
-        self.seek_slider = FloatingSeekSlider(self.card)
+        self.seek_slider = FloatingSeekSlider(self.progress_row)
         self.seek_slider.sig_seek_requested.connect(self._on_seek_requested)
-        progress_row.addWidget(self.seek_slider, 1)
+        self.progress_layout.addWidget(self.seek_slider, 1)
 
-        self.lbl_dur_time = QLabel("0:00", self.card)
+        self.lbl_dur_time = QLabel("0:00", self.progress_row)
         self.lbl_dur_time.setStyleSheet("color: #71717a; font-size: 10px; font-family: monospace;")
-        progress_row.addWidget(self.lbl_dur_time)
+        self.progress_layout.addWidget(self.lbl_dur_time)
 
-        card_layout.addLayout(progress_row)
+        self.card_layout.addWidget(self.progress_row)
 
         # -------------------------------------------------------------
         # 4. Transport Controls & Volume
         # -------------------------------------------------------------
-        ctrl_row = QHBoxLayout()
-        ctrl_row.setContentsMargins(0, 0, 0, 0)
-        ctrl_row.setSpacing(8)
+        self.ctrl_row = QWidget(self.card)
+        self.ctrl_row.setMouseTracking(True)
+        self.ctrl_layout = QHBoxLayout(self.ctrl_row)
+        self.ctrl_layout.setContentsMargins(0, 0, 0, 0)
+        self.ctrl_layout.setSpacing(8)
 
         # Previous
         self.btn_prev = QPushButton("⏮", self.card)
@@ -320,7 +355,7 @@ class FloatingMiniPlayerWindow(QWidget):
             }
         """)
         self.btn_prev.clicked.connect(self._on_prev_clicked)
-        ctrl_row.addWidget(self.btn_prev)
+        self.ctrl_layout.addWidget(self.btn_prev)
 
         # Play / Pause (Circular emerald)
         self.btn_play = QPushButton("▶", self.card)
@@ -341,7 +376,7 @@ class FloatingMiniPlayerWindow(QWidget):
             }
         """)
         self.btn_play.clicked.connect(self._on_play_pause_clicked)
-        ctrl_row.addWidget(self.btn_play)
+        self.ctrl_layout.addWidget(self.btn_play)
 
         # Next
         self.btn_next = QPushButton("⏭", self.card)
@@ -361,9 +396,9 @@ class FloatingMiniPlayerWindow(QWidget):
             }
         """)
         self.btn_next.clicked.connect(self._on_next_clicked)
-        ctrl_row.addWidget(self.btn_next)
+        self.ctrl_layout.addWidget(self.btn_next)
 
-        ctrl_row.addStretch(1)
+        self.ctrl_stretch = self.ctrl_layout.addStretch(1)
 
         # Volume icon / mute toggle
         self.btn_vol = QPushButton("🔊", self.card)
@@ -381,7 +416,7 @@ class FloatingMiniPlayerWindow(QWidget):
             }
         """)
         self.btn_vol.clicked.connect(self._on_mute_clicked)
-        ctrl_row.addWidget(self.btn_vol)
+        self.ctrl_layout.addWidget(self.btn_vol)
 
         # Compact Volume slider
         self.vol_slider = QSlider(Qt.Orientation.Horizontal, self.card)
@@ -408,10 +443,18 @@ class FloatingMiniPlayerWindow(QWidget):
             }
         """)
         self.vol_slider.valueChanged.connect(self._on_vol_changed)
-        ctrl_row.addWidget(self.vol_slider)
+        self.ctrl_layout.addWidget(self.vol_slider)
 
-        card_layout.addLayout(ctrl_row)
-        root_layout.addWidget(self.card)
+        self.card_layout.addWidget(self.ctrl_row)
+        self.root_layout.addWidget(self.card)
+
+        # Bottom-right resize grip indicator
+        self.size_grip = QSizeGrip(self)
+        self.size_grip.setFixedSize(14, 14)
+        self.size_grip.setStyleSheet("background: transparent;")
+
+        self._render_cover()
+        self._update_responsive_layout(self.width(), self.height())
 
     def _get_pin_style(self, active: bool) -> str:
         if active:
@@ -441,33 +484,330 @@ class FloatingMiniPlayerWindow(QWidget):
             }
         """
 
+    # -----------------------------------------------------------------
+    # Cover Artwork Rendering
+    # -----------------------------------------------------------------
+    def _render_cover(self):
+        w = max(32, self.lbl_cover.width())
+        h = max(32, self.lbl_cover.height())
+        radius = 8 if w >= 50 else 6
+
+        if self._cached_qimage and not self._cached_qimage.isNull():
+            scaled = self._cached_qimage.scaled(
+                w, h,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            pix = QPixmap(w, h)
+            pix.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            clip_path = QPainterPath()
+            clip_path.addRoundedRect(0, 0, w, h, radius, radius)
+            p.setClipPath(clip_path)
+            p.drawImage(0, 0, scaled)
+            p.end()
+            self.lbl_cover.setPixmap(pix)
+        else:
+            pix = QPixmap(w, h)
+            pix.fill(QColor("#1a1a22"))
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            clip_path = QPainterPath()
+            clip_path.addRoundedRect(0, 0, w, h, radius, radius)
+            p.setClipPath(clip_path)
+            p.fillPath(clip_path, QColor("#1a1a22"))
+            p.setPen(QColor("#1ed760"))
+            font = p.font()
+            font.setPointSize(max(10, int(w * 0.28)))
+            p.setFont(font)
+            p.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, "♫")
+            p.end()
+            self.lbl_cover.setPixmap(pix)
+
     def _set_default_cover(self):
-        pix = QPixmap(60, 60)
-        pix.fill(QColor("#1a1a22"))
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(QColor("#1ed760"))
-        font = p.font()
-        font.setPointSize(16)
-        p.setFont(font)
-        p.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, "♫")
-        p.end()
-        self.lbl_cover.setPixmap(pix)
+        self._cached_qimage = None
+        self._render_cover()
 
     # -----------------------------------------------------------------
-    # Mouse Dragging Across Desktops & Multi-Monitors
+    # Responsive Spotify-Style Layout Adaptation
     # -----------------------------------------------------------------
+    def resize(self, *args):
+        super().resize(*args)
+        if hasattr(self, "card") and hasattr(self, "header_widget"):
+            self._update_responsive_layout(self.width(), self.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Position size grip at bottom-right
+        self.size_grip.move(
+            self.width() - self.size_grip.width() - 2,
+            self.height() - self.size_grip.height() - 2
+        )
+        self._update_responsive_layout(self.width(), self.height())
+
+    def _update_responsive_layout(self, w: int, h: int):
+        # 3 distinct modes:
+        # 1. Compact: h < 110 (mini single-bar strip)
+        # 2. Large: h >= 240 and w >= 260 (large artwork album view)
+        # 3. Standard: 110 <= h < 240 (classic card)
+        target_mode = "compact" if h < 110 else ("large" if (h >= 240 and w >= 260) else "standard")
+        if target_mode != self._active_mode:
+            self._switch_mode(target_mode)
+
+        # Dynamic cover size
+        if self._active_mode == "compact":
+            cov_size = 38
+        elif self._active_mode == "large":
+            cov_size = max(80, min(w - 60, h - 180, 260))
+        else:
+            cov_size = 58
+
+        if self.lbl_cover.width() != cov_size:
+            self.lbl_cover.setFixedSize(cov_size, cov_size)
+            self._render_cover()
+
+        # Update text eliding with available width
+        self._reapply_elided_text()
+
+    def _switch_mode(self, mode: str):
+        self._active_mode = mode
+
+        if mode == "compact":
+            # Micro-bar layout: Single horizontal row
+            self.header_widget.hide()
+            self.lbl_lyrics.hide()
+            self.progress_row.hide()
+            self.ctrl_row.hide()
+
+            self.mid_layout.setDirection(QBoxLayout.Direction.LeftToRight)
+            self.mid_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            self.info_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+            # Insert controls into mid_layout
+            self.mid_layout.addWidget(self.btn_prev)
+            self.mid_layout.addWidget(self.btn_play)
+            self.mid_layout.addWidget(self.btn_next)
+            self.mid_layout.addWidget(self.btn_pin)
+            self.mid_layout.addWidget(self.btn_close)
+
+            self.btn_prev.setVisible(self.width() >= 260)
+            self.btn_next.setVisible(self.width() >= 260)
+            self.btn_pin.setVisible(self.width() >= 300)
+
+            self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.lbl_artist.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.card_layout.setContentsMargins(8, 4, 8, 4)
+            self.card_layout.setSpacing(2)
+
+        elif mode == "standard":
+            # Classic Standard card layout
+            self.header_widget.show()
+            self.lbl_lyrics.show()
+            self.progress_row.show()
+            self.ctrl_row.show()
+            self.btn_prev.show()
+            self.btn_next.show()
+            self.btn_pin.show()
+            self.btn_vol.show()
+            self.vol_slider.show()
+
+            self.header_layout.addWidget(self.btn_pin)
+            self.header_layout.addWidget(self.btn_restore)
+            self.header_layout.addWidget(self.btn_close)
+
+            self.ctrl_layout.insertWidget(0, self.btn_prev)
+            self.ctrl_layout.insertWidget(1, self.btn_play)
+            self.ctrl_layout.insertWidget(2, self.btn_next)
+
+            self.mid_layout.setDirection(QBoxLayout.Direction.LeftToRight)
+            self.mid_layout.setAlignment(self.lbl_cover, Qt.AlignmentFlag.AlignVCenter)
+
+            self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.lbl_artist.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.lbl_lyrics.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+            self.card_layout.setContentsMargins(12, 10, 12, 12)
+            self.card_layout.setSpacing(6)
+
+        elif mode == "large":
+            # Expanded Large Album Art layout
+            self.header_widget.show()
+            self.lbl_lyrics.show()
+            self.progress_row.show()
+            self.ctrl_row.show()
+            self.btn_prev.show()
+            self.btn_next.show()
+            self.btn_pin.show()
+            self.btn_vol.show()
+            self.vol_slider.show()
+
+            self.header_layout.addWidget(self.btn_pin)
+            self.header_layout.addWidget(self.btn_restore)
+            self.header_layout.addWidget(self.btn_close)
+
+            self.ctrl_layout.insertWidget(0, self.btn_prev)
+            self.ctrl_layout.insertWidget(1, self.btn_play)
+            self.ctrl_layout.insertWidget(2, self.btn_next)
+
+            self.mid_layout.setDirection(QBoxLayout.Direction.TopToBottom)
+            self.mid_layout.setAlignment(self.lbl_cover, Qt.AlignmentFlag.AlignHCenter)
+
+            self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.lbl_artist.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.lbl_lyrics.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            self.card_layout.setContentsMargins(14, 12, 14, 14)
+            self.card_layout.setSpacing(8)
+
+    def _reapply_elided_text(self):
+        w = self.width()
+        if self._active_mode == "compact":
+            max_w = max(60, w - 150)
+        elif self._active_mode == "large":
+            max_w = max(100, w - 40)
+        else:
+            max_w = max(270, w - 90)
+
+        if self._last_title:
+            fm = self.lbl_title.fontMetrics()
+            self.lbl_title.setText(fm.elidedText(self._last_title, Qt.TextElideMode.ElideRight, max_w))
+
+        if self._last_artist:
+            fm = self.lbl_artist.fontMetrics()
+            self.lbl_artist.setText(fm.elidedText(self._last_artist, Qt.TextElideMode.ElideRight, max_w))
+
+        if self._last_lyric and self._active_mode != "compact":
+            fm = self.lbl_lyrics.fontMetrics()
+            self.lbl_lyrics.setText(fm.elidedText(self._last_lyric, Qt.TextElideMode.ElideRight, max_w))
+
+    # -----------------------------------------------------------------
+    # Multi-Direction Edge/Corner Hit-Testing & Frameless Resizing
+    # -----------------------------------------------------------------
+    def _determine_edge(self, global_pos: QPoint):
+        local_pos = self.mapFromGlobal(global_pos)
+        w = self.width()
+        h = self.height()
+        b = self.RESIZE_BORDER
+
+        left = local_pos.x() <= b
+        right = local_pos.x() >= w - b
+        top = local_pos.y() <= b
+        bottom = local_pos.y() >= h - b
+
+        if left or right or top or bottom:
+            return (left, right, top, bottom)
+        return None
+
+    def _apply_cursor_for_edge(self, edge):
+        if not edge:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            return
+        left, right, top, bottom = edge
+        if (left and top) or (right and bottom):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif (right and top) or (left and bottom):
+            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+        elif left or right:
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        elif top or bottom:
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+
+    def _handle_resize_drag(self, g_pos: QPoint):
+        dx = g_pos.x() - self._press_pos.x()
+        dy = g_pos.y() - self._press_pos.y()
+        left, right, top, bottom = self._resize_edge
+        geom = QRect(self._start_geom)
+
+        min_w, min_h = self.minimumWidth(), self.minimumHeight()
+        max_w, max_h = self.maximumWidth(), self.maximumHeight()
+
+        if left:
+            new_w = max(min_w, min(max_w, geom.width() - dx))
+            new_x = geom.right() - new_w + 1
+            geom.setLeft(new_x)
+            geom.setWidth(new_w)
+        elif right:
+            new_w = max(min_w, min(max_w, geom.width() + dx))
+            geom.setWidth(new_w)
+
+        if top:
+            new_h = max(min_h, min(max_h, geom.height() - dy))
+            new_y = geom.bottom() - new_h + 1
+            geom.setTop(new_y)
+            geom.setHeight(new_h)
+        elif bottom:
+            new_h = max(min_h, min(max_h, geom.height() + dy))
+            geom.setHeight(new_h)
+
+        self.setGeometry(geom)
+
+    def eventFilter(self, obj, event):
+        # Intercept events on self.card to allow resizing near edges or dragging inside
+        if obj == self.card:
+            if event.type() == QEvent.Type.MouseMove:
+                g_pos = event.globalPosition().toPoint()
+                if self._resizing and self._resize_edge:
+                    self._handle_resize_drag(g_pos)
+                    return True
+                elif not self._resizing and event.buttons() == Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
+                    self.move(g_pos - self._drag_pos)
+                    return True
+                else:
+                    edge = self._determine_edge(g_pos)
+                    self._apply_cursor_for_edge(edge)
+            elif event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                g_pos = event.globalPosition().toPoint()
+                edge = self._determine_edge(g_pos)
+                if edge:
+                    self._resizing = True
+                    self._resize_edge = edge
+                    self._press_pos = g_pos
+                    self._start_geom = self.geometry()
+                    return True
+                else:
+                    self._resizing = False
+                    self._drag_pos = g_pos - self.frameGeometry().topLeft()
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                self._resizing = False
+                self._resize_edge = None
+
+        return super().eventFilter(obj, event)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            g_pos = event.globalPosition().toPoint()
+            edge = self._determine_edge(g_pos)
+            if edge:
+                self._resizing = True
+                self._resize_edge = edge
+                self._press_pos = g_pos
+                self._start_geom = self.geometry()
+            else:
+                self._resizing = False
+                self._drag_pos = g_pos - self.frameGeometry().topLeft()
             event.accept()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
+        g_pos = event.globalPosition().toPoint()
+        if self._resizing and self._resize_edge:
+            self._handle_resize_drag(g_pos)
             event.accept()
+            return
+        elif event.buttons() == Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
+            self.move(g_pos - self._drag_pos)
+            event.accept()
+            return
+        else:
+            edge = self._determine_edge(g_pos)
+            self._apply_cursor_for_edge(edge)
         super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._resizing = False
+        self._resize_edge = None
+        super().mouseReleaseEvent(event)
 
     # -----------------------------------------------------------------
     # Visibility and Always-On-Top Control
@@ -492,8 +832,22 @@ class FloatingMiniPlayerWindow(QWidget):
         self.request_state_sync()
 
     def hide_mini_player(self):
+        # Persist preferred size across sessions
+        try:
+            config.set("gui.mini_player_w", self.width())
+            config.set("gui.mini_player_h", self.height())
+        except Exception:
+            pass
         self.sync_timer.stop()
         self.hide()
+
+    def closeEvent(self, event):
+        try:
+            config.set("gui.mini_player_w", self.width())
+            config.set("gui.mini_player_h", self.height())
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     def _toggle_pinned(self):
         self._is_pinned = not self._is_pinned
@@ -530,20 +884,11 @@ class FloatingMiniPlayerWindow(QWidget):
         # 1. Track Info
         title = data.get("title") or "No Track Playing"
         artist = data.get("artist") or "Select a song in Flacify"
-        if title != self._last_title:
-            self._last_title = title
-            # Truncate with ellipsis if needed
-            fm = self.lbl_title.fontMetrics()
-            elided = fm.elidedText(title, Qt.TextElideMode.ElideRight, 270)
-            self.lbl_title.setText(elided)
-            self.lbl_title.setToolTip(title)
+        self._last_title = title
+        self._last_artist = artist
 
-        if artist != self._last_artist:
-            self._last_artist = artist
-            fm = self.lbl_artist.fontMetrics()
-            elided = fm.elidedText(artist, Qt.TextElideMode.ElideRight, 270)
-            self.lbl_artist.setText(elided)
-            self.lbl_artist.setToolTip(artist)
+        self.lbl_title.setToolTip(title)
+        self.lbl_artist.setToolTip(artist)
 
         # 2. Cover Art
         cover_key = str(data.get("cover_key") or "")
@@ -566,14 +911,11 @@ class FloatingMiniPlayerWindow(QWidget):
 
         # 5. Live Synchronized Karaoke Lyric
         lyric = str(data.get("lyric") or "").strip()
+        self._last_lyric = lyric
         if lyric:
-            fm = self.lbl_lyrics.fontMetrics()
-            elided_lyric = fm.elidedText(lyric, Qt.TextElideMode.ElideRight, 270)
-            self.lbl_lyrics.setText(elided_lyric)
             self.lbl_lyrics.setStyleSheet("color: #1ed760; font-size: 11px; font-weight: 600;")
             self.lbl_lyrics.setToolTip(lyric)
         else:
-            self.lbl_lyrics.setText("♫ Flacify High-Fidelity Audio ♫")
             self.lbl_lyrics.setStyleSheet("color: #64748b; font-size: 11px;")
             self.lbl_lyrics.setToolTip("")
 
@@ -582,6 +924,9 @@ class FloatingMiniPlayerWindow(QWidget):
         if not self.vol_slider.isSliderDown():
             self.vol_slider.setValue(vol)
             self.btn_vol.setText("🔇" if vol == 0 else "🔊")
+
+        # Apply responsive eliding
+        self._reapply_elided_text()
 
     def _load_cover_image(self, cover_key: str):
         if not cover_key or not self.web_studio_view or not getattr(self.web_studio_view, "web_server", None):
@@ -594,21 +939,8 @@ class FloatingMiniPlayerWindow(QWidget):
             if data:
                 qimg = QImage.fromData(data)
                 if not qimg.isNull():
-                    scaled = qimg.scaled(
-                        60, 60,
-                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                    rounded = QPixmap(60, 60)
-                    rounded.fill(Qt.GlobalColor.transparent)
-                    p = QPainter(rounded)
-                    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-                    clip_path = QPainterPath()
-                    clip_path.addRoundedRect(0, 0, 60, 60, 8, 8)
-                    p.setClipPath(clip_path)
-                    p.drawImage(0, 0, scaled)
-                    p.end()
-                    self.lbl_cover.setPixmap(rounded)
+                    self._cached_qimage = qimg
+                    self._render_cover()
                     return
         except Exception as e:
             logger.debug(f"Cover loading exception: {e}")
@@ -654,4 +986,3 @@ class FloatingMiniPlayerWindow(QWidget):
             self.web_studio_view.webview.page().runJavaScript(
                 "if (typeof window.triggerMediaMute === 'function') window.triggerMediaMute();"
             )
-
