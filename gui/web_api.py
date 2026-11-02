@@ -80,6 +80,7 @@ class WebBackendState:
         folder_picker_cb: Optional[Callable[[str], str]] = None,
         on_track_play_cb: Optional[Callable[[str, str, str], None]] = None,
         mini_player_toggle_cb: Optional[Callable[[], None]] = None,
+        recovery_toggle_cb: Optional[Callable[[], None]] = None,
         musilon_engine: Optional[MusilonEngine] = None,
         melobot_engine: Optional[MeloBotEngine] = None,
     ):
@@ -88,6 +89,7 @@ class WebBackendState:
         self.folder_picker_cb = folder_picker_cb
         self.on_track_play_cb = on_track_play_cb
         self.mini_player_toggle_cb = mini_player_toggle_cb
+        self.recovery_toggle_cb = recovery_toggle_cb
 
         # Engines for Musilon and MeloBot Telegram authentication
         self.musilon = musilon_engine or getattr(getattr(self.qm, "engine", None), "musilon", None) or MusilonEngine()
@@ -722,6 +724,8 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 return self._handle_player_notify(body)
             elif path == "/api/window/mini_player/toggle":
                 return self._handle_mini_player_toggle(body)
+            elif path == "/api/ui/recovery":
+                return self._handle_recovery_toggle(body)
             else:
                 return self._send_json({"ok": False, "error": f"Unknown endpoint {path}"}, status=404)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -2213,6 +2217,16 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "native": False, "error": str(e)})
         return self._send_json({"ok": False, "native": False, "reason": "no_native_handler"})
 
+    def _handle_recovery_toggle(self, body: Dict[str, Any]):
+        if callable(self.state.recovery_toggle_cb):
+            try:
+                self.state.recovery_toggle_cb()
+                return self._send_json({"ok": True})
+            except Exception as e:
+                logger.error(f"Error opening recovery tools: {e}")
+                return self._send_json({"ok": False, "error": str(e)})
+        return self._send_json({"ok": False, "reason": "no_handler"})
+
     def _handle_player_notify(self, body: Dict[str, Any]):
         if callable(self.state.on_track_play_cb):
             try:
@@ -2376,6 +2390,7 @@ class FlacifyWebServer:
         folder_picker_cb: Optional[Callable[[str], str]] = None,
         on_track_play_cb: Optional[Callable[[str, str, str], None]] = None,
         mini_player_toggle_cb: Optional[Callable[[], None]] = None,
+        recovery_toggle_cb: Optional[Callable[[], None]] = None,
         musilon_engine: Optional[MusilonEngine] = None,
         melobot_engine: Optional[MeloBotEngine] = None,
     ):

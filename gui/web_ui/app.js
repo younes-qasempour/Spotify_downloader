@@ -408,7 +408,6 @@ function openCollection(coll) {
   });
 
   const backBtn = document.getElementById("hero-back-btn");
-  const folderBtn = document.getElementById("hero-folder-btn");
   const renameBtn = document.getElementById("hero-rename-btn");
   const heroImg = document.getElementById("hero-cover-img");
   const heroFallback = document.getElementById("hero-cover-fallback");
@@ -419,7 +418,6 @@ function openCollection(coll) {
     document.getElementById("hero-subtitle").textContent =
       `${state.library.stats.total_tracks.toLocaleString()} songs • ${state.library.stats.playlists_count} playlists • ${state.library.stats.albums_count} albums • ${state.library.stats.total_size_str}`;
     backBtn.classList.add("hidden");
-    folderBtn.classList.add("hidden");
     renameBtn.classList.add("hidden");
     heroImg.classList.add("hidden");
     heroFallback.classList.remove("hidden");
@@ -428,9 +426,8 @@ function openCollection(coll) {
     document.getElementById("hero-overline").textContent = coll.type === "album" ? "ALBUM" : "PLAYLIST";
     document.getElementById("hero-title").textContent = coll.name;
     document.getElementById("hero-subtitle").textContent =
-      `${coll.subtitle} • ${coll.genre_summary || "Mixed"} • ${coll.folder_path}`;
+      `${coll.subtitle} • ${coll.genre_summary || "Mixed"}`;
     backBtn.classList.remove("hidden");
-    folderBtn.classList.remove("hidden");
     renameBtn.classList.remove("hidden");
     const cUrl = coverUrl(coll.cover_key);
     heroImg.src = cUrl;
@@ -2762,6 +2759,18 @@ document.addEventListener("DOMContentLoaded", () => {
     apiPost("/api/shell/open", {});
   });
 
+  document.getElementById("btn-open-recovery")?.addEventListener("click", () => {
+    apiPost("/api/ui/recovery", {});
+  });
+
+  document.getElementById("btn-tooltab-recovery")?.addEventListener("click", () => {
+    apiPost("/api/ui/recovery", {});
+  });
+
+  document.getElementById("btn-maint-open-recovery")?.addEventListener("click", () => {
+    apiPost("/api/ui/recovery", {});
+  });
+
   // Library Hero & Subtabs
   document.getElementById("hero-play-btn").addEventListener("click", () => {
     if (state.filteredTracks.length > 0) playTrackFromList(state.filteredTracks, 0);
@@ -2777,9 +2786,6 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("hero-back-btn").addEventListener("click", () => openCollection(null));
-  document.getElementById("hero-folder-btn").addEventListener("click", () => {
-    if (state.activeCollection) apiPost("/api/shell/open", { path: state.activeCollection.folder_path });
-  });
 
   document.getElementById("hero-rename-btn").addEventListener("click", async () => {
     if (!state.activeCollection) return;

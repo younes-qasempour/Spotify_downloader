@@ -201,18 +201,14 @@ class MainWindow(FluentWindow):
         self._init_system_tray(icon_path)
 
         # Launch into the new full-bleed Spotify Desktop Web Studio by default
-        tools_bar = QWidget(self)
-        tools_layout = QHBoxLayout(tools_bar)
-        tools_layout.setContentsMargins(10, 2, 10, 2)
-        studio_button = PushButton("Studio", tools_bar)
-        studio_button.clicked.connect(lambda: self.switchTo(self.web_studio_view))
-        tools_button = PushButton("Recovery & Tools", tools_bar)
-        tools_button.setObjectName("reliability_tools_button")
-        tools_button.clicked.connect(self._show_reliability)
-        tools_layout.addWidget(studio_button)
-        tools_layout.addWidget(tools_button)
-        tools_layout.addStretch(1)
-        self.widgetLayout.insertWidget(0, tools_bar)
+        # Global shortcut and accessibility handle for Recovery & Tools
+        self.reliability_tools_button = PushButton("Recovery & Tools", self)
+        self.reliability_tools_button.setObjectName("reliability_tools_button")
+        self.reliability_tools_button.clicked.connect(self._show_reliability)
+        self.reliability_tools_button.hide()
+        self.recovery_shortcut = QShortcut(QKeySequence("Ctrl+Shift+R"), self)
+        self.recovery_shortcut.activated.connect(self._show_reliability)
+
         self.switchTo(self.web_studio_view)
         if hasattr(self, "navigationInterface"):
             self.navigationInterface.setVisible(False)

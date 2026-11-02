@@ -24,6 +24,7 @@ class WebStudioView(QWidget):
 
     _sig_request_folder = pyqtSignal(str)
     _sig_toggle_mini_player = pyqtSignal()
+    _sig_show_recovery = pyqtSignal()
 
     def __init__(
         self,
@@ -48,6 +49,7 @@ class WebStudioView(QWidget):
             web_root = str(get_asset_path("gui/web_ui"))
 
         self._sig_toggle_mini_player.connect(self._on_toggle_mini_player)
+        self._sig_show_recovery.connect(self._on_show_recovery)
 
         self.web_server = FlacifyWebServer(
             queue_manager=self.qm,
@@ -55,6 +57,7 @@ class WebStudioView(QWidget):
             web_root=web_root,
             folder_picker_cb=self._pick_folder_threadsafe,
             mini_player_toggle_cb=self._sig_toggle_mini_player.emit,
+            recovery_toggle_cb=self._sig_show_recovery.emit,
             musilon_engine=musilon_engine,
             melobot_engine=melobot_engine,
         )
@@ -116,6 +119,11 @@ class WebStudioView(QWidget):
             if not self.floating_mini_player.main_window:
                 self.floating_mini_player.set_main_window(self.window() or self)
             self.floating_mini_player.toggle_visibility()
+
+    def _on_show_recovery(self):
+        win = self.window()
+        if win and hasattr(win, "_show_reliability"):
+            win._show_reliability()
 
     def shutdown(self):
         if hasattr(self, "floating_mini_player") and self.floating_mini_player:

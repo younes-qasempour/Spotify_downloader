@@ -889,10 +889,9 @@ class PlaylistsView(QWidget):
         self.detail_edit_btn.setToolTip("Rename or edit playlist details & artwork")
         self.detail_edit_btn.clicked.connect(self._handle_detail_edit)
 
+        # Retained hidden for test/API compatibility; removed from UI
         self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Folder", self.banner_card)
-        self.open_folder_btn.setFixedHeight(30)
-        self.open_folder_btn.setToolTip("Open playlist folder on disk")
-        self.open_folder_btn.clicked.connect(self._open_download_folder)
+        self.open_folder_btn.hide()
 
         self.export_m3u8_btn = PushButton(FluentIcon.SHARE, "Export M3U8", self.banner_card)
         self.export_m3u8_btn.setFixedHeight(30)
@@ -907,7 +906,6 @@ class PlaylistsView(QWidget):
         banner_layout.addWidget(self.detail_watch_btn)
         banner_layout.addWidget(self.detail_sync_btn)
         banner_layout.addWidget(self.detail_edit_btn)
-        banner_layout.addWidget(self.open_folder_btn)
         banner_layout.addWidget(self.export_m3u8_btn)
         banner_layout.addWidget(self.export_songs_btn)
         detail_layout.addWidget(self.banner_card)

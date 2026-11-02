@@ -79,10 +79,25 @@ class ReliabilityView(QWidget):
         self._diagnostics_timer.timeout.connect(self.refresh_queue)
         self.refresh()
 
+    def _on_back_to_studio(self):
+        win = self.window()
+        if win and hasattr(win, "web_studio_view") and hasattr(win, "switchTo"):
+            win.switchTo(win.web_studio_view)
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
-        layout.addWidget(SubtitleLabel("Reliability workspace", self))
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 6)
+        self.back_button = PrimaryPushButton("← Back to Studio", self)
+        self.back_button.setObjectName("back_to_studio_button")
+        self.back_button.clicked.connect(self._on_back_to_studio)
+        header_row.addWidget(self.back_button)
+        header_row.addSpacing(16)
+        header_row.addWidget(SubtitleLabel("Reliability & Recovery Workspace", self))
+        header_row.addStretch(1)
+        layout.addLayout(header_row)
         self.status_label = BodyLabel("Recovered downloads stay stopped until you explicitly retry.", self)
         self.status_label.setWordWrap(True)
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)

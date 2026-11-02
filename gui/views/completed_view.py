@@ -214,8 +214,6 @@ class CollectionCard(CardWidget):
         act_export_m3u = None
         if self.on_export_m3u:
             act_export_m3u = menu.addAction("Export Playlist File (.m3u8)...")
-        menu.addSeparator()
-        act_folder = menu.addAction("Open Folder in Explorer")
 
         action = menu.exec(self.mapToGlobal(pos))
         if not action:
@@ -229,8 +227,6 @@ class CollectionCard(CardWidget):
             self.on_export()
         elif act_export_m3u and action == act_export_m3u and self.on_export_m3u:
             self.on_export_m3u()
-        elif action == act_folder:
-            self._open_folder()
 
     def _open_folder(self, *args):
         if self.folder_path and os.path.isdir(self.folder_path):
@@ -400,9 +396,9 @@ class CompletedView(QWidget):
         banner_text_box.addWidget(self.banner_desc)
         banner_layout.addLayout(banner_text_box, 1)
 
+        # Retained hidden for test/API compatibility; removed from UI
         self.banner_open_folder_btn = ToolButton(FluentIcon.FOLDER, self.coll_banner)
-        self.banner_open_folder_btn.setToolTip("Open Folder in Explorer")
-        self.banner_open_folder_btn.clicked.connect(self._open_current_collection_folder)
+        self.banner_open_folder_btn.hide()
 
         self.banner_export_btn = ToolButton(FluentIcon.FOLDER_ADD, self.coll_banner)
         self.banner_export_btn.setToolTip("Export Songs to Device / Folder...")
@@ -416,7 +412,6 @@ class CompletedView(QWidget):
         self.banner_rename_btn.setToolTip("Rename Playlist")
         self.banner_rename_btn.clicked.connect(self._rename_current_collection)
 
-        banner_layout.addWidget(self.banner_open_folder_btn)
         banner_layout.addWidget(self.banner_export_btn)
         banner_layout.addWidget(self.banner_export_m3u_btn)
         banner_layout.addWidget(self.banner_rename_btn)
