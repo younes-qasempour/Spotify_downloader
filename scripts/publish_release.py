@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import shutil
 import subprocess
 import urllib.request
 import urllib.error
@@ -124,6 +125,35 @@ def main():
     print(f"Uploading '{installer_name}' ({file_size:,} bytes) to GitHub Release...")
 
     upload_url = f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?name={installer_name}"
+
+    curl_bin = shutil.which('curl.exe') or shutil.which('curl')
+    if curl_bin:
+        print(f"Using '{curl_bin}' for robust binary streaming upload...")
+        curl_cmd = [
+            curl_bin,
+            '-sS',
+            '-X', 'POST',
+            '-H', f'Authorization: Bearer {token}',
+            '-H', 'Accept: application/vnd.github+json',
+            '-H', 'Content-Type: application/octet-stream',
+            '--data-binary', f'@{installer_path}',
+            '--connect-timeout', '30',
+            '--retry', '3',
+            '--retry-delay', '5',
+            upload_url
+        ]
+        result = subprocess.run(curl_cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            try:
+                asset_data = json.loads(result.stdout)
+                if 'id' in asset_data:
+                    print(f"Asset uploaded successfully! ID={asset_data['id']}")
+                    print(f"Download URL: {asset_data.get('browser_download_url')}")
+                    return
+            except Exception:
+                pass
+        print(f"curl upload encountered an issue ({result.returncode}), falling back to requests...")
+
     import requests
     import time
 
