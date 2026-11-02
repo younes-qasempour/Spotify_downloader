@@ -498,14 +498,62 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         # Silence noisy per-request HTTP logs in console
         pass
 
+    def _is_local_url(self, value: str, allow_path: bool = False) -> bool:
+        if not value or any(ord(c) <= 32 or ord(c) == 127 for c in value) or "\\" in value:
+            return False
+        try:
+            parsed = urllib.parse.urlsplit(value)
+            if parsed.scheme != "http" or not re.fullmatch(
+                r"(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?", parsed.netloc, re.IGNORECASE
+            ):
+                return False
+            if not allow_path and value.lower() != ("http://" + parsed.netloc).lower():
+                return False
+            port = parsed.port if parsed.port is not None else 80
+            if not 1 <= port <= 65535:
+                return False
+            server = getattr(self, "server", None)
+            return server is None or port == server.server_address[1]
+        except ValueError:
+            return False
+
+    def _is_trusted_request(self) -> bool:
+        get_all = getattr(self.headers, "get_all", None)
+        if get_all and any(len(get_all(name, [])) > 1 for name in ("Host", "Origin", "Referer", "Sec-Fetch-Site")):
+            return False
+        host = self.headers.get("Host")
+        # Real HTTP handlers always have a server; direct unit-test handlers may not.
+        if host is None:
+            if getattr(self, "server", None) is not None:
+                return False
+        elif not self._is_local_url("http://" + host):
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None and not self._is_local_url(origin):
+            return False
+        fetch_site = self.headers.get("Sec-Fetch-Site")
+        if fetch_site is not None and fetch_site not in ("same-origin", "none"):
+            return False
+        referer = self.headers.get("Referer")
+        if origin is None and referer is not None and not self._is_local_url(referer, allow_path=True):
+            return False
+        return True
+
+    def _authorize_request(self) -> bool:
+        if self._is_trusted_request():
+            return True
+        self.close_connection = True
+        self._send_json({"ok": False, "error": "Untrusted request origin or host"}, status=403)
+        return False
+
     def _send_cors_headers(self):
-        origin = self.headers.get("Origin", "")
-        if not origin or origin.startswith("http://127.0.0.1") or origin.startswith("http://localhost"):
-            allow_origin = origin if origin else "http://127.0.0.1"
-            self.send_header("Access-Control-Allow-Origin", allow_origin)
+        if not self._is_trusted_request():
+            return
+        self.send_header("Vary", "Origin")
+        origin = self.headers.get("Origin")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Credentials", "true")
-        else:
-            self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Range")
         self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges")
@@ -531,11 +579,15 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             return {}
 
     def do_OPTIONS(self):
+        if not self._authorize_request():
+            return
         self.send_response(204)
         self._send_cors_headers()
         self.end_headers()
 
     def do_GET(self):
+        if not self._authorize_request():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         qs = urllib.parse.parse_qs(parsed.query)
@@ -593,6 +645,8 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 pass
 
     def do_POST(self):
+        if not self._authorize_request():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         body = self._read_json_body()
@@ -718,6 +772,8 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 "duration_str": format_duration(it.track.duration_ms),
                 "cover_key": it.output_path if (it.output_path and os.path.isfile(it.output_path)) else (it.track.cover_url or ""),
                 "status": it.status,
+                "stage": getattr(it, "stage", "") or it.status,
+                "diagnostic_hint": getattr(it, "diagnostic_hint", "") or "",
                 "progress": round(float(it.progress_percent or 0.0), 1),
                 "speed_str": it.speed_str or "",
                 "eta_str": it.eta_str or "",
@@ -1750,10 +1806,14 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             "telegram_phone": "telegram.phone",
             "telegram_safe_delay_sec": "telegram.safe_delay_sec",
         }
+        updates = {}
         for key, cfg_path in mapping.items():
             if key in s:
-                config.set(cfg_path, s[key])
-        config.save()
+                updates[cfg_path] = s[key]
+            elif cfg_path in s:
+                updates[cfg_path] = s[cfg_path]
+        if updates:
+            config.set_many(updates)
         self.state.invalidate_library_cache()
         self._send_json({"ok": True})
 
@@ -2184,6 +2244,12 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _handle_stream_audio(self, file_path: str, transcode: bool = False):
+        if file_path:
+            file_path = os.path.realpath(file_path)
+            if os.path.splitext(file_path)[1].lower() not in (
+                ".mp3", ".flac", ".opus", ".ogg", ".m4a", ".aac", ".alac", ".wav", ".aiff", ".aif", ".wma"
+            ):
+                return self._send_json({"ok": False, "error": "Not an audio file"}, status=403)
         if not file_path or not os.path.isfile(file_path):
             self.send_response(404)
             self._send_cors_headers()
@@ -2251,10 +2317,27 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
     def _handle_static_file(self, url_path: str):
         if url_path in ("/", ""):
             url_path = "/index.html"
-        rel = url_path.lstrip("/").replace("/", os.sep)
-        full_p = os.path.normpath(os.path.join(self.web_root, rel))
-        if not full_p.startswith(os.path.normpath(self.web_root)) or not os.path.isfile(full_p):
-            full_p = os.path.join(self.web_root, "index.html")
+        rel = urllib.parse.unquote(url_path).replace("\\", "/").lstrip("/").replace("/", os.sep)
+        if "\x00" in rel or ":" in rel:
+            return self._send_json({"ok": False, "error": "Invalid static path"}, status=403)
+        root = os.path.realpath(self.web_root)
+
+        def resolve_static_path(relative_path):
+            candidate = os.path.realpath(os.path.join(root, relative_path))
+            try:
+                if os.path.normcase(os.path.commonpath((root, candidate))) == os.path.normcase(root):
+                    return candidate
+            except ValueError:
+                pass
+            return None
+
+        full_p = resolve_static_path(rel)
+        if full_p is None:
+            return self._send_json({"ok": False, "error": "Static path outside web root"}, status=403)
+        if not os.path.isfile(full_p):
+            full_p = resolve_static_path("index.html")
+            if full_p is None:
+                return self._send_json({"ok": False, "error": "Static path outside web root"}, status=403)
             if not os.path.isfile(full_p):
                 self.send_response(404)
                 self.end_headers()

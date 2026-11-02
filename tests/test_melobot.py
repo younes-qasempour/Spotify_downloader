@@ -1,6 +1,6 @@
 import os
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from core.config import config
 from core.melobot import MeloBotEngine, MeloBotSource, MeloBotDownloadError, MeloBotError
@@ -21,9 +21,11 @@ class TestMeloBotIntegration(unittest.TestCase):
 
     def test_engine_initialization(self):
         engine = MeloBotEngine(session_name="test_dummy_unauth_session")
+        self.addCleanup(engine.close)
         self.assertEqual(engine.api_id, 2040)
         self.assertEqual(engine.bot_username, "melobot")
-        self.assertFalse(engine.is_authorized())
+        with patch.object(engine, "_async_is_authorized", new_callable=AsyncMock, return_value=False):
+            self.assertFalse(engine.is_authorized())
 
     def test_melobot_source_dataclass(self):
         src = MeloBotSource(

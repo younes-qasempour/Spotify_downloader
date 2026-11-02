@@ -9,8 +9,10 @@ block_cipher = None
 # Static data files to bundle
 datas = [
     ('assets', 'assets'),
-    ('core', 'core'),
-    ('gui', 'gui'),
+    ('gui/web_ui/app.js', 'gui/web_ui'),
+    ('gui/web_ui/index.html', 'gui/web_ui'),
+    ('gui/web_ui/mini.html', 'gui/web_ui'),
+    ('gui/web_ui/styles.css', 'gui/web_ui'),
 ]
 
 # Include bin directory (contains bundled ffmpeg.exe)
@@ -56,6 +58,8 @@ hiddenimports = [
     'bs4',
     'spotipy',
     'spotipy.oauth2',
+    'quickjs',
+    '_quickjs',
     'PIL',
     'PIL.Image',
     'PIL.JpegImagePlugin',

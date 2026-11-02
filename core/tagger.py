@@ -1,12 +1,13 @@
 import os
 import io
+import re
 import logging
-from typing import Optional
+from typing import Optional, List, Any
 import requests
 from PIL import Image
 import mutagen
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TPOS, TSRC, USLT, APIC, COMM, TCON, TXXX
+from mutagen.id3 import ID3, ID3NoHeaderError, TIT2, TPE1, TALB, TDRC, TRCK, TPOS, TSRC, USLT, APIC, COMM, TCON, TXXX
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
@@ -63,6 +64,9 @@ class AudioTagger:
             return False
 
         ext = os.path.splitext(file_path)[1].lower()
+        if ext not in (".flac", ".mp3", ".m4a", ".opus", ".ogg"):
+            logger.warning(f"Unsupported extension for tagging: {ext}")
+            return False
         logger.info(f"Tagging {ext} file: {file_path}")
 
         # Ensure genres are populated via multi-source engine if not already set
@@ -89,6 +93,8 @@ class AudioTagger:
         synced_lyrics = self._normalize_crlf(synced_lyrics)
 
         try:
+            if cover_bytes:
+                cover_bytes = self._prepare_cover_bytes(cover_bytes)
             success = False
             if ext == ".flac":
                 success = self._tag_flac(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
@@ -96,35 +102,6 @@ class AudioTagger:
                 success = self._tag_mp3(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             elif ext == ".m4a":
                 success = self._tag_m4a(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
-            elif ext == ".webm":
-                # Matroska/WebM containers cannot be tagged by OggOpus/OggVorbis.
-                # Remux container from WebM to .opus (lossless copy) using FFmpeg.
-                from core.utils import ensure_ffmpeg
-                import subprocess
-                ffmpeg = ensure_ffmpeg()
-                remuxed = False
-                if ffmpeg:
-                    opus_path = os.path.splitext(file_path)[0] + ".opus"
-                    try:
-                        cmd = [
-                            ffmpeg, "-y", "-i", file_path,
-                            "-vn", "-c:a", "copy",
-                            opus_path
-                        ]
-                        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-                        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
-                        if proc.returncode == 0 and os.path.exists(opus_path) and os.path.getsize(opus_path) > 1000:
-                            os.remove(file_path)
-                            file_path = opus_path
-                            ext = ".opus"
-                            remuxed = True
-                    except Exception as e_remux:
-                        logger.warning(f"Failed to remux WebM to Opus: {e_remux}")
-                if remuxed:
-                    success = self._tag_opus(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
-                else:
-                    logger.warning(f"Cannot tag .webm file directly without FFmpeg remuxing: {file_path}")
-                    return False
             elif ext in (".opus", ".ogg"):
                 success = self._tag_opus(file_path, track, cover_bytes, plain_lyrics, synced_lyrics)
             else:
@@ -215,14 +192,22 @@ class AudioTagger:
 
         return None
 
+    @staticmethod
+    def _prepare_cover_bytes(data: bytes) -> bytes:
+        """Validate artwork and normalize other image formats to embeddable PNG."""
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+            if image.format in ("JPEG", "PNG"):
+                return data
+            output = io.BytesIO()
+            image.convert("RGB").save(output, format="PNG")
+            return output.getvalue()
+
     def _download_image(self, url: str) -> Optional[bytes]:
         try:
             resp = self.session.get(url, timeout=10)
             if resp.status_code == 200:
-                # Validate image data with PIL
-                img = Image.open(io.BytesIO(resp.content))
-                img.verify()
-                return resp.content
+                return self._prepare_cover_bytes(resp.content)
         except Exception as e:
             logger.warning(f"Could not download or verify album art from {url}: {e}")
         return None
@@ -336,13 +321,7 @@ class AudioTagger:
             existing_id3 = ID3(file_path)
             existing_apic = existing_id3.getall("APIC")
             existing_uslt = existing_id3.getall("USLT")
-        except Exception:
-            pass
-
-        import mutagen.id3
-        try:
-            mutagen.id3.delete(file_path)
-        except Exception:
+        except ID3NoHeaderError:
             pass
 
         audio = ID3()
@@ -394,7 +373,7 @@ class AudioTagger:
             for ap in existing_apic:
                 audio.add(ap)
 
-        audio.save(file_path, v2_version=4)
+        audio.save(file_path, v2_version=4, v1=0)
         logger.info(f"Successfully tagged MP3: {file_path}")
         return True
 
@@ -756,6 +735,8 @@ class AudioTagger:
             return False
         ext = os.path.splitext(file_path)[1].lower()
         try:
+            if cover_bytes:
+                cover_bytes = self._prepare_cover_bytes(cover_bytes)
             if ext == ".flac":
                 audio = FLAC(file_path)
                 if title is not None:
@@ -776,7 +757,7 @@ class AudioTagger:
                 if cover_bytes:
                     pic = Picture()
                     pic.type = 3
-                    pic.mime = "image/jpeg"
+                    pic.mime = "image/jpeg" if cover_bytes[:2] == b'\xff\xd8' else "image/png"
                     pic.data = cover_bytes
                     audio.clear_pictures()
                     audio.add_picture(pic)
@@ -804,7 +785,8 @@ class AudioTagger:
                     audio.add(TCON(encoding=3, text=genre))
                 if cover_bytes:
                     audio.delall("APIC")
-                    audio.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=cover_bytes))
+                    mime = "image/jpeg" if cover_bytes[:2] == b'\xff\xd8' else "image/png"
+                    audio.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=cover_bytes))
                 audio.save(file_path, v2_version=4)
                 return True
             elif ext == ".m4a":
@@ -820,7 +802,8 @@ class AudioTagger:
                 if genre is not None:
                     audio["\xa9gen"] = genre
                 if cover_bytes:
-                    audio["covr"] = [MP4Cover(cover_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
+                    img_format = MP4Cover.FORMAT_JPEG if cover_bytes[:2] == b'\xff\xd8' else MP4Cover.FORMAT_PNG
+                    audio["covr"] = [MP4Cover(cover_bytes, imageformat=img_format)]
                 audio.save()
                 return True
             elif ext in (".opus", ".ogg"):
@@ -848,7 +831,7 @@ class AudioTagger:
                     import base64
                     pic = Picture()
                     pic.type = 3
-                    pic.mime = "image/jpeg"
+                    pic.mime = "image/jpeg" if cover_bytes[:2] == b'\xff\xd8' else "image/png"
                     pic.data = cover_bytes
                     b64_data = base64.b64encode(pic.write()).decode("ascii")
                     audio["METADATA_BLOCK_PICTURE"] = [b64_data]

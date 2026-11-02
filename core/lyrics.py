@@ -1,11 +1,13 @@
 import os
 import logging
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Optional
 import requests
 
 from core.spotify_client import TrackMetadata
 from core.utils import clean_watermarks
+from core.provider_cooldown import provider_cooldowns, retry_after_seconds
 
 logger = logging.getLogger("core.lyrics")
 
@@ -35,7 +37,7 @@ class LyricsEngine:
 
     API_URL = "https://lrclib.net/api/get"
     SEARCH_URL = "https://lrclib.net/api/search"
-    USER_AGENT = "Flacify/1.6.2 (https://github.com/younes-qasempour/Spotify_downloader)"
+    USER_AGENT = "Flacify/1.7.2 (https://github.com/younes-qasempour/Spotify_downloader)"
 
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
@@ -50,6 +52,14 @@ class LyricsEngine:
                 self.session.proxies = {"http": proxy, "https": proxy}
         except Exception:
             pass
+
+    def _request(self, method: str, url: str, **kwargs):
+        provider = "lyrics:" + (urlsplit(url).hostname or "unknown")
+        provider_cooldowns.wait(provider)
+        response = getattr(self.session, method)(url, **kwargs)
+        if response.status_code == 429:
+            provider_cooldowns.defer(provider, retry_after_seconds(response.headers.get("Retry-After")))
+        return response
 
     def fetch_lyrics(self, track: TrackMetadata) -> Optional[LyricsData]:
         """
@@ -67,12 +77,18 @@ class LyricsEngine:
             "duration": int(track.duration_sec),
         }
 
+        resp = None
         try:
-            resp = self.session.get(self.API_URL, params=params, timeout=10)
+            resp = self._request("get", self.API_URL, params=params, timeout=10)
             if resp.status_code == 404:
                 # Retry without album name
+                resp.close()
+                resp = None
                 params.pop("album_name", None)
-                resp = self.session.get(self.API_URL, params=params, timeout=10)
+                resp = self._request("get", self.API_URL, params=params, timeout=10)
+
+            if resp.status_code in (401, 403, 429) or resp.status_code >= 500:
+                return None
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -97,8 +113,16 @@ class LyricsEngine:
             else:
                 logger.info(f"Exact lyrics get missed on LRCLIB for '{track.title}' (status {resp.status_code})")
 
+        except requests.exceptions.JSONDecodeError as e:
+            logger.warning(f"Error in exact lyrics fetch for '{track.title}': {e}")
+        except requests.RequestException as e:
+            logger.warning(f"Error in exact lyrics fetch for '{track.title}': {e}")
+            return None
         except Exception as e:
             logger.warning(f"Error in exact lyrics fetch for '{track.title}': {e}")
+        finally:
+            if resp is not None:
+                resp.close()
 
         # Search fallback across fuzzy queries & bilingual variants
         return self._search_lyrics(track, clean_title)
@@ -130,8 +154,11 @@ class LyricsEngine:
         instrumental_match = False
 
         for q in queries:
+            r = None
             try:
-                r = self.session.get(self.SEARCH_URL, params={"q": q}, timeout=8)
+                r = self._request("get", self.SEARCH_URL, params={"q": q}, timeout=8)
+                if r.status_code in (401, 403, 429) or r.status_code >= 500:
+                    return None
                 if r.status_code == 200:
                     results = r.json()
                     # Filter items with lyrics
@@ -166,8 +193,16 @@ class LyricsEngine:
                                 if target_dur <= 0 or diff <= 15.0 or c_dur is None:
                                     instrumental_match = True
                                     break
+            except requests.exceptions.JSONDecodeError as e_search:
+                logger.debug(f"LRCLIB search query '{q}' error: {e_search}")
+            except requests.RequestException as e_search:
+                logger.debug(f"LRCLIB search query '{q}' error: {e_search}")
+                return None
             except Exception as e_search:
                 logger.debug(f"LRCLIB search query '{q}' error: {e_search}")
+            finally:
+                if r is not None:
+                    r.close()
 
         if instrumental_match:
             logger.info(f"LRCLIB search fallback determined '{track.title}' is instrumental")
@@ -362,6 +397,7 @@ class LyricsEngine:
         }
 
         # Primary: clients5.google.com multi-q POST (returns 1-to-1 array per 'q' item)
+        resp = None
         try:
             url = "https://clients5.google.com/translate_a/t"
             params = {
@@ -370,7 +406,9 @@ class LyricsEngine:
                 "tl": target_lang,
             }
             form_data = [("q", line) for line in lines_list]
-            resp = self.session.post(url, params=params, data=form_data, headers=headers, timeout=12)
+            resp = self._request("post", url, params=params, data=form_data, headers=headers, timeout=12)
+            if resp.status_code in (401, 403, 429) or resp.status_code >= 500:
+                return lines_list
             if resp.status_code == 200:
                 data = resp.json()
                 if isinstance(data, list) and len(data) == len(lines_list):
@@ -389,10 +427,19 @@ class LyricsEngine:
                             out.append(orig_l)
                     if len(out) == expected_count:
                         return out
+        except requests.exceptions.JSONDecodeError as e:
+            logger.debug(f"clients5 batch translation error ({target_lang}): {e}")
+        except requests.RequestException as e:
+            logger.debug(f"clients5 batch translation error ({target_lang}): {e}")
+            return lines_list
         except Exception as e:
             logger.debug(f"clients5 batch translation error ({target_lang}): {e}")
+        finally:
+            if resp is not None:
+                resp.close()
 
         # Secondary: translate.googleapis.com with explicit indexed delimiter
+        resp2 = None
         try:
             delim = " ||| "
             joined = delim.join(lines_list)
@@ -404,7 +451,9 @@ class LyricsEngine:
                 "dt": "t",
                 "q": joined,
             }
-            resp2 = self.session.get(url2, params=params2, headers=headers, timeout=10)
+            resp2 = self._request("get", url2, params=params2, headers=headers, timeout=10)
+            if resp2.status_code in (401, 403, 429) or resp2.status_code >= 500:
+                return lines_list
             if resp2.status_code == 200:
                 data2 = resp2.json()
                 if isinstance(data2, list) and data2 and isinstance(data2[0], list):
@@ -414,8 +463,16 @@ class LyricsEngine:
                     parts = [p.strip() for p in full_tr.split("|||")]
                     if len(parts) == expected_count:
                         return parts
+        except requests.exceptions.JSONDecodeError as e2:
+            logger.debug(f"googleapis fallback translation error ({target_lang}): {e2}")
+        except requests.RequestException as e2:
+            logger.debug(f"googleapis fallback translation error ({target_lang}): {e2}")
+            return lines_list
         except Exception as e2:
             logger.debug(f"googleapis fallback translation error ({target_lang}): {e2}")
+        finally:
+            if resp2 is not None:
+                resp2.close()
 
         return None
 

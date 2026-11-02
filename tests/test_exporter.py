@@ -120,7 +120,7 @@ class TestPlaylistExporter(unittest.TestCase):
 
     @patch("core.exporter.transcode_audio")
     def test_export_transcode_target_format(self, mock_transcode):
-        def fake_transcode(input_file, target_format, delete_source, output_file):
+        def fake_transcode(input_file, target_format, delete_source, output_file, cancel_check=None):
             with open(output_file, "wb") as f:
                 f.write(b"MOCK_MP3_DATA")
             return output_file

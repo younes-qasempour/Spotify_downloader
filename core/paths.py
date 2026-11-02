@@ -2,6 +2,9 @@ import os
 import sys
 import shutil
 import logging
+import sqlite3
+import tempfile
+from contextlib import closing
 from pathlib import Path
 from typing import Optional
 
@@ -90,17 +93,37 @@ def get_config_path() -> Path:
 def get_archive_db_path() -> Path:
     """
     Returns the path to archive.db inside the user's AppData directory.
-    In development mode, copies any existing local archive.db from the project root.
+    In development mode, snapshots an existing local archive.db, including its WAL.
     """
     target = get_app_data_dir() / "archive.db"
     if not target.exists() and not is_frozen():
         dev_db = Path(__file__).resolve().parent.parent / "archive.db"
         if dev_db.exists() and dev_db.is_file():
+            tmp_path = None
             try:
-                shutil.copy2(str(dev_db), str(target))
-                logger.info(f"Migrated existing archive.db from {dev_db} -> {target}")
+                fd, name = tempfile.mkstemp(prefix="archive-migration-", suffix=".tmp", dir=target.parent)
+                os.close(fd)
+                tmp_path = Path(name)
+                with closing(sqlite3.connect(dev_db.as_uri() + "?mode=ro", uri=True)) as source:
+                    with closing(sqlite3.connect(str(tmp_path))) as destination:
+                        source.backup(destination)
+                        destination.execute("PRAGMA journal_mode=DELETE")
+                try:
+                    # Publish without overwriting a database created by another instance.
+                    if os.name == "nt":
+                        os.rename(tmp_path, target)
+                    else:
+                        os.link(tmp_path, target)
+                except FileExistsError:
+                    logger.info(f"Archive database already initialized at {target}")
+                else:
+                    logger.info(f"Migrated existing archive.db from {dev_db} -> {target}")
             except Exception as e:
                 logger.warning(f"Could not migrate archive.db: {e}")
+                raise
+            finally:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
     return target
 
 

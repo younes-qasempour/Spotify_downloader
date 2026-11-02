@@ -3,9 +3,11 @@ import re
 import json
 import time
 import logging
-from dataclasses import dataclass, field
+import threading
+from dataclasses import asdict, dataclass, field
 from typing import List, Optional, Tuple, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlsplit
 import requests
 
 try:
@@ -20,6 +22,8 @@ except ImportError:
 from core.utils import clean_watermarks, sanitize_filename
 from core.paths import get_cache_dir
 from core.exceptions import MetadataResolutionError
+from core.reliability_store import ReliabilityStore
+from core.provider_cooldown import provider_cooldowns, retry_after_seconds
 
 logger = logging.getLogger("core.spotify")
 
@@ -83,7 +87,7 @@ class SpotifyClient:
     """
 
     SPOTIFY_URL_PATTERN = re.compile(
-        r'(?:https?://open\.spotify\.com/|spotify:)(?P<type>track|album|playlist|artist)[/:](?P<id>[a-zA-Z0-9]+)'
+        r'(?:https?://open\.spotify\.com/|spotify:)(?P<type>track|album|playlist|artist)[/:](?P<id>[a-zA-Z0-9]{22})/?'
     )
 
     def __init__(self, client_id: str = "", client_secret: str = ""):
@@ -97,6 +101,14 @@ class SpotifyClient:
         self.last_api_error: str = ""
         self.last_owner_name: str = ""
         self._cached_user_name: Optional[str] = None
+        try:
+            self._reliability_store = ReliabilityStore()
+        except Exception as exc:
+            self._reliability_store = None
+            logger.debug(f"Spotify metadata cache is unavailable: {exc}")
+        self._prefetch_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="SpotifyMetadata")
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_futures = set()
         self._init_api()
 
         self._session = requests.Session()
@@ -112,6 +124,20 @@ class SpotifyClient:
                 self._session.proxies = {"http": proxy, "https": proxy}
         except Exception:
             pass
+
+    def close(self):
+        executor = getattr(self, "_prefetch_executor", None)
+        if executor:
+            executor.shutdown(wait=False, cancel_futures=True)
+        sessions = [self._session]
+        sessions.extend(getattr(owner, "_session", None) for owner in (self._sp, self._oauth))
+        closed = set()
+        for session in sessions:
+            if session is not None and id(session) not in closed:
+                close = getattr(session, "close", None)
+                if callable(close):
+                    close()
+                    closed.add(id(session))
 
     def has_credentials(self) -> bool:
         """Returns True if Spotify API client ID and secret are configured."""
@@ -190,7 +216,7 @@ class SpotifyClient:
                     return self.authorize_user(force_new=True)
 
             if not isinstance(getattr(self._sp, 'auth_manager', None), SpotifyOAuth):
-                self._sp = spotipy.Spotify(auth_manager=self._oauth)
+                self._sp = spotipy.Spotify(auth_manager=self._oauth, requests_timeout=12)
                 logger.info("Switched Spotify API client to active user authorization session.")
             return True
 
@@ -225,7 +251,7 @@ class SpotifyClient:
         logger.info("Starting Spotify OAuth login flow...")
         token = self._oauth.get_access_token(check_cache=not force_new)
         if token:
-            self._sp = spotipy.Spotify(auth_manager=self._oauth)
+            self._sp = spotipy.Spotify(auth_manager=self._oauth, requests_timeout=12)
             logger.info("Spotify user account successfully authorized!")
             return True
         return False
@@ -239,7 +265,7 @@ class SpotifyClient:
         code = self._oauth.parse_response_code(code_or_url)
         token = self._oauth.get_access_token(code, as_dict=True)
         if token:
-            self._sp = spotipy.Spotify(auth_manager=self._oauth)
+            self._sp = spotipy.Spotify(auth_manager=self._oauth, requests_timeout=12)
             logger.info("Successfully saved user token from authorization code/URL!")
             return True
         return False
@@ -270,7 +296,8 @@ class SpotifyClient:
                     "redirect_uri": redirect_uri,
                     "scope": "playlist-read-private playlist-read-collaborative user-library-read",
                     "show_dialog": True,
-                    "open_browser": True
+                    "open_browser": True,
+                    "requests_timeout": 12
                 }
                 if cache_handler:
                     oauth_kwargs["cache_handler"] = cache_handler
@@ -287,7 +314,7 @@ class SpotifyClient:
                 cached = self._oauth.cache_handler.get_cached_token() if hasattr(self._oauth, "cache_handler") and self._oauth.cache_handler else self._oauth.get_cached_token()
                 if cached:
                     # Defer network token validation until first API call to avoid blocking the UI on startup
-                    self._sp = spotipy.Spotify(auth_manager=self._oauth)
+                    self._sp = spotipy.Spotify(auth_manager=self._oauth, requests_timeout=12)
                     logger.info("Initialized official Spotify Web API client with User Authorization (validation deferred).")
                     return
             except Exception as e:
@@ -298,9 +325,10 @@ class SpotifyClient:
             try:
                 auth_mgr = SpotifyClientCredentials(
                     client_id=self.client_id,
-                    client_secret=self.client_secret
+                    client_secret=self.client_secret,
+                    requests_timeout=12
                 )
-                self._sp = spotipy.Spotify(auth_manager=auth_mgr)
+                self._sp = spotipy.Spotify(auth_manager=auth_mgr, requests_timeout=12)
                 logger.info("Initialized official Spotify Web API client with Client Credentials.")
             except Exception as e:
                 logger.warning(f"Failed to initialize Spotipy client credentials: {e}. Fallback to guest mode.")
@@ -314,7 +342,7 @@ class SpotifyClient:
         self._init_api()
 
     COLLECTION_URL_PATTERN = re.compile(
-        r'(?:https?://open\.spotify\.com/|spotify:)(?:user[/:][^/:]+[/:])?collection(?:[/:]tracks|[/:]liked)?/?$',
+        r'(?:https?://open\.spotify\.com/|spotify:)(?:user[/:][^/:\s?#]+[/:])?collection(?:[/:]tracks|[/:]liked)?/?',
         re.IGNORECASE
     )
 
@@ -325,11 +353,30 @@ class SpotifyClient:
         Supports tracks, albums, playlists, artists, and personal collections (Liked Songs).
         Returns None if invalid.
         """
-        clean = url_or_uri.strip().split('?')[0]
-        if cls.COLLECTION_URL_PATTERN.search(clean) or clean.rstrip('/') in ("https://open.spotify.com/collection/tracks", "spotify:collection:tracks"):
+        if not isinstance(url_or_uri, str):
+            return None
+        clean = url_or_uri.strip()
+        if re.search(r'[\x00-\x1f\x7f]', clean):
+            return None
+        if clean.lower().startswith(("http://", "https://")):
+            try:
+                parts = urlsplit(clean)
+            except ValueError:
+                return None
+            if parts.netloc.lower() != "open.spotify.com" or ":" in parts.path:
+                return None
+            clean = f"{parts.scheme}://{parts.netloc.lower()}{parts.path}"
+        elif clean.lower().startswith("spotify:"):
+            clean = re.split(r'[?#]', clean, maxsplit=1)[0]
+            if "/" in clean:
+                return None
+        else:
+            return None
+
+        if cls.COLLECTION_URL_PATTERN.fullmatch(clean):
             return "collection", "tracks"
 
-        match = cls.SPOTIFY_URL_PATTERN.search(clean)
+        match = cls.SPOTIFY_URL_PATTERN.fullmatch(clean)
         if match:
             return match.group("type"), match.group("id")
         return None
@@ -354,16 +401,36 @@ class SpotifyClient:
         self.last_api_error = ""
         self.last_owner_name = ""
 
+        cache_key = f"spotify:{entity_type}:{entity_id}"
+        if entity_type in ("track", "album") and self._reliability_store is not None:
+            try:
+                cached = self._reliability_store.get_metadata(cache_key)
+                if isinstance(cached, list):
+                    tracks = [TrackMetadata(**item) for item in cached if isinstance(item, dict)]
+                    if tracks:
+                        self.last_resolution_mode = "cache"
+                        self.last_total_tracks = len(tracks)
+                        return tracks
+            except Exception as exc:
+                logger.debug(f"Spotify metadata cache read failed: {exc}")
+
         # For playlists and user collections (Liked Songs), Spotify requires user authentication.
         if entity_type in ("playlist", "collection") and self.has_credentials():
             self._ensure_user_auth(require_library_read=(entity_type == "collection"))
 
         if self._sp:
             try:
+                provider_cooldowns.wait("spotify")
                 tracks = self._resolve_with_api(entity_type, entity_id, progress_callback=progress_callback)
                 self.last_resolution_mode = "api"
+                if entity_type in ("track", "album"):
+                    self._cache_tracks(cache_key, tracks)
                 return tracks
             except Exception as e:
+                if getattr(e, "http_status", None) == 429:
+                    provider_cooldowns.defer("spotify", retry_after_seconds((getattr(e, "headers", None) or {}).get("Retry-After")))
+                    self.last_api_error = "rate_limited"
+                    raise
                 if entity_type == "collection":
                     # Guest mode cannot scrape a private user library
                     raise e
@@ -376,7 +443,43 @@ class SpotifyClient:
             )
 
         self.last_resolution_mode = "guest"
-        return self._resolve_with_guest(entity_type, entity_id)
+        tracks = self._resolve_with_guest(entity_type, entity_id)
+        if entity_type in ("track", "album"):
+            self._cache_tracks(cache_key, tracks)
+        return tracks
+
+    def _cache_tracks(self, cache_key: str, tracks: List[TrackMetadata]) -> None:
+        if self._reliability_store is None:
+            return
+        try:
+            self._reliability_store.set_metadata(cache_key, [asdict(track) for track in tracks], ttl_seconds=900)
+        except Exception as exc:
+            logger.debug(f"Spotify metadata cache write failed: {exc}")
+
+    def _prefetch_one(self, url: str) -> List[TrackMetadata]:
+        client = SpotifyClient(self.client_id, self.client_secret)
+        try:
+            return client.resolve(url)
+        finally:
+            client.close()
+
+    def prefetch_metadata(self, urls: List[str], max_items: int = 24) -> List[Any]:
+        """Prefetch a bounded number of public track/album URLs without retaining an unbounded future queue."""
+        bounded_urls = [
+            url for url in urls[:max(0, min(100, max_items))]
+            if self.parse_url(url) and self.parse_url(url)[0] in {"track", "album"}
+        ]
+        if not bounded_urls:
+            return []
+        with self._prefetch_lock:
+            self._prefetch_futures = {future for future in self._prefetch_futures if not future.done()}
+            pending_capacity = max(0, 100 - len(self._prefetch_futures))
+            futures = [
+                self._prefetch_executor.submit(self._prefetch_one, url)
+                for url in bounded_urls[:pending_capacity]
+            ]
+            self._prefetch_futures.update(futures)
+        return futures
 
     # -------------------------------------------------------------------------
     # Official Spotify Web API Resolver
@@ -396,7 +499,7 @@ class SpotifyClient:
 
         elif entity_type == "album":
             album = self._sp.album(entity_id)
-            cover_url = album.get("images", [{}])[0].get("url", "")
+            cover_url = (album.get("images") or [{}])[0].get("url", "")
             release_date = album.get("release_date", "")
             album_name = clean_watermarks(album.get("name", "Unknown Album"))
 
@@ -438,6 +541,8 @@ class SpotifyClient:
                         pl_owner = pl_meta["owner"].get("display_name") or pl_meta["owner"].get("id", "")
                         self.last_owner_name = pl_owner
             except Exception as e:
+                if getattr(e, "http_status", None) == 429:
+                    raise
                 logger.debug(f"Could not fetch playlist metadata: {e}")
 
             tracks: List[TrackMetadata] = []
@@ -456,6 +561,8 @@ class SpotifyClient:
                         )
                         break
                     except Exception as e:
+                        if getattr(e, "http_status", None) == 429:
+                            raise
                         err_str = str(e)
                         if "401" in err_str or "user authentication" in err_str.lower():
                             logger.error(f"Spotify API requires user authorization for playlists: {e}")
@@ -526,6 +633,8 @@ class SpotifyClient:
                         results = self._sp.current_user_saved_tracks(offset=offset, limit=limit)
                         break
                     except Exception as e:
+                        if getattr(e, "http_status", None) == 429:
+                            raise
                         err_str = str(e)
                         if "403" in err_str and ("scope" in err_str.lower() or "insufficient" in err_str.lower()):
                             logger.warning("Spotify API 403: Insufficient client scope. Re-authorizing for Liked Songs...")
@@ -624,21 +733,33 @@ class SpotifyClient:
     # -------------------------------------------------------------------------
     def _resolve_with_guest(self, entity_type: str, entity_id: str) -> List[TrackMetadata]:
         embed_url = f"https://open.spotify.com/embed/{entity_type}/{entity_id}"
-        resp = self._session.get(embed_url, timeout=12)
-        resp.raise_for_status()
+        try:
+            provider_cooldowns.wait("spotify")
+            with self._session.get(embed_url, timeout=12) as resp:
+                if resp.status_code == 429:
+                    provider_cooldowns.defer("spotify", retry_after_seconds(resp.headers.get("Retry-After")))
+                resp.raise_for_status()
+                match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp.text, re.DOTALL)
+            if not match:
+                raise MetadataResolutionError(f"Could not extract __NEXT_DATA__ from Spotify embed: {embed_url}")
 
-        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp.text)
-        if not match:
-            raise MetadataResolutionError(f"Could not extract __NEXT_DATA__ from Spotify embed: {embed_url}")
+            data = json.loads(match.group(1))
+            entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
+        except (requests.RequestException, ValueError, TypeError, AttributeError) as e:
+            raise MetadataResolutionError(f"Could not retrieve Spotify embed metadata: {embed_url}") from e
 
-        data = json.loads(match.group(1))
-        entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
+        if not isinstance(entity, dict) or not entity or entity.get("error"):
+            raise MetadataResolutionError("Spotify metadata is unavailable; the link may be private or invalid.")
 
         if entity_type == "track":
+            if not entity.get("id") or not (entity.get("title") or entity.get("name")):
+                raise MetadataResolutionError("Spotify track metadata is unavailable.")
             return [self._format_guest_track_entity(entity)]
 
         elif entity_type in ("playlist", "album"):
-            track_list = entity.get("trackList", [])
+            track_list = entity.get("trackList")
+            if not isinstance(track_list, list):
+                raise MetadataResolutionError("Spotify collection metadata is unavailable; it may require authorization.")
             cover_url = ""
             visual_id = entity.get("visualIdentity", {})
             images = visual_id.get("image", [])
@@ -708,18 +829,20 @@ class SpotifyClient:
             self.last_total_tracks = len(tracks)
             return tracks
 
+        raise MetadataResolutionError(f"Guest resolution is unavailable for Spotify entity type: {entity_type}")
+
     def _fetch_track_cover(self, track_id: str) -> str:
         """Fetches unique 640x640 album artwork for a track via Spotify oEmbed."""
         if not track_id:
             return ""
         try:
             url = f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{track_id}"
-            r = self._session.get(url, timeout=6)
-            if r.status_code == 200:
-                thumb = r.json().get("thumbnail_url", "")
-                if thumb:
-                    # Upgrade standard 300x300 thumbnail to pristine 640x640 square cover art
-                    return thumb.replace("ab67616d00001e02", "ab67616d0000b273")
+            with self._session.get(url, timeout=6) as r:
+                if r.status_code == 200:
+                    thumb = r.json().get("thumbnail_url", "")
+                    if thumb:
+                        # Upgrade standard 300x300 thumbnail to pristine 640x640 square cover art
+                        return thumb.replace("ab67616d00001e02", "ab67616d0000b273")
         except Exception as e:
             logger.debug(f"Could not fetch individual cover for track {track_id}: {e}")
         return ""

@@ -6,6 +6,7 @@ import math
 import asyncio
 import logging
 import threading
+from concurrent.futures import CancelledError as FutureCancelledError, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Callable, Tuple, AsyncGenerator
 from pathlib import Path
@@ -240,6 +241,7 @@ class MeloBotEngine:
         self._client_connected = False
         self._login_phone_code_hash: Optional[str] = None
         self._login_phone: Optional[str] = None
+        self._closed = False
 
         # Dedicated background asyncio thread & loop
         self._loop = asyncio.new_event_loop()
@@ -248,16 +250,75 @@ class MeloBotEngine:
 
     def _run_event_loop(self):
         asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
-
-    def _run_async(self, coro, timeout: Optional[float] = None) -> Any:
-        """Executes an async coroutine inside the dedicated background thread safely."""
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         try:
-            return future.result(timeout=timeout)
-        except (Exception, asyncio.CancelledError):
+            self._loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(self._loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+            self._loop.run_until_complete(self._loop.shutdown_default_executor())
+            self._loop.close()
+
+    def _run_async(self, coro, timeout: Optional[float] = None, cancel_check: Optional[Callable[[], bool]] = None) -> Any:
+        """Executes an async coroutine inside the dedicated background thread safely."""
+        if self._closed or self._loop.is_closed():
+            coro.close()
+            raise MeloBotError("Telegram engine is closed.")
+        finished = threading.Event()
+
+        async def run():
+            try:
+                return await coro
+            finally:
+                finished.set()
+
+        future = asyncio.run_coroutine_threadsafe(run(), self._loop)
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        try:
+            while True:
+                if cancel_check and cancel_check():
+                    raise FutureCancelledError("Download cancelled by user.")
+                remaining = deadline - time.monotonic() if deadline is not None else 0.1
+                if deadline is not None and remaining <= 0:
+                    raise FutureTimeoutError()
+                try:
+                    return future.result(timeout=min(0.1, remaining))
+                except FutureTimeoutError:
+                    if future.done():
+                        raise
+        except BaseException:
             future.cancel()
+            if not finished.wait(timeout=5):
+                logger.warning("Telegram operation has not finished cancellation cleanup.")
             raise
+
+    def close(self):
+        """Disconnect without logging out and release the event loop and session handles."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+
+        async def disconnect():
+            if self._client is not None:
+                await self._client.disconnect()
+            self._client_connected = False
+
+        try:
+            if not self._loop.is_closed():
+                future = asyncio.run_coroutine_threadsafe(disconnect(), self._loop)
+                future.result(timeout=10)
+        except Exception as exc:
+            logger.warning(f"Telegram disconnect failed: {exc}")
+        finally:
+            if not self._loop.is_closed():
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join(timeout=15)
+            if self._loop_thread.is_alive():
+                logger.warning("Telegram loop is still finishing shutdown.")
 
     @property
     def enabled(self) -> bool:
@@ -594,7 +655,8 @@ class MeloBotEngine:
                 try:
                     src = self._run_async(
                         self._async_query_melobot(track=track, query=query_str, cancel_check=cancel_check),
-                        timeout=70.0
+                        timeout=70.0,
+                        cancel_check=cancel_check
                     )
                     if src:
                         logger.info(f"Resolved '{track.title}' via MeloBot ({src.quality_tier}) using '{vector_name}'")
@@ -1269,16 +1331,14 @@ class MeloBotEngine:
                             cancel_check=cancel_check,
                             pause_wait=pause_wait
                         ),
-                        timeout=300.0
+                        timeout=300.0,
+                        cancel_check=cancel_check
                     )
                 )
             except Exception as e:
+                if cancel_check and cancel_check():
+                    return False
                 logger.error(f"MeloBot download failed for '{source.title}': {e}", exc_info=True)
-                if os.path.exists(dest_path):
-                    try:
-                        os.remove(dest_path)
-                    except Exception:
-                        pass
                 raise MeloBotDownloadError(f"MeloBot download failed: {e}")
 
     async def _async_download_track(
@@ -1301,12 +1361,14 @@ class MeloBotEngine:
         last_bytes = [0]
         total_size = source.file_size or getattr(getattr(msg.media, "document", None), "size", 0) or 1
 
-        def telethon_progress(received_bytes: int, total: int):
+        async def telethon_progress(received_bytes: int, total: int):
             if cancel_check and cancel_check():
                 raise asyncio.CancelledError("Download cancelled by user.")
 
             if pause_wait:
-                pause_wait()
+                await asyncio.to_thread(pause_wait)
+            if cancel_check and cancel_check():
+                raise asyncio.CancelledError("Download cancelled by user.")
 
             now = time.time()
             elapsed = now - last_time[0]
@@ -1364,12 +1426,15 @@ class MeloBotEngine:
             raise MeloBotDownloadError(f"MeloBot downloaded file failed audio integrity check: {reason}")
 
         # Atomically rename .part to final destination
-        if os.path.exists(dest_path):
-            try:
-                os.remove(dest_path)
-            except Exception:
-                pass
-        os.rename(temp_dest, dest_path)
+        try:
+            if cancel_check and cancel_check():
+                os.remove(temp_dest)
+                return False
+            os.replace(temp_dest, dest_path)
+        except OSError:
+            if os.path.exists(temp_dest):
+                os.remove(temp_dest)
+            raise
 
         if progress_callback:
             progress_callback(100.0, "Complete", "00:00")

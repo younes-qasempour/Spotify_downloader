@@ -3,6 +3,8 @@ import sys
 import re
 import shutil
 import subprocess
+import tempfile
+import time
 import logging
 import gzip
 import urllib.request
@@ -58,9 +60,11 @@ def sanitize_filename(name: str, max_length: int = 80) -> str:
     if not cleaned:
         cleaned = "track"
 
-    # Truncate length
-    if len(cleaned) > max_length:
-        cleaned = cleaned[:max_length].rstrip('. ')
+    # Windows device names remain reserved even with an extension.
+    max_length = max(1, max_length)
+    cleaned = cleaned[:max_length].rstrip('. ') or "track"[:max_length]
+    if re.fullmatch(r'CON|PRN|AUX|NUL|COM[1-9\u00b9\u00b2\u00b3]|LPT[1-9\u00b9\u00b2\u00b3]|CONIN\$|CONOUT\$', cleaned.split('.')[0].rstrip(), re.IGNORECASE):
+        cleaned = ("_" + cleaned)[:max_length].rstrip('. ')
 
     return cleaned
 
@@ -85,6 +89,50 @@ def sanitize_path_template(path_str: str, max_segment_length: int = 80) -> str:
 
 
 FFMPEG_DOWNLOAD_URL = "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/ffmpeg-win32-x64.gz"
+
+
+class AudioProcessingCancelled(RuntimeError):
+    """Raised after a cancelled audio subprocess has been stopped and reaped."""
+
+
+def run_ffmpeg(
+    command: list[str],
+    timeout: float = 120,
+    cancel_check: Optional[Callable[[], bool]] = None
+) -> subprocess.CompletedProcess:
+    """Run FFmpeg with captured UTF-8 output, bounded runtime and cooperative cancellation."""
+    if cancel_check and cancel_check():
+        raise AudioProcessingCancelled("Audio processing cancelled.")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    started = time.monotonic()
+    with subprocess.Popen(
+        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", creationflags=flags
+    ) as proc:
+        try:
+            while True:
+                if cancel_check and cancel_check():
+                    raise AudioProcessingCancelled("Audio processing cancelled.")
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    stdout, stderr = proc.communicate(timeout=min(0.1, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if cancel_check and cancel_check():
+                raise AudioProcessingCancelled("Audio processing cancelled.")
+            return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+        except BaseException:
+            if proc.poll() is None:
+                proc.terminate()
+            try:
+                proc.communicate(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+            raise
 
 
 def format_duration(ms: int | float) -> str:
@@ -159,11 +207,14 @@ def download_ffmpeg(
 
     os.makedirs(dest_dir, exist_ok=True)
     target_exe = os.path.normpath(os.path.join(dest_dir, "ffmpeg.exe"))
-    temp_gz = target_exe + ".gz"
+    temp_dir = None
 
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
     try:
+        temp_dir = tempfile.mkdtemp(prefix=".ffmpeg-", dir=dest_dir)
+        temp_gz = os.path.join(temp_dir, "ffmpeg.exe.gz")
+        temp_exe = os.path.join(temp_dir, "ffmpeg.exe")
         if progress_callback:
             progress_callback(0.0, "Connecting to FFmpeg release...")
 
@@ -188,16 +239,16 @@ def download_ffmpeg(
             progress_callback(85.0, "Decompressing ffmpeg.exe...")
 
         with gzip.open(temp_gz, "rb") as f_in:
-            with open(target_exe, "wb") as f_out:
+            with open(temp_exe, "wb") as f_out:
                 shutil.copyfileobj(f_in, f_out)
 
         if os.path.exists(temp_gz):
             os.remove(temp_gz)
 
         # Test execution
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-        proc = subprocess.run([target_exe, "-version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, creationflags=flags)
+        proc = run_ffmpeg([temp_exe, "-version"], timeout=5)
         if proc.returncode == 0:
+            os.replace(temp_exe, target_exe)
             logger.info(f"FFmpeg successfully installed at {target_exe}")
             if progress_callback:
                 progress_callback(100.0, "FFmpeg ready!")
@@ -208,12 +259,10 @@ def download_ffmpeg(
 
     except Exception as e:
         logger.error(f"Failed to download FFmpeg: {e}")
-        if os.path.exists(temp_gz):
-            try:
-                os.remove(temp_gz)
-            except Exception:
-                pass
         return None
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def ensure_or_download_ffmpeg(progress_callback: Optional[Callable[[float, str], None]] = None) -> str | None:
@@ -309,7 +358,7 @@ def detect_audio_header(header_or_path: bytes | str | Path) -> Optional[str]:
         return "opus"
     if b"ftyp" in header[:16]:
         return "m4a"
-    if header.startswith(b"RIFF"):
+    if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
         return "wav"
     if header.startswith(b"\x1a\x45\xdf\xa3"):
         return "webm"
@@ -343,8 +392,8 @@ def is_valid_audio_file(file_path: str, min_size: int = 150 * 1024) -> Tuple[boo
         try:
             import mutagen
             m = mutagen.File(file_path)
-            if m is None and fmt not in ("flac", "webm"):
-                pass
+            if m is None and fmt != "webm":
+                return False, "Audio container could not be parsed"
         except Exception as e:
             return False, f"Mutagen audio verification failed: {e}"
 
@@ -436,13 +485,19 @@ def generate_m3u8_file(folder_path: str, playlist_name: str = "") -> Optional[st
         return None
 
 
-def measure_audio_loudness(audio_file_path: str, fast_window: bool = True) -> Optional[Tuple[float, float]]:
+def measure_audio_loudness(
+    audio_file_path: str,
+    fast_window: bool = True,
+    cancel_check: Optional[Callable[[], bool]] = None
+) -> Optional[Tuple[float, float]]:
     """
     Measures EBU R128 integrated loudness (LUFS) and True Peak (dBFS) using FFmpeg ebur128 filter.
     When `fast_window=True` and the track is longer than 65s, samples the 45-second core body of the track
     (skipping quiet intros/outros) for 4x faster analysis and more accurate perceived loudness.
     Returns (integrated_lufs, true_peak_dbfs), e.g. (-14.2, -0.4).
     """
+    if cancel_check and cancel_check():
+        raise AudioProcessingCancelled("Audio processing cancelled.")
     if not audio_file_path or not os.path.isfile(audio_file_path):
         return None
 
@@ -462,7 +517,6 @@ def measure_audio_loudness(audio_file_path: str, fast_window: bool = True) -> Op
         except Exception:
             pass
 
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     cmd = [
         ffmpeg_bin,
         "-nostats",
@@ -474,7 +528,9 @@ def measure_audio_loudness(audio_file_path: str, fast_window: bool = True) -> Op
     ]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45, creationflags=flags)
+        proc = run_ffmpeg(cmd, timeout=45, cancel_check=cancel_check)
+        if proc.returncode != 0:
+            return None
         stderr = proc.stderr or ""
 
         i_matches = re.findall(r'Integrated loudness:\s+I:\s+([-\d\.]+)\s+LUFS', stderr)
@@ -493,6 +549,8 @@ def measure_audio_loudness(audio_file_path: str, fast_window: bool = True) -> Op
 
         peak_dbfs = float(peak_matches[-1]) if peak_matches else 0.0
         return integrated_lufs, peak_dbfs
+    except AudioProcessingCancelled:
+        raise
     except Exception as e:
         logger.debug(f"Loudness measurement failed for {audio_file_path}: {e}")
         return None
@@ -521,7 +579,8 @@ def normalize_audio_loudness(
     target_lufs: float = -9.0,
     max_gain_db: float = 13.5,
     min_gain_db: float = -6.5,
-    force: bool = False
+    force: bool = False,
+    cancel_check: Optional[Callable[[], bool]] = None
 ) -> Optional[Tuple[float, float]]:
     """
     High-fidelity EBU R128 loudness booster and balancer.
@@ -531,6 +590,8 @@ def normalize_audio_loudness(
     3. Preserves 100% of embedded cover artwork, synced/unsynced lyrics, genres, and ID3/Vorbis/MP4 metadata.
     Returns (orig_lufs, applied_gain_db) on success, or None on error.
     """
+    if cancel_check and cancel_check():
+        raise AudioProcessingCancelled("Audio processing cancelled.")
     if not file_path or not os.path.isfile(file_path):
         return None
 
@@ -563,9 +624,11 @@ def normalize_audio_loudness(
         except Exception:
             pass
 
-    measured = measure_audio_loudness(file_path)
+    measured = measure_audio_loudness(file_path, cancel_check=cancel_check)
     if not measured:
         return None
+    if cancel_check and cancel_check():
+        raise AudioProcessingCancelled("Audio processing cancelled.")
 
     orig_lufs, orig_peak = measured
     raw_gain_db = target_lufs - orig_lufs
@@ -573,20 +636,24 @@ def normalize_audio_loudness(
 
     # Skip re-encoding if already within +/- 1.2 dB of target_lufs and not clipping
     if not force and abs(raw_gain_db) <= 1.2 and orig_peak <= 0.2:
+        temp_copy = None
         try:
+            fd, temp_copy = tempfile.mkstemp(prefix=".normalize-", suffix=ext, dir=os.path.dirname(os.path.abspath(file_path)))
+            os.close(fd)
+            shutil.copy2(file_path, temp_copy)
             if ext == ".mp3":
                 from mutagen.id3 import ID3, TXXX
-                id3_t = ID3(file_path)
+                id3_t = ID3(temp_copy)
                 id3_t.add(TXXX(encoding=3, desc="FLACIFY_NORMALIZED", text=[target_tag_val]))
-                id3_t.save(file_path, v2_version=3)
+                id3_t.save(temp_copy, v2_version=3)
             elif ext == ".flac":
                 from mutagen.flac import FLAC
-                fl_t = FLAC(file_path)
+                fl_t = FLAC(temp_copy)
                 fl_t["FLACIFY_NORMALIZED"] = target_tag_val
                 fl_t.save()
             elif ext in (".opus", ".ogg"):
                 import mutagen
-                og_t = mutagen.File(file_path)
+                og_t = mutagen.File(temp_copy)
                 if og_t is not None:
                     og_t["FLACIFY_NORMALIZED"] = [target_tag_val]
                     if ext == ".opus":
@@ -594,14 +661,26 @@ def normalize_audio_loudness(
                     og_t.save()
             elif ext == ".m4a":
                 from mutagen.mp4 import MP4, MP4FreeForm
-                mp4_t = MP4(file_path)
+                mp4_t = MP4(temp_copy)
                 if mp4_t.tags is None:
                     mp4_t.add_tags()
                 mp4_t.tags["----:com.apple.iTunes:FLACIFY_NORMALIZED"] = [MP4FreeForm(target_tag_val.encode("utf-8"))]
                 mp4_t.save()
-        except Exception:
-            pass
-        return orig_lufs, 0.0
+            if cancel_check and cancel_check():
+                raise AudioProcessingCancelled("Audio processing cancelled.")
+            os.replace(temp_copy, file_path)
+            return orig_lufs, 0.0
+        except AudioProcessingCancelled:
+            raise
+        except Exception as e:
+            logger.debug(f"Loudness normalization metadata error for {file_path}: {e}")
+            return None
+        finally:
+            if temp_copy and os.path.exists(temp_copy):
+                try:
+                    os.remove(temp_copy)
+                except OSError:
+                    pass
 
     # Snapshot all existing metadata and embedded artwork before modifying file
     saved_id3 = None
@@ -634,13 +713,10 @@ def normalize_audio_loudness(
                 saved_mp4_tags = dict(orig_mp4.tags)
     except Exception as e_snap:
         logger.debug(f"Metadata snapshot note for {file_path}: {e_snap}")
+        return None
 
-    temp_out = f"{file_path}.norm_tmp{ext}"
-    if os.path.exists(temp_out):
-        try:
-            os.remove(temp_out)
-        except Exception:
-            pass
+    fd, temp_out = tempfile.mkstemp(prefix=".normalize-", suffix=ext, dir=os.path.dirname(os.path.abspath(file_path)))
+    os.close(fd)
 
     # Build transparent gain + lookahead brickwall peak limiter filter
     af_filter = f"volume={gain_db:.2f}dB,alimiter=limit=0.95:attack=5:release=50:level=false"
@@ -657,7 +733,6 @@ def normalize_audio_loudness(
     elif ext == ".m4a":
         codec_args = ["-map", "0:a:0", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart"]
 
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     cmd = [
         ffmpeg_bin,
         "-y",
@@ -669,7 +744,7 @@ def normalize_audio_loudness(
     ]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, creationflags=flags)
+        proc = run_ffmpeg(cmd, timeout=120, cancel_check=cancel_check)
         if proc.returncode != 0 or not os.path.isfile(temp_out) or os.path.getsize(temp_out) < 32 * 1024:
             if os.path.exists(temp_out):
                 try:
@@ -679,8 +754,9 @@ def normalize_audio_loudness(
             logger.warning(f"Loudness normalization failed for {file_path}: {proc.stderr[-300:] if proc.stderr else 'Unknown error'}")
             return None
 
-        # Atomically replace original file with normalized file
-        os.replace(temp_out, file_path)
+        valid, reason = is_valid_audio_file(temp_out, min_size=1024)
+        if not valid:
+            raise ValueError(f"Normalized audio failed integrity verification: {reason}")
 
         # Restore all snapshotted metadata, lyrics, genres, and cover art
         est_new_lufs = min(target_lufs, orig_lufs + gain_db)
@@ -693,10 +769,10 @@ def normalize_audio_loudness(
                 saved_id3.add(TXXX(encoding=3, desc="REPLAYGAIN_TRACK_GAIN", text=[rg_gain_str]))
                 saved_id3.add(TXXX(encoding=3, desc="REPLAYGAIN_TRACK_PEAK", text=[rg_peak_str]))
                 saved_id3.add(TXXX(encoding=3, desc="FLACIFY_NORMALIZED", text=[f"{target_lufs:.1f}"]))
-                saved_id3.save(file_path, v2_version=3)
+                saved_id3.save(temp_out, v2_version=3)
             elif ext == ".flac" and saved_flac_tags is not None:
                 from mutagen.flac import FLAC
-                new_flac = FLAC(file_path)
+                new_flac = FLAC(temp_out)
                 for k, v in saved_flac_tags.items():
                     new_flac[k] = v
                 new_flac["REPLAYGAIN_TRACK_GAIN"] = rg_gain_str
@@ -709,7 +785,7 @@ def normalize_audio_loudness(
                 new_flac.save()
             elif ext in (".opus", ".ogg") and saved_ogg_tags is not None:
                 import mutagen
-                new_ogg = mutagen.File(file_path)
+                new_ogg = mutagen.File(temp_out)
                 if new_ogg is not None:
                     for k, v in saved_ogg_tags.items():
                         new_ogg[k] = v
@@ -721,7 +797,7 @@ def normalize_audio_loudness(
                     new_ogg.save()
             elif ext == ".m4a" and saved_mp4_tags is not None:
                 from mutagen.mp4 import MP4, MP4FreeForm
-                new_mp4 = MP4(file_path)
+                new_mp4 = MP4(temp_out)
                 if new_mp4.tags is None:
                     new_mp4.add_tags()
                 for k, v in saved_mp4_tags.items():
@@ -732,6 +808,11 @@ def normalize_audio_loudness(
                 new_mp4.save()
         except Exception as e_rest:
             logger.warning(f"Metadata restore warning after loudness normalization for {file_path}: {e_rest}")
+            raise
+
+        if cancel_check and cancel_check():
+            raise AudioProcessingCancelled("Audio processing cancelled.")
+        os.replace(temp_out, file_path)
 
         logger.info(
             f"Normalized volume for '{os.path.basename(file_path)}': "
@@ -739,14 +820,17 @@ def normalize_audio_loudness(
         )
         return orig_lufs, gain_db
 
+    except AudioProcessingCancelled:
+        raise
     except Exception as e:
+        logger.debug(f"Loudness normalization error for {file_path}: {e}")
+        return None
+    finally:
         if os.path.exists(temp_out):
             try:
                 os.remove(temp_out)
             except Exception:
                 pass
-        logger.debug(f"Loudness normalization error for {file_path}: {e}")
-        return None
 
 
 # -------------------------------------------------------------------------

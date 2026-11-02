@@ -15,6 +15,7 @@ cookies.json
 cookies.txt
 *cookies*.txt
 *.session
+*.session-journal
 *.env
 .cache
 .cache*

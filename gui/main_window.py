@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import threading
 from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QEasingCurve, QPoint, QCoreApplication
 if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
     try:
@@ -9,10 +10,10 @@ if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
     except Exception:
         pass
 from PyQt6.QtGui import QIcon, QKeySequence, QShortcut, QColor
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QVBoxLayout
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QVBoxLayout, QHBoxLayout, QWidget, QMessageBox
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, FluentIcon,
-    setTheme, Theme, isDarkTheme, setThemeColor
+    setTheme, Theme, isDarkTheme, setThemeColor, PushButton, InfoBar
 )
 from gui.player_bar import MiniPlayerBar
 from gui.media_keys import MediaControllerManager
@@ -29,12 +30,13 @@ from core.config import config
 from core.utils import resource_path
 from core.paths import get_asset_path
 
-from gui.bridge import EngineSignalBridge
+from gui.bridge import EngineSignalBridge, safe_emit
 from gui.views.web_studio_view import WebStudioView
 from gui.views.queue_view import QueueView
 from gui.views.playlists_view import PlaylistsView
 from gui.views.completed_view import CompletedView
 from gui.views.settings_view import SettingsView
+from gui.views.reliability_view import ReliabilityView
 
 logger = logging.getLogger("gui.main_window")
 
@@ -112,6 +114,10 @@ class MainWindow(FluentWindow):
         # Signal Bridge between Core Callbacks and Qt Event Loop
         self.bridge = EngineSignalBridge()
         self.bridge.bind_queue_manager(self.queue_manager)
+        self._source_review_dialogs = {}
+        self.bridge.sig_source_review_required.connect(self._show_source_review)
+        self.bridge.sig_settings_error.connect(self._show_settings_error)
+        config.set_error_handler(lambda message: safe_emit(self.bridge.sig_settings_error, message))
 
         # Primary Chromium-powered Spotify Desktop Web Studio View
         self.web_studio_view = WebStudioView(
@@ -144,6 +150,9 @@ class MainWindow(FluentWindow):
             parent=self
         )
         self.settings_view.setObjectName("settings_view")
+
+        self.reliability_view = ReliabilityView(self.queue_manager, self.archive_manager, self)
+        self.reliability_view.setObjectName("reliability_view")
 
         # Setup Navigation
         self._init_navigation()
@@ -192,6 +201,18 @@ class MainWindow(FluentWindow):
         self._init_system_tray(icon_path)
 
         # Launch into the new full-bleed Spotify Desktop Web Studio by default
+        tools_bar = QWidget(self)
+        tools_layout = QHBoxLayout(tools_bar)
+        tools_layout.setContentsMargins(10, 2, 10, 2)
+        studio_button = PushButton("Studio", tools_bar)
+        studio_button.clicked.connect(lambda: self.switchTo(self.web_studio_view))
+        tools_button = PushButton("Recovery & Tools", tools_bar)
+        tools_button.setObjectName("reliability_tools_button")
+        tools_button.clicked.connect(self._show_reliability)
+        tools_layout.addWidget(studio_button)
+        tools_layout.addWidget(tools_button)
+        tools_layout.addStretch(1)
+        self.widgetLayout.insertWidget(0, tools_bar)
         self.switchTo(self.web_studio_view)
         if hasattr(self, "navigationInterface"):
             self.navigationInterface.setVisible(False)
@@ -232,6 +253,56 @@ class MainWindow(FluentWindow):
             "Settings",
             NavigationItemPosition.BOTTOM
         )
+        self.addSubInterface(self.reliability_view, FluentIcon.SYNC, "Recovery & Tools", NavigationItemPosition.TOP)
+
+    def _show_reliability(self):
+        self.reliability_view.refresh()
+        self.switchTo(self.reliability_view)
+
+    def _show_settings_error(self, message: str):
+        InfoBar.error("Settings not saved", message, duration=7000, parent=self)
+
+    def _show_source_review(self, track, summary, decision_callback):
+        existing = self._source_review_dialogs.get(track.id)
+        if existing:
+            existing.reject()
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Review uncertain source match")
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        duration = summary.get("duration")
+        duration_text = f"{duration:.1f}s" if isinstance(duration, (int, float)) else "Not supplied"
+        dialog.setText(
+            f"Requested: {str(summary.get('requested_title', ''))[:512]} — {str(summary.get('requested_artist', ''))[:512]}\n"
+            f"Duration: {summary.get('requested_duration', 0):.1f}s\n\n"
+            f"Candidate: {str(summary.get('title', ''))[:512]} — {str(summary.get('artist', ''))[:512]}\n"
+            f"Duration: {duration_text}\nVersion: {summary.get('version', '')}\n"
+            f"Provider / quality: {summary.get('provider', '')} / {summary.get('quality', '')}\n\n"
+            "Accept this recording? No audio transfer starts until you approve."
+        )
+        dialog.setDetailedText("\n".join(summary.get("reasons", [])))
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        self._source_review_dialogs[track.id] = dialog
+
+        timer = QTimer(dialog)
+        timer.setInterval(200)
+
+        def finished(result):
+            timer.stop()
+            decision_callback(result == QMessageBox.StandardButton.Yes.value)
+            if self._source_review_dialogs.get(track.id) is dialog:
+                self._source_review_dialogs.pop(track.id, None)
+            dialog.deleteLater()
+
+        def check_cancelled():
+            item = next((item for item in self.queue_manager.get_items() if item.track.id == track.id), None)
+            if not item or item.cancelled or item.status != "Awaiting source approval":
+                dialog.reject()
+
+        timer.timeout.connect(check_cancelled)
+        dialog.finished.connect(finished)
+        timer.start()
+        dialog.open()
 
     def _setup_smooth_tab_transitions(self):
         """
@@ -523,4 +594,10 @@ class MainWindow(FluentWindow):
         if hasattr(self, "player_bar"):
             self.player_bar.player.stop()
         self.queue_manager.stop()
+        for dialog in list(self._source_review_dialogs.values()):
+            dialog.reject()
+        config.set_error_handler(None)
+        if not getattr(self, "_shutdown_started", False):
+            self._shutdown_started = True
+            threading.Thread(target=self.queue_manager.shutdown, name="DownloadShutdown", daemon=False).start()
         super().closeEvent(event)

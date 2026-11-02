@@ -626,7 +626,7 @@ class ArchiveManager:
         2. ISRC match
         3. Normalized Title + Artist match
 
-        Verifies that the target file exists on disk. If missing, cleans the record.
+        Returns only currently usable files, preserving unavailable files and records.
         """
         if hasattr(spotify_id, "id"):
             track_obj = spotify_id
@@ -681,8 +681,6 @@ class ArchiveManager:
                                 file_path = cand_p
                                 norm_cand = normalize_path(cand_p)
                                 data["file_path"] = norm_cand
-                                with conn:
-                                    conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE spotify_id = ?", (norm_cand, data["spotify_id"]))
                                 break
                             # Also check collection subfolders
                             coll_name = data.get("collection_name") or ""
@@ -692,28 +690,20 @@ class ArchiveManager:
                                     file_path = cand_sub
                                     norm_cand = normalize_path(cand_sub)
                                     data["file_path"] = norm_cand
-                                    with conn:
-                                        conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE spotify_id = ?", (norm_cand, data["spotify_id"]))
                                     break
 
                 if file_path and os.path.isfile(file_path):
                     is_valid, reason = is_valid_audio_file(file_path)
                     if is_valid:
+                        if data["file_path"] != row["file_path"]:
+                            with conn:
+                                conn.execute("UPDATE downloaded_tracks SET file_path = ? WHERE spotify_id = ?", (data["file_path"], data["spotify_id"]))
                         return data
                     else:
-                        logger.warning(f"Archived file '{file_path}' failed integrity check ({reason}). Purging corrupt record.")
-                        try:
-                            os.remove(file_path)
-                        except Exception:
-                            pass
-                        with conn:
-                            conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (data["spotify_id"],))
+                        logger.warning(f"Archived file '{file_path}' failed integrity check ({reason}). Preserving file and record.")
                         return None
                 else:
-                    # File was deleted from disk; remove stale record
-                    logger.info(f"Archived file deleted from disk: {file_path}. Cleaning record.")
-                    with conn:
-                        conn.execute("DELETE FROM downloaded_tracks WHERE spotify_id = ?", (data["spotify_id"],))
+                    logger.info(f"Archived file unavailable: {file_path}. Preserving record for offline storage.")
                     return None
 
         except Exception as e:
@@ -1409,11 +1399,11 @@ class ArchiveManager:
     def purge_corrupt_and_cleanup_library(self, downloads_dir: Optional[str] = None) -> Dict[str, int]:
         """
         Comprehensive library cleaner and integrity restorer:
-        1. Purges all unplayable/corrupt HTML files (< 500KB with HTML header) from disk and archive.db.
+        1. Reports validation failures without removing audio files or archive records.
         2. Eliminates all hidden .cover_synced marker files.
         3. Migrates folder cover.jpg files to cache/covers/ and removes them from the music folder.
         4. Reorganizes .lrc files into a dedicated lyrics/ subfolder if present.
-        Returns a dict of counts for each action performed.
+        Returns a dict of counts; legacy purge counters remain zero.
         """
         from core.config import config
         target_dir = downloads_dir or config.get("download.output_dir", "")
@@ -1429,8 +1419,6 @@ class ArchiveManager:
             "relocated_covers": 0,
             "reorganized_lyrics": 0
         }
-
-        purged_paths = set()
 
         # 1. Walk downloads_dir to clean files
         for root, dirs, files in os.walk(target_dir):
@@ -1463,17 +1451,14 @@ class ArchiveManager:
                         logger.warning(f"Could not relocate cover {fpath}: {e}")
                     continue
 
-                # Check audio files for HTML corruption
+                # Validation failures can also mean locked files or unavailable drives.
                 if ext in (".flac", ".mp3", ".opus", ".m4a", ".ogg"):
-                    valid, reason = is_valid_audio_file(fpath)
-                    if not valid:
-                        try:
-                            os.remove(fpath)
-                            purged_paths.add(os.path.normpath(fpath).lower())
-                            stats["purged_corrupt_files"] += 1
-                            logger.info(f"Purged corrupt non-audio file ({reason}): {fpath}")
-                        except Exception as e:
-                            logger.warning(f"Could not remove corrupt file {fpath}: {e}")
+                    try:
+                        valid, reason = is_valid_audio_file(fpath)
+                        if not valid:
+                            logger.warning(f"Preserving audio file after failed validation ({reason}): {fpath}")
+                    except Exception as e:
+                        logger.warning(f"Could not validate audio file; preserving {fpath}: {e}")
                     continue
 
                 # Check .lrc files if separate_folder mode is preferred
@@ -1490,33 +1475,6 @@ class ArchiveManager:
                             logger.info(f"Moved .lrc to lyrics subfolder: {dest_lrc}")
                         except Exception as e:
                             logger.warning(f"Could not move .lrc file {fpath}: {e}")
-
-        # 2. Clean database records for purged or non-existent files
-        try:
-            with self.connection() as conn:
-                cur = conn.execute("SELECT spotify_id, file_path FROM downloaded_tracks")
-                rows = cur.fetchall()
-                ids_to_delete = []
-                for r in rows:
-                    p = r["file_path"]
-                    norm_p = os.path.normpath(p).lower()
-                    if norm_p in purged_paths or not os.path.isfile(p):
-                        ids_to_delete.append((r["spotify_id"],))
-                    else:
-                        valid, _ = is_valid_audio_file(p)
-                        if not valid:
-                            try:
-                                os.remove(p)
-                            except Exception:
-                                pass
-                            ids_to_delete.append((r["spotify_id"],))
-
-                if ids_to_delete:
-                    with conn:
-                        conn.executemany("DELETE FROM downloaded_tracks WHERE spotify_id = ?", ids_to_delete)
-                    stats["purged_db_records"] = len(ids_to_delete)
-        except Exception as e:
-            logger.error(f"Error cleaning database records: {e}")
 
         logger.info(f"Cleanup finished: {stats}")
         return stats

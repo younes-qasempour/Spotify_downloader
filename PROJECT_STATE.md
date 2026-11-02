@@ -898,6 +898,49 @@ d:\Spotify-Downloader\
   4. **Verified via Unit Tests ([tests/test_queue_manager.py](file:///d:/Spotify-Downloader/tests/test_queue_manager.py)):**
      - Added `test_melobot_mode_suppresses_musilon_limit_prompt`, verifying that `on_musilon_limit_reached` is never invoked and downloads proceed to YouTube Music fallback without UI disruption. All 87 unit tests passing.
 
+### 39. Flacify v1.7.2 Reliability Architecture, Hardening, and Bug Fixes (November 2026)
+- **Background & Objective:**
+  - Implemented 9 enterprise-grade reliability and UX polish features to ensure crash-proof queue persistence, review of uncertain audio candidates, reversible library maintenance, sandboxed challenge solving, cross-worker rate-limit coordination, and granular stage diagnostics.
+  - Completed comprehensive codebase audit, fixing discovered lifecycle and UI synchronization issues.
+
+- **New Core Features Implemented:**
+  1. **Recoverable Download Queue & Staging Crash Recovery ([core/reliability_store.py](file:///d:/Spotify-Downloader/core/reliability_store.py), [core/staging_recovery.py](file:///d:/Spotify-Downloader/core/staging_recovery.py)):**
+     - SQLite-backed `ReliabilityStore` (`reliability.db`) stores durable queue snapshots.
+     - Unfinished, active, and pending jobs are cleanly rehydrated upon application relaunch with integrity checks.
+     - `StagingRecovery` discovers abandoned `.part`, `.ytdl`, or unindexed staging files on boot, offering safe cleanup or recovery into the library archive.
+  2. **Source-Match Review Subsystem ([core/source_review.py](file:///d:/Spotify-Downloader/core/source_review.py)):**
+     - Candidate duration delta, artist similarity, and version tags are evaluated with a confidence scoring model.
+     - Ambiguous matches prompt user review or automated safety thresholds before downloading uncertain recordings.
+  3. **Reversible Library Repair Subsystem ([core/library_repair.py](file:///d:/Spotify-Downloader/core/library_repair.py)):**
+     - Provides dry-run preview of metadata tags and duplicate consolidation.
+     - Automatically creates file-level backups before modifying audio tags or files, enabling instant one-click rollback.
+  4. **Bounded Metadata Prefetching & LRU Cache ([core/spotify_client.py](file:///d:/Spotify-Downloader/core/spotify_client.py)):**
+     - Controlled concurrency prefetching with sliding-window LRU caching safely fetches Spotify metadata for playlists of 1,000+ tracks without memory leaks or socket exhaustion.
+  5. **Provider-Wide Rate-Limit Coordination ([core/provider_cooldown.py](file:///d:/Spotify-Downloader/core/provider_cooldown.py)):**
+     - Shared cooldown coordinator synchronizes rate limits and HTTP 429 backoffs across all worker threads, preventing cascading retry storms.
+  6. **Isolated Challenge Sandbox ([core/musilon.py](file:///d:/Spotify-Downloader/core/musilon.py)):**
+     - ArvanCloud anti-bot challenge scripts execute within restricted environments with strict timeouts, zero filesystem access, and QuickJS / Node isolation.
+  7. **Stage-Aware Progress & Actionable Diagnostics ([core/queue_manager.py](file:///d:/Spotify-Downloader/core/queue_manager.py), [gui/queue_model.py](file:///d:/Spotify-Downloader/gui/queue_model.py), [gui/web_api.py](file:///d:/Spotify-Downloader/gui/web_api.py)):**
+     - Granular lifecycle tracking (`resolving`, `downloading`, `transcoding`, `tagging`, `normalizing`, `done`, `failed`).
+     - Context-aware diagnostic hints provide guided recovery steps for network drops, rate limits, and missing FFmpeg.
+     - `TrackQueueModel` exposes stage and diagnostic tooltips on hover.
+  8. **Pre-Flight Output Batch Preview ([core/output_preview.py](file:///d:/Spotify-Downloader/core/output_preview.py)):**
+     - Previews final target folders, filenames, format conversions, and duplicate collision strategies before downloading batches.
+  9. **Atomic Settings Validation & Feedback ([core/config.py](file:///d:/Spotify-Downloader/core/config.py), [gui/views/settings_view.py](file:///d:/Spotify-Downloader/gui/views/settings_view.py), [gui/web_api.py](file:///d:/Spotify-Downloader/gui/web_api.py)):**
+     - Validates settings changes with atomic batch persistence (`config.set_many()`) and actionable error toasts.
+
+- **Audit Findings & Bug Fixes Resolved:**
+  - Fixed `item.error_message` assignment order in MeloBot and Musilon failure handlers in `core/queue_manager.py` to ensure diagnostic hints are preserved.
+  - Added initial queue state loading and synchronized item statuses in `gui/views/queue_view.py` for start, stop, and retry actions.
+  - Added `Qt.ItemDataRole.ToolTipRole` to `gui/queue_model.py` exposing status, stage, error message, and diagnostic hints on hover.
+  - Switched `gui/web_api.py` settings handler to `config.set_many()` and added stage and diagnostic_hint to `/api/queue` responses.
+  - Added explicit null-guards in `core/spotify_client.py` for headless or uninitialized reliability store cases.
+
+- **Test Suite Verification:**
+  - Automated test suite verified via `python -B scripts/run_tests.py`: **456 tests passed**.
+
+---
+
 ### Run the GUI Application:
 ```powershell
 python main.py

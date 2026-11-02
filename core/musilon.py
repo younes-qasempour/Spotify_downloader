@@ -5,7 +5,9 @@ import json
 import random
 import logging
 import threading
+import math
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from typing import Optional, List, Dict, Any, Callable, Tuple
 from urllib.parse import quote_plus
 import requests
@@ -13,6 +15,7 @@ import requests
 from core.exceptions import FlacifyError, AudioIntegrityError
 from core.spotify_client import TrackMetadata
 from core.utils import clean_watermarks, format_bytes, is_valid_audio_file, detect_audio_header
+from core.provider_cooldown import provider_cooldowns, retry_after_seconds
 
 logger = logging.getLogger("core.musilon")
 
@@ -154,6 +157,7 @@ class MusilonEngine:
         else:
             self.session.proxies = {}
 
+        self.session.cookies.clear()
         self._load_cookie_string(self.session_cookie)
 
     def _load_cookie_string(self, cookie_str: str):
@@ -201,6 +205,7 @@ class MusilonEngine:
         if "@" not in user:
             return False, "Musilon requires your registered email address (e.g. your_email@gmail.com), not your username."
 
+        login_session = None
         try:
             self._rate_limit_shield()
 
@@ -303,6 +308,9 @@ class MusilonEngine:
         except Exception as e:
             logger.error(f"Error logging in to Musilon: {e}")
             return False, f"Login failed: {format_network_error(e)}"
+        finally:
+            if login_session is not None:
+                login_session.close()
 
     def test_connection(self, auto_login: bool = True) -> Tuple[bool, bool, bool, str]:
         """
@@ -454,70 +462,118 @@ class MusilonEngine:
         backoff = 1.5
 
         for attempt in range(max_retries):
+            if not provider_cooldowns.wait("musilon"):
+                raise MusilonError("Musilon request cancelled during provider cooldown.")
             self._rate_limit_shield()
+            resp = None
             try:
                 resp = self.session.request(method, url, timeout=timeout, **kwargs)
 
                 # Check for ArvanCloud challenge
                 if resp.status_code == 200 and "__arcsjs" in resp.text and "<script" in resp.text:
                     logger.info("ArvanCloud challenge detected. Solving challenge...")
-                    if self._solve_arvancloud_challenge(resp.text):
-                        return self._request(method, url, allow_404=allow_404, max_retries=2, timeout=timeout, **kwargs)
+                    try:
+                        solved = self._solve_arvancloud_challenge(resp.text)
+                    finally:
+                        resp.close()
+                    if not solved or attempt == max_retries - 1:
+                        raise MusilonError("Musilon challenge could not be cleared within the retry limit.")
+                    continue
 
                 if resp.status_code == 404 and allow_404:
                     return resp
 
                 if resp.status_code in (429, 503):
-                    logger.warning(f"Musilon rate-limited (HTTP {resp.status_code}). Backing off for {backoff:.1f}s...")
-                    time.sleep(backoff)
+                    status = resp.status_code
+                    retry_after = resp.headers.get("Retry-After", "")
+                    resp.close()
+                    delay = backoff
+                    if retry_after:
+                        try:
+                            delay = float(retry_after)
+                        except (TypeError, ValueError):
+                            try:
+                                delay = max(0.0, parsedate_to_datetime(retry_after).timestamp() - time.time())
+                            except (TypeError, ValueError, OverflowError):
+                                delay = backoff
+                    if not math.isfinite(delay) or delay < 0:
+                        delay = backoff
+                    provider_cooldowns.defer("musilon", delay)
+                    if attempt == max_retries - 1 or delay > 60:
+                        error_type = MusilonRateLimitExceededError if status == 429 else MusilonError
+                        raise error_type(f"Musilon returned HTTP {status}; retry later.")
+                    logger.warning(f"Musilon rate-limited (HTTP {status}). Backing off for {delay:.1f}s...")
+                    time.sleep(delay)
                     backoff *= 1.5
                     continue
 
                 return resp
 
-            except (requests.RequestException, Exception) as e:
+            except requests.RequestException as e:
+                if resp is not None:
+                    resp.close()
                 logger.warning(f"Musilon request failed (attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt == max_retries - 1:
                     raise e
                 time.sleep(backoff)
                 backoff *= 1.5
 
-        raise FlacifyError(f"Max retries reached for {url}")
+        raise MusilonError(f"Max retries reached for {url}")
 
     def _solve_arvancloud_challenge(self, html_content: str) -> bool:
-        """Solves ArvanCloud JavaScript challenge using headless Node.js."""
+        """Evaluate the provider challenge in a capability-free, resource-limited JS context."""
         try:
-            import subprocess
+            import quickjs
+            if not isinstance(html_content, str) or len(html_content) > 256_000:
+                return False
             scripts = re.findall(r'<script[^>]*>(.*?)</script>', html_content, re.DOTALL)
             challenge_script = next((s for s in scripts if '__arcsjs' in s), None)
-            if not challenge_script:
+            if not challenge_script or len(challenge_script) > 32_000:
                 return False
 
-            node_code = f"""
-            var exports = undefined; var module = undefined; var define = undefined;
-            var window = this; var self = this;
-            let cookies = {{}};
-            let document = {{ addEventListener: (e, cb) => cb(), cookie: '' }};
-            let location = {{ reload: () => {{}} }};
-            Object.defineProperty(document, 'cookie', {{
-                set: (val) => {{ 
-                    let [k, v] = val.split(';')[0].split('='); 
-                    cookies[k.trim()] = v ? v.trim() : ''; 
-                }}
-            }});
-            function setTimeout(cb) {{ cb(); }}
-            {challenge_script}
-            console.log(JSON.stringify(cookies));
-            """
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-            proc = subprocess.run(['node', '-e', node_code], capture_output=True, text=True, timeout=10, creationflags=flags)
-            if proc.returncode == 0 and proc.stdout.strip():
-                cookies = json.loads(proc.stdout.strip())
-                for k, v in cookies.items():
-                    self.session.cookies.set(k, v, domain="open.musilon.com")
-                    self.session.cookies.set(k, v, domain="musilon.com")
-                logger.info("Successfully solved and injected ArvanCloud challenge cookies.")
-                return True
+            context = quickjs.Context()
+            context.set_memory_limit(8 * 1024 * 1024)
+            context.set_max_stack_size(512 * 1024)
+            context.set_time_limit(1.5)
+            context.eval("""
+                var cookies = Object.create(null);
+                var window = globalThis;
+                var self = globalThis;
+                var document = { addEventListener: function(_, callback) { if (typeof callback === 'function') callback(); } };
+                var location = { reload: function() {} };
+                Object.defineProperty(document, 'cookie', {
+                    set: function(value) {
+                        var pair = String(value).split(';', 1)[0];
+                        var separator = pair.indexOf('=');
+                        if (separator > 0) cookies[pair.slice(0, separator).trim()] = pair.slice(separator + 1).trim();
+                    },
+                    get: function() { return ''; }
+                });
+                function setTimeout(callback) { if (typeof callback === 'function') callback(); return 0; }
+            """)
+            context.eval(challenge_script)
+            cookie_json = context.eval("JSON.stringify(cookies)")
+            cookies = json.loads(cookie_json or "{}")
+            if not isinstance(cookies, dict) or len(cookies) > 32:
+                return False
+            valid_cookies = {}
+            total_size = 0
+            for key, value in cookies.items():
+                if not isinstance(key, str) or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}", key):
+                    continue
+                if not isinstance(value, str) or len(value) > 4096 or any(ord(char) < 32 or ord(char) == 127 for char in value):
+                    continue
+                total_size += len(key) + len(value)
+                if total_size > 8192:
+                    return False
+                valid_cookies[key] = value
+            if not valid_cookies:
+                return False
+            for key, value in valid_cookies.items():
+                self.session.cookies.set(key, value, domain="open.musilon.com")
+                self.session.cookies.set(key, value, domain="musilon.com")
+            logger.info("Successfully solved and injected ArvanCloud challenge cookies.")
+            return True
         except Exception as e:
             logger.error(f"Error solving ArvanCloud challenge: {e}")
         return False
@@ -574,6 +630,8 @@ class MusilonEngine:
 
             return candidates
 
+        except MusilonRateLimitExceededError:
+            raise
         except Exception as e:
             logger.debug(f"Musilon catalog search failed for '{query}': {e}")
             return []
@@ -590,6 +648,8 @@ class MusilonEngine:
             if resp.status_code == 200:
                 data = resp.json()
                 return data.get("track")
+        except MusilonRateLimitExceededError:
+            raise
         except Exception as e:
             logger.debug(f"Failed to fetch context for track {track_id}: {e}")
         return None
@@ -906,10 +966,13 @@ class MusilonEngine:
 
         resp = None
         try:
+            if not provider_cooldowns.wait("musilon", cancel_check=cancel_check):
+                return False
             resp = self.session.get(url, stream=True, timeout=(20, 90), headers=download_headers, allow_redirects=True)
 
             # Handle 429 Too Many Requests immediately
             if resp.status_code == 429:
+                provider_cooldowns.defer("musilon", retry_after_seconds(resp.headers.get("Retry-After")))
                 raise MusilonRateLimitExceededError("Musilon download rate limit exceeded (HTTP 429 Too Many Requests).")
 
             content_type = resp.headers.get("content-type", "").lower()
@@ -919,7 +982,12 @@ class MusilonEngine:
             text_preview = ""
             if resp.status_code != 200 or is_json_or_text:
                 try:
-                    text_preview = resp.text[:4000].lower() if hasattr(resp, "text") else ""
+                    preview = bytearray()
+                    for chunk in resp.iter_content(chunk_size=4000):
+                        preview.extend(chunk[:4000 - len(preview)])
+                        if len(preview) >= 4000:
+                            break
+                    text_preview = preview.decode("utf-8", errors="replace").lower()
                 except Exception:
                     pass
 
@@ -957,8 +1025,7 @@ class MusilonEngine:
 
             if is_json_or_text:
                 logger.warning(f"Musilon returned non-audio content-type '{content_type}' for {url}")
-                initial_text = resp.text[:4000].lower() if hasattr(resp, "text") else ""
-                if "authentication" in initial_text or "unauthorized" in initial_text:
+                if "authentication" in text_preview or "unauthorized" in text_preview:
                     raise MusilonVipError("Musilon session expired or authentication required.")
                 raise MusilonVipError(f"Musilon returned non-audio response ({content_type}).")
 

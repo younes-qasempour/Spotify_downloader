@@ -37,6 +37,17 @@ class TrackQueueModel(QAbstractTableModel):
             return item
         elif role == Qt.ItemDataRole.DisplayRole:
             return item.track.title
+        elif role == Qt.ItemDataRole.ToolTipRole:
+            tip = f"{item.track.title} — {item.track.artist_str}\nStatus: {item.status}"
+            stage = getattr(item, "stage", "")
+            if stage and stage != item.status:
+                tip += f"\nStage: {stage}"
+            if item.error_message:
+                tip += f"\nError: {item.error_message}"
+            hint = getattr(item, "diagnostic_hint", "")
+            if hint:
+                tip += f"\nDiagnostic: {hint}"
+            return tip
 
         return None
 

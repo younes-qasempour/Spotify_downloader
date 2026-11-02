@@ -78,7 +78,12 @@ def run_headless_cli(spotify_url: str, output_dir: str | None = None):
         client_id=config.get("spotify.client_id", ""),
         client_secret=config.get("spotify.client_secret", "")
     )
-    tracks = sp.resolve(spotify_url)
+    try:
+        tracks = sp.resolve(spotify_url)
+    finally:
+        close = getattr(sp, "close", None)
+        if callable(close):
+            close()
     print(f"Extracted {len(tracks)} track(s) from Spotify metadata.")
 
     musilon_eng = MusilonEngine(
@@ -100,35 +105,39 @@ def run_headless_cli(spotify_url: str, output_dir: str | None = None):
         tagger=tagger
     )
 
-    for idx, t in enumerate(tracks, 1):
-        print(f"\n--- [{idx}/{len(tracks)}] {t.title} - {t.artist_str} ({t.duration_sec:.1f}s) ---")
-        print(f"Folder: {t.target_folder}/")
-        print("Resolving audio source (MeloBot / Musilon / YouTube)...")
-        resolved = engine.resolve_source(t)
-        if not resolved:
-            print("❌ No matching source found.")
-            continue
+    try:
+        for idx, t in enumerate(tracks, 1):
+            print(f"\n--- [{idx}/{len(tracks)}] {t.title} - {t.artist_str} ({t.duration_sec:.1f}s) ---")
+            print(f"Folder: {t.target_folder}/")
+            print("Resolving audio source (MeloBot / Musilon / YouTube)...")
 
-        print(f"✓ Source Resolved: {resolved.source_type} [{resolved.quality_badge}]")
+            def prog_cb(pct, spd, eta):
+                sys.stdout.write(f"\rDownloading: {pct:.1f}% | Speed: {spd} | ETA: {eta}  ")
+                sys.stdout.flush()
 
-        def prog_cb(pct, spd, eta):
-            sys.stdout.write(f"\rDownloading: {pct:.1f}% | Speed: {spd} | ETA: {eta}  ")
-            sys.stdout.flush()
+            def status_cb(st):
+                print(f"Status: {st}")
 
-        def status_cb(st):
-            print(f"Status: {st}")
-
-        try:
-            saved_path = engine.download_and_tag(
-                track=t,
-                resolved=resolved,
-                output_dir=dest_dir,
-                progress_callback=prog_cb,
-                status_callback=status_cb
-            )
-            print(f"\n✓ Completed: {saved_path}")
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
+            try:
+                resolved = engine.resolve_source(t)
+                if not resolved:
+                    print("❌ No matching source found.")
+                    continue
+                print(f"✓ Source Resolved: {resolved.source_type} [{resolved.quality_badge}]")
+                saved_path = engine.download_and_tag(
+                    track=t,
+                    resolved=resolved,
+                    output_dir=dest_dir,
+                    progress_callback=prog_cb,
+                    status_callback=status_cb
+                )
+                if not saved_path:
+                    raise RuntimeError("Download did not produce an audio file.")
+                print(f"\n✓ Completed: {saved_path}")
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+    finally:
+        engine.close()
 
     print("\n[CLI Mode] Finished processing all tracks.")
 
@@ -153,7 +162,7 @@ def run_gui():
     if sys.platform == "win32":
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Flacify.App.1.6.2")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Flacify.App.1.7.2")
             # Create named mutex for Inno Setup installer active process detection (AppMutex)
             global _app_mutex_handle
             _app_mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, "FlacifyMutex")
@@ -184,7 +193,11 @@ def run_gui():
     print("✓ GUI window launched successfully.", flush=True)
     print("Close the desktop window or press Ctrl+C to terminate.\n", flush=True)
 
-    sys.exit(app.exec())
+    try:
+        exit_code = app.exec()
+    finally:
+        window.queue_manager.shutdown()
+    sys.exit(exit_code)
 
 
 def main():

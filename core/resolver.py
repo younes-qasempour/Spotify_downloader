@@ -1,5 +1,7 @@
 import os
 import logging
+import tempfile
+import threading
 from dataclasses import dataclass
 from typing import Optional, Callable, Tuple, Any
 
@@ -9,12 +11,42 @@ from core.melobot import MeloBotEngine, MeloBotSource, MeloBotError, MeloBotDown
 from core.ytdlp_engine import YtdlpEngine, YtdlpSource
 from core.lyrics import LyricsEngine
 from core.tagger import AudioTagger
-from core.utils import sanitize_filename, is_valid_audio_file
+from core.utils import sanitize_filename, is_valid_audio_file, run_ffmpeg, AudioProcessingCancelled
 from core.config import config
 from core.transcoder import transcode_audio
+from core.output_preview import format_track_basename, track_output_directory, next_output_path
+from core.staging_recovery import staging_lease, mark_ready, discard_staging
 from core.exceptions import AudioSourceNotFoundError, AudioIntegrityError
 
 logger = logging.getLogger("core.resolver")
+
+
+def publish_staged_files(staged_file, output_dir, staged_lyrics):
+    """Publish with atomic no-replace links, retrying if any destination exists."""
+    original = os.path.join(output_dir, os.path.basename(staged_file))
+    destination = next_output_path(original)
+    stem, extension = os.path.splitext(original)
+    suffix = 2
+    while True:
+        published = []
+        try:
+            os.link(staged_file, destination)
+            published.append((staged_file, destination))
+            for staged_lrc, relative_dir in staged_lyrics:
+                lrc_dir = os.path.join(output_dir, relative_dir)
+                os.makedirs(lrc_dir, exist_ok=True)
+                lrc_path = os.path.join(lrc_dir, os.path.splitext(os.path.basename(destination))[0] + ".lrc")
+                os.link(staged_lrc, lrc_path)
+                published.append((staged_lrc, lrc_path))
+            return destination
+        except OSError as exc:
+            for source, target in reversed(published):
+                if os.path.exists(target) and os.path.samefile(source, target):
+                    os.unlink(target)
+            if not isinstance(exc, FileExistsError):
+                raise
+            destination = f"{stem} ({suffix}){extension}"
+            suffix += 1
 
 
 @dataclass
@@ -46,6 +78,20 @@ class CascadingAudioEngine:
         self.ytdlp = ytdlp_engine or YtdlpEngine()
         self.lyrics = lyrics_engine or LyricsEngine()
         self.tagger = tagger or AudioTagger()
+        self._publish_lock = threading.Lock()
+
+    def close(self):
+        for provider in (self.musilon, self.melobot, self.ytdlp, self.lyrics, self.tagger):
+            try:
+                close = getattr(provider, "close", None)
+                if callable(close):
+                    close()
+                else:
+                    session = getattr(provider, "session", None)
+                    if session is not None:
+                        session.close()
+            except Exception as exc:
+                logger.warning(f"Could not close {type(provider).__name__}: {exc}")
 
     def resolve_source(
         self,
@@ -271,6 +317,74 @@ class CascadingAudioEngine:
         pause_wait: Optional[Callable[[], None]] = None,
         musilon_only: bool = False
     ) -> Optional[str]:
+        """Publish only fully processed audio, leaving existing library files untouched on failure."""
+        if cancel_check and cancel_check():
+            return None
+        output_dir = track_output_directory(track, output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+
+        staging_dir = tempfile.mkdtemp(prefix=".flacify-", dir=output_dir)
+        owned = False
+        retain = False
+        try:
+            with staging_lease(staging_dir, track.id) as lease:
+                owned = True
+                try:
+                    staged_file = self._download_and_tag(
+                        track, resolved, staging_dir, naming_template, save_lrc,
+                        embed_lyrics, embed_art, progress_callback, status_callback,
+                        cancel_check, pause_wait, musilon_only
+                    )
+                except AudioProcessingCancelled:
+                    return None
+                if cancel_check and cancel_check():
+                    return None
+                if not staged_file or not os.path.isfile(staged_file):
+                    raise AudioSourceNotFoundError(f"Audio download did not produce a file for '{track.title}'.")
+                if status_callback:
+                    status_callback("Verifying output")
+                valid, reason = is_valid_audio_file(staged_file)
+                if not valid:
+                    raise AudioIntegrityError(f"Processed audio failed integrity verification ({reason}).")
+                retain = True
+                mark_ready(staging_dir, staged_file)
+
+                if status_callback:
+                    status_callback("Publishing output")
+                with self._publish_lock:
+                    if cancel_check and cancel_check():
+                        retain = False
+                        return None
+                    destination = lease.publish()
+                retain = False
+        finally:
+            if not retain:
+                try:
+                    if owned:
+                        discard_staging(staging_dir)
+                    else:
+                        os.rmdir(staging_dir)
+                except (OSError, ValueError) as exc:
+                    logger.warning(f"Could not discard staging directory '{staging_dir}': {exc}")
+        if status_callback:
+            status_callback("Completed")
+        return destination
+
+    def _download_and_tag(
+        self,
+        track: TrackMetadata,
+        resolved: ResolvedTrackSource,
+        output_dir: str,
+        naming_template: str = "{artist} - {title}",
+        save_lrc: bool = True,
+        embed_lyrics: bool = True,
+        embed_art: bool = True,
+        progress_callback: Optional[Callable[[float, str, str], None]] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+        pause_wait: Optional[Callable[[], None]] = None,
+        musilon_only: bool = False
+    ) -> Optional[str]:
         """
         Downloads audio stream, queries lyrics, embeds metadata and saves companion .lrc.
         Returns final destination file path.
@@ -278,48 +392,9 @@ class CascadingAudioEngine:
         if cancel_check and cancel_check():
             return None
 
-        # Automatically organize into subfolder based on collection type if enabled:
-        # - Playlists: folder named after the playlist
-        # - Albums: folder named after the album
-        # - Singles/Tracks: folder named "Singles"
-        save_in_subfolders = config.get("download.save_in_subfolders", False)
-        subfolder = getattr(track, "target_folder", "") if save_in_subfolders else ""
-        if subfolder:
-            norm_output = os.path.normpath(output_dir)
-            if os.path.basename(norm_output).lower() != subfolder.lower():
-                output_dir = os.path.join(output_dir, subfolder)
-
         os.makedirs(output_dir, exist_ok=True)
 
-        # Build clean filename
-        artist_clean = sanitize_filename(track.primary_artist, max_length=40)
-        title_clean = sanitize_filename(track.title, max_length=40)
-        album_clean = sanitize_filename(track.album, max_length=40)
-        track_num_str = f"{track.track_number:02d}"
-        disc_num_str = f"{getattr(track, 'disc_number', 1) or 1:02d}"
-
-        is_album = (getattr(track, "collection_type", "track") == "album")
-        tmpl_to_use = naming_template
-        if is_album and getattr(track, "track_number", 0) > 0 and tmpl_to_use == "{artist} - {title}":
-            tmpl_to_use = config.get("download.album_naming_template", "{track_num}. {artist} - {title}")
-
-        try:
-            base_name = tmpl_to_use.format(
-                artist=artist_clean,
-                title=title_clean,
-                album=album_clean,
-                track_num=track_num_str,
-                track_number=track_num_str,
-                track=track_num_str,
-                disc_num=disc_num_str,
-                disc_number=disc_num_str
-            )
-        except Exception:
-            if is_album and getattr(track, "track_number", 0) > 0:
-                base_name = f"{track_num_str}. {artist_clean} - {title_clean}"
-            else:
-                base_name = f"{artist_clean} - {title_clean}"
-        base_name = sanitize_filename(base_name, max_length=120)
+        base_name = format_track_basename(track, naming_template)
         base_dest_without_ext = os.path.join(output_dir, base_name)
 
         # Download based on source type
@@ -527,27 +602,18 @@ class CascadingAudioEngine:
         # Remux .webm container to .opus immediately via FFmpeg if necessary
         if final_file_path and final_file_path.lower().endswith(".webm") and os.path.isfile(final_file_path):
             from core.utils import ensure_ffmpeg
-            import subprocess
             ffmpeg_bin = ensure_ffmpeg()
-            if ffmpeg_bin:
-                opus_cand = os.path.splitext(final_file_path)[0] + ".opus"
-                cmd = [ffmpeg_bin, "-y", "-i", final_file_path, "-vn", "-c:a", "copy", opus_cand]
-                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-                try:
-                    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
-                    if proc.returncode == 0 and os.path.isfile(opus_cand) and os.path.getsize(opus_cand) > 1000:
-                        try:
-                            os.remove(final_file_path)
-                        except Exception:
-                            pass
-                        final_file_path = opus_cand
-                        resolved.file_extension = "opus"
-                        if resolved.source_type == "YouTube":
-                            resolved.quality_badge = "YouTube Opus"
-                        else:
-                            resolved.quality_badge = "YTM Opus"
-                except Exception as e_remux:
-                    logger.warning(f"Failed to remux WebM to Opus: {e_remux}")
+            if not ffmpeg_bin:
+                raise AudioIntegrityError("FFmpeg is required to remux WebM audio before tagging.")
+            opus_cand = os.path.splitext(final_file_path)[0] + ".opus"
+            cmd = [ffmpeg_bin, "-nostdin", "-y", "-i", final_file_path, "-vn", "-c:a", "copy", opus_cand]
+            proc = run_ffmpeg(cmd, timeout=120, cancel_check=cancel_check)
+            if proc.returncode != 0 or not os.path.isfile(opus_cand) or os.path.getsize(opus_cand) <= 1000:
+                raise AudioIntegrityError("FFmpeg could not remux the downloaded WebM audio.")
+            os.remove(final_file_path)
+            final_file_path = opus_cand
+            resolved.file_extension = "opus"
+            resolved.quality_badge = "YouTube Opus" if resolved.source_type == "YouTube" else "YTM Opus"
 
         # Strict integrity check on downloaded audio
         is_valid, reason = is_valid_audio_file(final_file_path)
@@ -573,7 +639,7 @@ class CascadingAudioEngine:
             if status_callback:
                 status_callback(f"Transcoding ({target_fmt.upper()})")
             try:
-                transcoded_path = transcode_audio(final_file_path, target_format=target_fmt, delete_source=True)
+                transcoded_path = transcode_audio(final_file_path, target_format=target_fmt, delete_source=True, cancel_check=cancel_check)
                 if (
                     transcoded_path
                     and os.path.isfile(transcoded_path)
@@ -583,6 +649,8 @@ class CascadingAudioEngine:
                     new_ext = os.path.splitext(transcoded_path)[1].lstrip(".").lower()
                     resolved.file_extension = new_ext
                     resolved.quality_badge = f"{resolved.quality_badge} [{target_fmt.upper()}]"
+            except AudioProcessingCancelled:
+                raise
             except Exception as e_trans:
                 logger.warning(f"Audio transcoding skipped or failed: {e_trans}")
 
@@ -627,15 +695,18 @@ class CascadingAudioEngine:
             status_callback("Tagging Metadata")
         try:
             if not (cancel_check and cancel_check()):
-                self.tagger.tag_file(
+                tagged = self.tagger.tag_file(
                     file_path=final_file_path,
                     track=track,
                     lyrics_data=lyrics_data,
                     embed_art=embed_art,
                     embed_lyrics=embed_lyrics
                 )
+                if tagged is False:
+                    raise AudioIntegrityError(f"Audio metadata tagging failed for '{track.title}'.")
         except Exception as e:
             logger.error(f"Error tagging audio file: {e}")
+            raise
 
         # Check if file extension changed during tagging (e.g. remuxed to .opus)
         if final_file_path and not os.path.isfile(final_file_path):
@@ -668,11 +739,10 @@ class CascadingAudioEngine:
             try:
                 from core.utils import normalize_audio_loudness
                 target_lufs = float(config.get("download.target_lufs", -9.0) or -9.0)
-                normalize_audio_loudness(final_file_path, target_lufs=target_lufs)
+                normalize_audio_loudness(final_file_path, target_lufs=target_lufs, cancel_check=cancel_check)
+            except AudioProcessingCancelled:
+                raise
             except Exception as e_norm:
                 logger.warning(f"Volume normalization skipped for '{track.title}': {e_norm}")
-
-        if status_callback:
-            status_callback("Completed")
 
         return final_file_path

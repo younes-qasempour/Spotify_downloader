@@ -167,6 +167,13 @@ class QueueView(QWidget):
         self._init_ui()
         self._connect_signals()
 
+        # Load any existing or recovered items from queue manager on launch
+        existing_items = self.qm.get_items()
+        if existing_items:
+            self.model.add_items(existing_items)
+            self._update_metrics()
+            self._update_display_stack()
+
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(18, 12, 18, 12)
@@ -650,10 +657,12 @@ class QueueView(QWidget):
     # -------------------------------------------------------------------------
     def _on_start_clicked(self, *args):
         count = self.qm.start_all()
+        qm_items = {it.track.id: it for it in self.qm.get_items()}
         for item in self.model._all_items:
-            if item.status in ("Stopped", "Paused", "Failed"):
-                item.status = "Queued"
-                item.cancelled = False
+            qm_it = qm_items.get(item.track.id)
+            if qm_it:
+                item.status = qm_it.status
+                item.cancelled = qm_it.cancelled
         self.model.set_filter(self.model.filter_query, self.model.status_filter)
         self.pause_btn.setText("Pause")
         self.pause_btn.setIcon(FluentIcon.PAUSE)
@@ -663,10 +672,12 @@ class QueueView(QWidget):
 
     def _on_stop_clicked(self, *args):
         self.qm.stop()
+        qm_items = {it.track.id: it for it in self.qm.get_items()}
         for item in self.model._all_items:
-            if item.status in ("Downloading", "Resolving", "Paused", "Queued"):
-                item.status = "Stopped"
-                item.cancelled = True
+            qm_it = qm_items.get(item.track.id)
+            if qm_it:
+                item.status = qm_it.status
+                item.cancelled = qm_it.cancelled
         self.model.set_filter(self.model.filter_query, self.model.status_filter)
         self.pause_btn.setText("Pause")
         self.pause_btn.setIcon(FluentIcon.PAUSE)
@@ -698,11 +709,13 @@ class QueueView(QWidget):
 
     def _on_retry_failed_clicked(self, *args):
         count = self.qm.retry_failed()
+        qm_items = {it.track.id: it for it in self.qm.get_items()}
         for item in self.model._all_items:
-            if item.status in ("Failed", "Stopped"):
-                item.status = "Queued"
-                item.cancelled = False
-                item.error_message = ""
+            qm_it = qm_items.get(item.track.id)
+            if qm_it:
+                item.status = qm_it.status
+                item.cancelled = qm_it.cancelled
+                item.error_message = qm_it.error_message
         self.model.set_filter(self.model.filter_query, self.model.status_filter)
         if count > 0:
             InfoBar.success("Retrying Downloads", f"Re-queued {count} failed/stopped track(s).", duration=3000, parent=self)

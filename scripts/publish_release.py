@@ -22,30 +22,40 @@ def get_github_token() -> str:
 
 def main():
     repo = 'younes-qasempour/Spotify_downloader'
-    tag = 'v1.6.2'
-    release_name = 'Flacify v1.6.2 — EBU R128 Volume Boost & Balancing, Japanese/Take Resolution & Bug Fixes'
+    tag = 'v1.7.2'
+    release_name = 'Flacify v1.7.2 — Reliability Architecture, Recoverable Queue, Library Repair & UX Polish'
 
     release_body = (
-        "# 🚀 Flacify v1.6.2 Release Notes\n\n"
-        "### 🔊 High-Fidelity EBU R128 Volume Boost & Loudness Balancing\n"
-        "- **Automatic & Batch Loudness Normalization (`-9.0 LUFS`)**: Quiet or unevenly mastered tracks are now automatically boosted and balanced to a uniform, punchy `-9.0 LUFS` target using EBU R128 integrated loudness measurement.\n"
-        "- **Zero-Distortion Lookahead Brickwall Limiter**: Uses a 5ms lookahead peak limiter (`alimiter=limit=0.95`) at `-0.4 dBFS` so quiet songs gain +4 dB to +9 dB of clean loudness without digital clipping or inter-sample distortion.\n"
-        "- **100% Metadata, 640x640 Cover Art & Lyrics Preservation**: Snapshots and restores all ID3v2.3/Vorbis/MP4 tags, embedded cover art, synchronized `.lrc` lyrics, and genres during normalization, while stamping `REPLAYGAIN_TRACK_GAIN` and `FLACIFY_NORMALIZED` tags.\n"
-        "- **One-Click Library & Track Volume Controls**: Added **Boost & Balance All Songs Volume** in *Settings -> Library Maintenance*, an **Auto-Boost & Balance Audio Volume (EBU R128)** toggle in *Settings -> Tagging*, and a right-click **Boost & Balance Track Volume** context menu option in the *Completed Library*.\n"
-        "- **Persistent Player Volume**: Upgraded the built-in player default volume to `100%` and persisted volume slider changes across sessions.\n\n"
-        "### 🎯 Japanese Katakana, Full-Width Unicode & Studio Take Resolution Fixes\n"
-        "- **Cross-Script Katakana & Full-Width Normalization**: Added full-width ASCII (`\uFF01-\uFF5E`, `＊`, `（`, `）`, `〜`) normalization and a cross-script Katakana/Romaji `phonetic_skeleton` matcher in both `MeloBotEngine` and `YtdlpEngine` (resolving tracks like `ORANGE RANGE - ＊〜アスタリスク〜（アルバムバージョン）` against `*Asterisk` / `＊～アスタリスク～`).\n"
-        "- **Japanese Quotation Bracket Preservation**: Fixed a regex bug in `YtdlpEngine._score_candidate` where Japanese title brackets (`「...」`, `『...』`) were inadvertently stripped as parenthetical noise.\n"
-        "- **Studio Take & Version Disambiguation**: Stripped non-searchable version suffixes (`(アルバムバージョン)`, `(Album Version)`, `(Single Version)`, `- Take 1`, `- Prise 1`) from search queries while expanding duration tolerance (`36s`) for multi-take archival recordings (resolving tracks like `Jacques Brel - Jaurès - Take 1`).\n"
-        "- **MeloBot Quality Button Loop Fix**: Fixed an infinite re-click loop in `MeloBotEngine._async_query_melobot` where a duration mismatch on an audio delivery did not clear `last_clicked_msg`, eliminating 45-second timeouts.\n\n"
-        "### 🛠️ Stability & Codebase Bug Fixes\n"
-        "- **Windows UTF-8 Subprocess Decoding**: Fixed `UnicodeDecodeError` crashes in background FFmpeg reader threads (`core/transcoder.py` and `core/utils.py`) when processing files with Japanese, Persian, or French metadata on Windows (`cp1252`).\n"
-        "- **Missing ReplayGain Batch Method**: Implemented `ArchiveManager.retag_all_library_replaygain` in `core/archive.py` and fixed a duplicate button reference in `SettingsView`.\n"
-        "- **SQLite Resource Leak Fix**: Ensured all `sqlite3.Connection` handles in `ArchiveManager.resolve_collection_cover` are deterministically closed via `contextlib.closing`.\n\n"
+        "# 🚀 Flacify v1.7.2 Release Notes\n\n"
+        "Flacify v1.7.2 is a major reliability and UX milestone bringing automated crash recovery, interactive source review, reversible library maintenance, sandboxed challenge execution, and comprehensive queue diagnostics.\n\n"
+        "### 🔄 Recoverable Download Queue & Staging Recovery\n"
+        "- **Persistent Queue State**: Active and pending jobs are durably tracked in `ReliabilityStore` (`reliability.db`), automatically restoring unfinished queues upon application relaunch.\n"
+        "- **Abandoned Staging Cleanup**: Detects orphaned `.part`, `.ytdl`, and unindexed staging files on boot, offering safe cleanup or recovery into the library archive.\n"
+        "- **Queue Model Rehydration**: Queue view restores saved state on startup with real-time UI synchronization for start, stop, and retry actions.\n\n"
+        "### 🔍 Source-Match Review & Candidate Preview\n"
+        "- **Confidence Scoring & Pre-Download Review**: Evaluates duration variance, artist matching, and version tags; flags ambiguous candidates for review to eliminate incorrect recordings.\n"
+        "- **Multi-Provider Inspection**: Compares candidates across YouTube Music, MeloBot, and Musilon with full metadata preview.\n\n"
+        "### 🛡️ Reversible Library Repair & Rollback\n"
+        "- **Safe Batch Maintenance**: Preview metadata fixes and duplicate consolidation before applying changes.\n"
+        "- **Atomic Backups**: Automatically snapshots original files prior to repair or volume adjustments, enabling instant one-click rollback if needed.\n\n"
+        "### ⚡ Bounded Metadata Prefetching & Provider Cooldown Coordination\n"
+        "- **Controlled Concurrency Prefetcher**: Proactively prefetches Spotify metadata using a bounded queue and LRU cache without flooding network sockets or memory on multi-thousand track playlists.\n"
+        "- **Cross-Worker Cooldown Coordination**: Provider-wide 429 and rate-limit responses coordinate cooldowns across all workers, eliminating aggressive retry bursts.\n\n"
+        "### 🔒 Isolated Challenge Sandbox\n"
+        "- **Sandboxed Script Execution**: Provider anti-bot challenge scripts (ArvanCloud) execute within restricted environments with strict timeouts, zero arbitrary filesystem/network access, and QuickJS / Node isolation.\n\n"
+        "### 📊 Stage-Aware Progress Tracking & Actionable Diagnostics\n"
+        "- **Granular Stage Breakdown**: Explicit progress states for resolving, downloading, converting, tagging, and volume normalization.\n"
+        "- **Actionable Diagnostic Hints**: Clear explanations and guided recovery steps for network drops, rate limits, and missing FFmpeg.\n"
+        "- **Tooltip Diagnostics**: Hovering over queue items in the desktop UI reveals stage details, raw errors, and diagnostic guidance.\n\n"
+        "### 📂 Pre-Flight Output Batch Preview\n"
+        "- **Collision & Path Inspection**: Preview target folder paths, sanitized filenames, format conversions, and duplicate collision strategies before downloading.\n\n"
+        "### ✅ Atomic Settings Validation & Toast Feedback\n"
+        "- **Real-Time Validation**: Validates paths, bitrates, and provider credentials before persisting.\n"
+        "- **Atomic Configuration Saves**: Settings updates apply transactionally via `config.set_many()` with clear error recovery toast feedback in both Fluent GUI and Web API.\n\n"
         "---\n\n"
         "### 📦 Installation & Verification\n"
-        "Download and run **`Flacify_Setup_v1.6.2.exe`** below to install or update Flacify on Windows.\n\n"
-        "- **Installer**: `Flacify_Setup_v1.6.2.exe`\n"
+        "Download and run **`Flacify_Setup_v1.7.2.exe`** below to install or update Flacify on Windows.\n\n"
+        "- **Installer**: `Flacify_Setup_v1.7.2.exe`\n"
     )
 
     token = get_github_token()
@@ -93,7 +103,7 @@ def main():
     existing_assets = {a['name']: a['id'] for a in release_data.get('assets', [])}
 
     # 3. Upload asset
-    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.6.2.exe')
+    installer_path = os.path.join(os.path.dirname(__file__), '..', 'dist', 'installer', 'Flacify_Setup_v1.7.2.exe')
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(f"Installer not found at {installer_path}")

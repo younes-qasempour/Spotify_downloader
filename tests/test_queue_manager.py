@@ -1,7 +1,9 @@
 import unittest
 import tempfile
 import os
-from unittest.mock import MagicMock
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 from core.spotify_client import TrackMetadata
 from core.queue_manager import DownloadQueueManager, QueueItem
 from core.resolver import ResolvedTrackSource
@@ -30,10 +32,17 @@ class TestQueueManager(unittest.TestCase):
         ArchiveManager._instance = None
         self.archive = ArchiveManager(db_path=self.tmp_db.name)
         self.engine = MockAudioEngine()
+        from core.reliability_store import ReliabilityStore
+        self.queue_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.queue_temp.cleanup)
+        store = ReliabilityStore(Path(self.queue_temp.name) / "queue.sqlite3")
+        self.enterContext(patch("core.queue_manager.ReliabilityStore", return_value=store))
         self.qm = DownloadQueueManager(audio_engine=self.engine, archive_manager=self.archive)
 
     def tearDown(self):
         self.qm.stop()
+        for worker in self.qm._worker_threads:
+            worker.join(timeout=2)
         ArchiveManager._instance = None
         if os.path.exists(self.tmp_db.name):
             try:
@@ -154,13 +163,14 @@ class TestQueueManager(unittest.TestCase):
         resolved = ResolvedTrackSource(
             source_type="MeloBot",
             quality_badge="MeloBot 320k",
-            source_obj=MagicMock(),
+            source_obj=SimpleNamespace(title="Different Song", artist="Artist"),
             file_extension="mp3"
         )
         self.engine.resolve_source = lambda trk, **kw: resolved
         def raise_vip(**kw):
             raise MusilonVipError("HTTP 401 Session Expired")
-        self.engine.download_and_tag = raise_vip
+        self.engine.download_and_tag = MagicMock(side_effect=raise_vip)
+        self.qm.on_source_review_required = MagicMock(side_effect=lambda trk, summary, decide: decide(True))
 
         prompt_called = []
         def on_limit(trk, itm, rsn, cb):
@@ -178,6 +188,8 @@ class TestQueueManager(unittest.TestCase):
         self.qm._process_item(item)
 
         # Must NEVER invoke Musilon limit popup callback
+        self.qm.on_source_review_required.assert_called_once()
+        self.engine.download_and_tag.assert_called_once()
         self.assertEqual(len(prompt_called), 0, "Musilon limit prompt must NOT be called in MeloBot mode")
         self.assertEqual(len(fallback_called), 1, "Must directly fallback to YouTube Music")
 

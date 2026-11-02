@@ -1,6 +1,8 @@
 import os
 import shutil
 import logging
+import hashlib
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable
@@ -9,6 +11,73 @@ from core.utils import sanitize_filename
 from core.transcoder import transcode_audio, get_extension_for_format
 
 logger = logging.getLogger("core.exporter")
+
+
+def _source_path(track: Any) -> str:
+    if isinstance(track, dict):
+        return track.get("file_path", "")
+    if getattr(track, "track", None):
+        return getattr(track, "output_path", "")
+    return getattr(track, "output_path", "") or getattr(track, "file_path", "")
+
+
+def _path_key(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _same_file(source: str, destination: str) -> bool:
+    if _path_key(source) == _path_key(destination):
+        return True
+    try:
+        return os.path.samefile(source, destination)
+    except OSError:
+        return False
+
+
+def _same_content(source: str, destination: str) -> bool:
+    if os.path.getsize(source) != os.path.getsize(destination):
+        return False
+    with open(source, "rb") as original, open(destination, "rb") as exported:
+        while True:
+            chunk = original.read(1024 * 1024)
+            if chunk != exported.read(1024 * 1024):
+                return False
+            if not chunk:
+                return True
+
+
+def _destination_names(sources: List[str], export_dir: str, fmt: str) -> Dict[str, str]:
+    copying = fmt in ("original", "", "native")
+    names = {}
+    groups = {}
+    source_paths = {_path_key(source): source for source in sources if source}
+    for key, source in source_paths.items():
+        name = os.path.basename(source)
+        if not copying:
+            name = os.path.splitext(name)[0] + (get_extension_for_format(fmt) or ".mp3")
+        names[key] = name
+        groups.setdefault(name.casefold(), set()).add(key)
+
+    reserved = {name.casefold() for name in names.values()}
+    for key in sorted(names):
+        name = names[key]
+        destination = os.path.join(export_dir, name)
+        protects_source = _path_key(destination) in source_paths and not (
+            copying and _path_key(destination) == key
+        )
+        if len(groups[name.casefold()]) > 1 or protects_source or (
+            not copying and _same_file(source_paths[key], destination)
+        ):
+            stem, ext = os.path.splitext(name)
+            suffix = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+            candidate = f"{stem} [{suffix}]{ext}"
+            index = 2
+            while candidate.casefold() in reserved or _path_key(os.path.join(export_dir, candidate)) in source_paths:
+                candidate = f"{stem} [{suffix}-{index}]{ext}"
+                index += 1
+            names[key] = candidate
+            reserved.add(candidate.casefold())
+    return names
 
 
 @dataclass
@@ -64,6 +133,10 @@ class PlaylistExporter:
         )
 
         exported_m3u_entries: List[Dict[str, Any]] = []
+        fmt = (config.target_format or "original").strip().lower()
+        copying = fmt in ("original", "", "native")
+        sources = [_source_path(track) for track in tracks]
+        destination_names = _destination_names(sources, export_dir, fmt)
 
         for idx, t in enumerate(tracks, start=1):
             if cancel_event and cancel_event.is_set():
@@ -72,18 +145,16 @@ class PlaylistExporter:
                 break
 
             # Resolve source file and metadata
+            src_file = sources[idx - 1]
             if isinstance(t, dict):
-                src_file = t.get("file_path", "")
                 title = t.get("title", "Unknown Track")
                 artist = t.get("artist", "Unknown Artist")
                 dur_ms = t.get("duration_ms", 0) or 0
             elif hasattr(t, "track") and t.track:
-                src_file = getattr(t, "output_path", "")
                 title = t.track.title or "Unknown Track"
                 artist = getattr(t.track, "artist_str", "") or (", ".join(t.track.artists) if hasattr(t.track, "artists") else "Unknown Artist")
                 dur_ms = getattr(t.track, "duration_ms", 0) or 0
             else:
-                src_file = getattr(t, "output_path", "") or getattr(t, "file_path", "")
                 title = getattr(t, "title", "Unknown Track")
                 artist = getattr(t, "artist", "Unknown Artist")
                 dur_ms = getattr(t, "duration_ms", 0) or 0
@@ -98,45 +169,57 @@ class PlaylistExporter:
                     progress_callback(idx, result.total, f"Skipped (missing): {title}")
                 continue
 
-            # Determine destination filename
-            fmt = (config.target_format or "original").strip().lower()
-            if fmt in ("original", "", "native"):
-                dest_name = os.path.basename(src_file)
-            else:
-                target_ext = get_extension_for_format(fmt) or ".mp3"
-                base_name = os.path.splitext(os.path.basename(src_file))[0]
-                dest_name = f"{base_name}{target_ext}"
-
+            dest_name = destination_names[_path_key(src_file)]
             dest_path = os.path.join(export_dir, dest_name)
 
-            # Check skip existing
-            if config.skip_existing and os.path.isfile(dest_path) and os.path.getsize(dest_path) > 1024:
-                result.skipped += 1
-                exported_m3u_entries.append({
-                    "filename": dest_name,
-                    "title": title,
-                    "artist": artist,
-                    "duration_s": dur_s
-                })
-                if progress_callback:
-                    progress_callback(idx, result.total, f"Skipped (already exists): {title}")
-                continue
-
-            # Perform Copy or Transcode
+            staging_path = None
+            staging_dir = None
             try:
-                action_verb = "Copying" if fmt in ("original", "", "native") else f"Converting to {fmt.upper()}"
+                # Only byte-identical copies are verifiably complete. Rebuild conversions.
+                if copying and (_same_file(src_file, dest_path) or (
+                    config.skip_existing and os.path.isfile(dest_path) and _same_content(src_file, dest_path)
+                )):
+                    result.skipped += 1
+                    exported_m3u_entries.append({
+                        "filename": dest_name,
+                        "title": title,
+                        "artist": artist,
+                        "duration_s": dur_s
+                    })
+                    if progress_callback:
+                        progress_callback(idx, result.total, f"Skipped (verified existing): {title}")
+                    continue
+
+                action_verb = "Copying" if copying else f"Converting to {fmt.upper()}"
                 if progress_callback:
                     progress_callback(idx, result.total, f"{action_verb}: {title} - {artist}")
 
-                if fmt in ("original", "", "native"):
-                    shutil.copy2(src_file, dest_path)
+                if cancel_event and cancel_event.is_set():
+                    result.cancelled = True
+                    break
+                staging_dir = tempfile.TemporaryDirectory(prefix=".export-", dir=export_dir)
+                staging_path = os.path.join(staging_dir.name, dest_name)
+                if copying:
+                    shutil.copy2(src_file, staging_path)
+                    if os.path.getsize(staging_path) != os.path.getsize(src_file):
+                        raise OSError("Export copy is incomplete")
                 else:
-                    transcode_audio(
+                    output = transcode_audio(
                         input_file=src_file,
                         target_format=fmt,
                         delete_source=False,
-                        output_file=dest_path
+                        output_file=staging_path,
+                        cancel_check=cancel_event.is_set if cancel_event else None
                     )
+                    if not output or _path_key(output) != _path_key(staging_path):
+                        raise OSError("Transcoder did not produce the requested export")
+
+                if cancel_event and cancel_event.is_set():
+                    result.cancelled = True
+                    break
+                if not os.path.isfile(staging_path) or os.path.getsize(staging_path) == 0:
+                    raise OSError("Export output is missing or empty")
+                os.replace(staging_path, dest_path)
 
                 result.exported += 1
                 exported_m3u_entries.append({
@@ -148,9 +231,18 @@ class PlaylistExporter:
                 if progress_callback:
                     progress_callback(idx, result.total, f"Finished ({idx}/{result.total}): {title}")
             except Exception as e_exp:
+                if cancel_event and cancel_event.is_set():
+                    result.cancelled = True
+                    break
                 logger.error(f"Failed to export '{src_file}' -> '{dest_path}': {e_exp}")
                 result.failed += 1
                 result.errors.append(f"{title}: {e_exp}")
+            finally:
+                if staging_dir is not None:
+                    try:
+                        staging_dir.cleanup()
+                    except OSError as cleanup_error:
+                        logger.warning(f"Could not remove staged export '{staging_path}': {cleanup_error}")
 
         # Optional: Generate M3U8 inside the export folder
         if config.generate_m3u8 and exported_m3u_entries:

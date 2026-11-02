@@ -2,6 +2,7 @@ import os
 import re
 import time
 import shutil
+import tempfile
 import logging
 import difflib
 from dataclasses import dataclass, field
@@ -10,10 +11,11 @@ import yt_dlp
 
 from core.spotify_client import TrackMetadata
 from core.utils import (
-    clean_watermarks, format_bytes, ensure_ffmpeg,
+    clean_watermarks, format_bytes, ensure_ffmpeg, is_valid_audio_file,
     PERSIAN_ARTIST_ALIASES, PERSIAN_TITLE_MAPPINGS, is_persian_or_arabic, transliterate_persian,
     consonant_skeleton, normalize_special_unicode,
-    has_katakana, romanize_katakana, phonetic_skeleton
+    has_katakana, romanize_katakana, phonetic_skeleton,
+    run_ffmpeg, AudioProcessingCancelled
 )
 from core.config import config
 from core.paths import get_app_data_dir, get_resource_path
@@ -42,7 +44,7 @@ class YtdlpEngine:
     - Foreign Topic channel disqualification (preventing fake cover channels like Jaco-Topic from winning)
     - Early high-confidence stop for verified Topic/official audio master releases
     - Multi-candidate resilience with validated candidate fallbacks
-    - Clean native audio extraction (Opus/M4A) via FFmpeg postprocessors
+    - Clean native audio extraction (Opus/M4A) via cancellable FFmpeg
     - Real-time progress, speed, ETA, pause/resume, and cancellation hooks
     """
 
@@ -1096,6 +1098,59 @@ class YtdlpEngine:
             candidate_urls=candidate_urls
         )
 
+    def _extract_native_audio(
+        self,
+        file_path: str,
+        info: Dict[str, Any],
+        cancel_check: Optional[Callable[[], bool]] = None
+    ) -> str:
+        """Extract inside the download attempt, leaving publication and cleanup to the caller."""
+        if cancel_check and cancel_check():
+            raise AudioProcessingCancelled("Audio extraction cancelled.")
+        if not self.ffmpeg_path:
+            return file_path
+
+        extension = os.path.splitext(file_path)[1].lower().lstrip(".")
+        needs_fixup = extension == "m4a" and (
+            info.get("container") == "m4a_dash"
+            or str(info.get("protocol", "")).startswith("m3u8")
+            or info.get("is_dash_periods")
+            or info.get("is_live")
+        )
+        if extension in ("aiff", "alac", "flac", "m4a", "mka", "mp3", "ogg", "opus", "wav", "wma") and not needs_fixup:
+            return file_path
+
+        # FFmpeg's input-only probe exits with 1 because no output was specified.
+        probe = run_ffmpeg([
+            self.ffmpeg_path, "-hide_banner", "-nostdin", "-i", file_path
+        ], timeout=30, cancel_check=cancel_check)
+        match = re.search(r"^\s*Stream #\d+:\d+[^\r\n:]*:\s*Audio:\s*(\w+)", probe.stderr, re.MULTILINE)
+        if probe.returncode != 1 or not match:
+            raise RuntimeError(f"Unable to determine downloaded audio codec: {probe.stderr[-2000:]}")
+        codec = match.group(1)
+        native_extensions = {
+            "aac": "m4a", "alac": "m4a", "opus": "opus", "vorbis": "ogg",
+            "mp3": "mp3", "flac": "flac",
+        }
+        target_extension = "m4a" if needs_fixup else native_extensions.get(codec, "mp3")
+        audio_codec = "copy" if needs_fixup or codec in native_extensions else "libmp3lame"
+        output_path = os.path.splitext(file_path)[0] + ".extracted." + target_extension
+        command = [
+            self.ffmpeg_path, "-hide_banner", "-nostdin", "-y", "-i", file_path,
+            "-map", "0:a:0", "-vn", "-acodec", audio_codec, "-map_metadata", "0",
+        ]
+        if target_extension == "m4a":
+            if codec == "aac":
+                command.extend(["-bsf:a", "aac_adtstoasc"])
+            command.extend(["-movflags", "+faststart"])
+        command.append(output_path)
+        result = run_ffmpeg(command, timeout=120, cancel_check=cancel_check)
+        if result.returncode != 0:
+            raise RuntimeError(f"Audio extraction failed: {result.stderr[-2000:]}")
+        source_stat = os.stat(file_path)
+        os.utime(output_path, (source_stat.st_atime, source_stat.st_mtime))
+        return output_path
+
     def download_track(
         self,
         source: YtdlpSource,
@@ -1106,35 +1161,27 @@ class YtdlpEngine:
     ) -> Optional[str]:
         """
         Downloads the best audio stream directly to disk without lossy re-encoding.
-        Captures postprocessed files via postprocessor_hooks and falls back across candidate URLs.
+        Extracts native audio with cancellable FFmpeg and falls back across candidate URLs.
         """
         urls_to_try = source.candidate_urls if source.candidate_urls else [source.url]
-
-        def _clean_part_files():
-            base_dir = os.path.dirname(output_template_without_ext)
-            base_file = os.path.basename(output_template_without_ext)
-            if os.path.isdir(base_dir):
-                for fname in os.listdir(base_dir):
-                    if fname.startswith(base_file) and fname.endswith(".part"):
-                        try:
-                            os.remove(os.path.join(base_dir, fname))
-                        except Exception:
-                            pass
+        output_template_without_ext = os.path.abspath(output_template_without_ext)
+        output_dir = os.path.dirname(output_template_without_ext)
 
         for url in urls_to_try:
             if cancel_check and cancel_check():
-                _clean_part_files()
                 return None
             downloaded_file: Optional[str] = None
-            _clean_part_files()
+            downloaded_info: Dict[str, Any] = {}
             last_progress_time = 0.0
 
             def ydl_hook(d: Dict[str, Any]):
-                nonlocal downloaded_file, last_progress_time
+                nonlocal downloaded_file, downloaded_info, last_progress_time
                 if cancel_check and cancel_check():
                     raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")
                 if pause_wait:
                     pause_wait()
+                if cancel_check and cancel_check():
+                    raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")
 
                 status = d.get("status")
                 if status == "downloading":
@@ -1161,31 +1208,27 @@ class YtdlpEngine:
                     fname = d.get("filename")
                     if fname and os.path.isfile(fname):
                         downloaded_file = fname
+                        downloaded_info.update(d.get("info_dict") or {})
                     if progress_callback:
                         progress_callback(100.0, "-- KB/s", "00:00")
 
             def ydl_pp_hook(d: Dict[str, Any]):
-                nonlocal downloaded_file
+                nonlocal downloaded_file, downloaded_info
+                if cancel_check and cancel_check():
+                    raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")
                 if d.get("status") == "finished":
                     fpath = d.get("info_dict", {}).get("filepath") or d.get("filename")
                     if fpath and os.path.isfile(fpath):
                         downloaded_file = fpath
+                        downloaded_info.update(d.get("info_dict") or {})
 
-            outtmpl = output_template_without_ext + ".%(ext)s"
             node_path = shutil.which("node")
 
             if not self.ffmpeg_path:
                 self.ffmpeg_path = ensure_ffmpeg()
-            postprocessors = []
-            if self.ffmpeg_path:
-                postprocessors.append({
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "best",
-                })
 
             ydl_opts: Dict[str, Any] = {
                 "format": "bestaudio/best",
-                "outtmpl": outtmpl,
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
@@ -1200,7 +1243,8 @@ class YtdlpEngine:
                 "progress_hooks": [ydl_hook],
                 "postprocessor_hooks": [ydl_pp_hook],
                 "remote_components": {"ejs:github"},
-                "postprocessors": postprocessors,
+                "postprocessors": [],
+                "fixup": "never",
             }
 
             if node_path:
@@ -1213,58 +1257,62 @@ class YtdlpEngine:
             max_dl_attempts = 3
             for attempt_idx in range(1, max_dl_attempts + 1):
                 if cancel_check and cancel_check():
-                    _clean_part_files()
                     return None
-                start_time = time.time() - 1.0
+                downloaded_file = None
+                downloaded_info = {}
+                attempt_dir = None
                 try:
+                    os.makedirs(output_dir, exist_ok=True)
+                    attempt_dir = tempfile.mkdtemp(prefix=".ytdlp-", dir=output_dir)
+                    attempt_base = os.path.join(attempt_dir, "audio")
+                    ydl_opts["outtmpl"] = attempt_base.replace("%", "%%") + ".%(ext)s"
                     logger.info(f"Attempting yt-dlp download from: {url} (attempt {attempt_idx}/{max_dl_attempts})")
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
+                        result = ydl.download([url])
+                    if cancel_check and cancel_check():
+                        raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")
+                    if result != 0:
+                        raise RuntimeError(f"yt-dlp returned error status {result}")
 
-                    # Check for newly written or updated file
                     new_file = None
                     if downloaded_file and os.path.isfile(downloaded_file):
-                        new_file = downloaded_file
-                    else:
-                        for ext in ["opus", "m4a", "webm", "mp3", "flac", "ogg"]:
-                            candidate = f"{output_template_without_ext}.{ext}"
-                            if os.path.isfile(candidate) and os.path.getmtime(candidate) >= start_time:
-                                new_file = candidate
-                                break
-
+                        if os.path.dirname(os.path.realpath(downloaded_file)) == os.path.realpath(attempt_dir):
+                            new_file = downloaded_file
                     if not new_file:
                         for ext in ["opus", "m4a", "webm", "mp3", "flac", "ogg"]:
-                            candidate = f"{output_template_without_ext}.{ext}"
+                            candidate = f"{attempt_base}.{ext}"
                             if os.path.isfile(candidate):
                                 new_file = candidate
                                 break
 
-                    if new_file and os.path.isfile(new_file):
-                        # Clean up any stale conflicting audio extensions with the same base name
-                        new_ext = os.path.splitext(new_file)[1].lower()
-                        for ext in [".opus", ".m4a", ".webm", ".mp3", ".flac", ".ogg"]:
-                            if ext != new_ext:
-                                stale_path = f"{output_template_without_ext}{ext}"
-                                if os.path.isfile(stale_path):
-                                    try:
-                                        os.remove(stale_path)
-                                        logger.info(f"Removed stale duplicate audio file: {stale_path}")
-                                    except Exception:
-                                        pass
-                        return new_file
+                    if not new_file:
+                        raise RuntimeError("yt-dlp produced no audio file")
+                    new_file = self._extract_native_audio(new_file, downloaded_info, cancel_check)
+                    valid, reason = is_valid_audio_file(new_file, min_size=1024)
+                    if not valid:
+                        raise RuntimeError(f"Downloaded audio failed integrity verification: {reason}")
+                    if cancel_check and cancel_check():
+                        raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")
+                    destination = output_template_without_ext + os.path.splitext(new_file)[1].lower()
+                    os.replace(new_file, destination)
+                    return destination
 
-                except yt_dlp.utils.DownloadCancelled:
+                except (yt_dlp.utils.DownloadCancelled, AudioProcessingCancelled):
                     logger.info("yt-dlp download cancelled.")
-                    _clean_part_files()
                     return None
                 except Exception as e:
-                    _clean_part_files()
                     if attempt_idx < max_dl_attempts and not (cancel_check and cancel_check()):
                         sleep_secs = 2 * attempt_idx
                         logger.warning(f"Download candidate {url} attempt {attempt_idx} failed: {e}. Retrying in {sleep_secs}s...")
-                        time.sleep(sleep_secs)
+                        for _ in range(sleep_secs * 10):
+                            if cancel_check and cancel_check():
+                                return None
+                            time.sleep(0.1)
                     else:
                         logger.warning(f"Download candidate {url} failed after {max_dl_attempts} attempts: {e}. Trying next candidate...")
+                finally:
+                    if attempt_dir:
+                        shutil.rmtree(attempt_dir, ignore_errors=True)
 
         logger.error("All YouTube download candidates failed.")
         return None

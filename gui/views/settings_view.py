@@ -2,7 +2,7 @@ import os
 import subprocess
 import threading
 from typing import Optional, Any, Union
-from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QUrl
+from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QUrl, QSignalBlocker
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QScrollArea,
@@ -211,7 +211,7 @@ class SettingsView(QScrollArea):
     sig_ffmpeg_progress = pyqtSignal(float, str)
     sig_ffmpeg_finished = pyqtSignal(bool, str)
     sig_tg_status_result = pyqtSignal(bool, str)
-    sig_tg_logout_result = pyqtSignal()
+    sig_tg_logout_result = pyqtSignal(bool, str)
 
     def __init__(
         self,
@@ -263,6 +263,10 @@ class SettingsView(QScrollArea):
         # Page Header
         page_title = SubtitleLabel("Settings & Preferences", self.container)
         main_layout.addWidget(page_title)
+
+        self.save_status_label = CaptionLabel("Changes are saved automatically. Text fields save when editing finishes.", self.container)
+        self.save_status_label.setWordWrap(True)
+        main_layout.addWidget(self.save_status_label)
 
         # =====================================================================
         # 0. High-Quality Audio Source Selection
@@ -358,14 +362,14 @@ class SettingsView(QScrollArea):
         self.user_input.setPlaceholderText("Registered Email Address (e.g. name@gmail.com)")
         self.user_input.setText(config.get("musilon.username", ""))
         self.user_input.setClearButtonEnabled(True)
-        self.user_input.textChanged.connect(self._on_user_changed)
+        self.user_input.editingFinished.connect(lambda: self._on_user_changed(self.user_input.text()))
 
         self.pwd_input = LineEdit(musilon_card)
         self.pwd_input.setPlaceholderText("Password")
         self.pwd_input.setEchoMode(LineEdit.EchoMode.Password)
         self.pwd_input.setText(config.get("musilon.password", ""))
         self.pwd_input.setClearButtonEnabled(True)
-        self.pwd_input.textChanged.connect(self._on_pwd_changed)
+        self.pwd_input.editingFinished.connect(lambda: self._on_pwd_changed(self.pwd_input.text()))
 
         inputs_layout.addWidget(self.user_input, 1)
         inputs_layout.addWidget(self.pwd_input, 1)
@@ -419,7 +423,7 @@ class SettingsView(QScrollArea):
         self.cookie_input.setPlaceholderText("Optional: __arcsjs=...; __Secure-next-auth.session-token=...")
         self.cookie_input.setText(config.get("musilon.session_cookie", ""))
         self.cookie_input.setClearButtonEnabled(True)
-        self.cookie_input.textChanged.connect(self._on_cookie_changed)
+        self.cookie_input.editingFinished.connect(lambda: self._on_cookie_changed(self.cookie_input.text()))
 
         self.paste_cookie_btn = PushButton(FluentIcon.PASTE, "Paste", musilon_card)
         self.paste_cookie_btn.setFixedWidth(90)
@@ -624,7 +628,7 @@ class SettingsView(QScrollArea):
         self.tg_delay_spin.setRange(0, 30)
         self.tg_delay_spin.setValue(int(config.get("telegram.safe_delay_sec", 2)))
         self.tg_delay_spin.setFixedWidth(95)
-        self.tg_delay_spin.valueChanged.connect(lambda val: (config.set("telegram.safe_delay_sec", val), config.save()))
+        self.tg_delay_spin.valueChanged.connect(lambda val: self._save_setting("telegram.safe_delay_sec", val))
 
         delay_row.addLayout(delay_info, 1)
         delay_row.addWidget(self.tg_delay_spin)
@@ -671,13 +675,13 @@ class SettingsView(QScrollArea):
         self.spotify_id = LineEdit(spotify_card)
         self.spotify_id.setPlaceholderText("Spotify Client ID")
         self.spotify_id.setText(config.get("spotify.client_id", ""))
-        self.spotify_id.textChanged.connect(self._on_sp_id_changed)
+        self.spotify_id.editingFinished.connect(lambda: self._on_sp_id_changed(self.spotify_id.text()))
 
         self.spotify_secret = LineEdit(spotify_card)
         self.spotify_secret.setPlaceholderText("Spotify Client Secret")
         self.spotify_secret.setEchoMode(LineEdit.EchoMode.Password)
         self.spotify_secret.setText(config.get("spotify.client_secret", ""))
-        self.spotify_secret.textChanged.connect(self._on_sp_sec_changed)
+        self.spotify_secret.editingFinished.connect(lambda: self._on_sp_sec_changed(self.spotify_secret.text()))
 
         self.validate_sp_btn = PushButton(FluentIcon.SEND, "Validate Keys", spotify_card)
         self.validate_sp_btn.clicked.connect(self._validate_spotify)
@@ -714,7 +718,7 @@ class SettingsView(QScrollArea):
 
         self.folder_input = LineEdit(down_card)
         self.folder_input.setText(config.get("download.output_dir", ""))
-        self.folder_input.textChanged.connect(lambda t: config.set("download.output_dir", t))
+        self.folder_input.editingFinished.connect(lambda: self._save_setting("download.output_dir", self.folder_input.text().strip()))
 
         self.browse_btn = PushButton(FluentIcon.FOLDER, "Browse...", down_card)
         self.browse_btn.clicked.connect(self._browse_folder)
@@ -736,7 +740,7 @@ class SettingsView(QScrollArea):
         n_row = QHBoxLayout()
         self.naming_input = LineEdit(down_card)
         self.naming_input.setText(config.get("download.naming_template", "{artist} - {title}"))
-        self.naming_input.textChanged.connect(lambda t: config.set("download.naming_template", t))
+        self.naming_input.editingFinished.connect(lambda: self._save_setting("download.naming_template", self.naming_input.text()))
         n_desc = CaptionLabel("Tags: {artist}, {title}, {album}", down_card)
         n_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
 
@@ -752,7 +756,7 @@ class SettingsView(QScrollArea):
         an_row = QHBoxLayout()
         self.album_naming_input = LineEdit(down_card)
         self.album_naming_input.setText(config.get("download.album_naming_template", "{track_num}. {artist} - {title}"))
-        self.album_naming_input.textChanged.connect(lambda t: config.set("download.album_naming_template", t))
+        self.album_naming_input.editingFinished.connect(lambda: self._save_setting("download.album_naming_template", self.album_naming_input.text()))
         an_desc = CaptionLabel("Tags: {track_num}, {artist}, {title}, {album}", down_card)
         an_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
 
@@ -900,7 +904,7 @@ class SettingsView(QScrollArea):
         self.yt_cookie_input = LineEdit(down_card)
         self.yt_cookie_input.setPlaceholderText("Path to cookies.txt (or place cookies.txt in app folder)")
         self.yt_cookie_input.setText(config.get("download.cookies_file", ""))
-        self.yt_cookie_input.textChanged.connect(lambda t: config.set("download.cookies_file", t.strip()))
+        self.yt_cookie_input.editingFinished.connect(lambda: self._save_setting("download.cookies_file", self.yt_cookie_input.text().strip()))
 
         self.yt_cookie_browse_btn = PushButton(FluentIcon.DOCUMENT, "Browse...", down_card)
         self.yt_cookie_browse_btn.clicked.connect(self._browse_cookies_file)
@@ -943,7 +947,7 @@ class SettingsView(QScrollArea):
         self.proxy_input = LineEdit(down_card)
         self.proxy_input.setPlaceholderText("e.g. http://127.0.0.1:10809 or socks5://127.0.0.1:10808")
         self.proxy_input.setText(config.get("download.proxy", ""))
-        self.proxy_input.textChanged.connect(lambda t: config.set("download.proxy", t.strip()))
+        self.proxy_input.editingFinished.connect(lambda: self._save_setting("download.proxy", self.proxy_input.text().strip()))
 
         p_desc = CaptionLabel("Optional proxy for YouTube requests. Leave empty for direct connection.", down_card)
         p_desc.setTextColor(TEXT_MUTED, TEXT_MUTED)
@@ -1029,7 +1033,7 @@ class SettingsView(QScrollArea):
 
         self.embed_switch = SwitchButton(tag_card)
         self.embed_switch.setChecked(config.get("download.embed_lyrics", True))
-        self.embed_switch.checkedChanged.connect(lambda v: config.set("download.embed_lyrics", v))
+        self.embed_switch.checkedChanged.connect(lambda v: self._save_setting("download.embed_lyrics", v))
 
         embed_lrc_row.addLayout(embed_info, 1)
         embed_lrc_row.addWidget(self.embed_switch)
@@ -1048,7 +1052,7 @@ class SettingsView(QScrollArea):
 
         self.art_switch = SwitchButton(tag_card)
         self.art_switch.setChecked(config.get("download.embed_cover_art", True))
-        self.art_switch.checkedChanged.connect(lambda v: config.set("download.embed_cover_art", v))
+        self.art_switch.checkedChanged.connect(lambda v: self._save_setting("download.embed_cover_art", v))
 
         art_row.addLayout(art_info, 1)
         art_row.addWidget(self.art_switch)
@@ -1071,7 +1075,7 @@ class SettingsView(QScrollArea):
 
         self.m3u_switch = SwitchButton(tag_card)
         self.m3u_switch.setChecked(config.get("download.generate_m3u8", True))
-        self.m3u_switch.checkedChanged.connect(lambda v: config.set("download.generate_m3u8", v))
+        self.m3u_switch.checkedChanged.connect(lambda v: self._save_setting("download.generate_m3u8", v))
 
         m3u_row.addLayout(m3u_info, 1)
         m3u_row.addWidget(self.m3u_switch)
@@ -1094,7 +1098,7 @@ class SettingsView(QScrollArea):
 
         self.norm_vol_switch = SwitchButton(tag_card)
         self.norm_vol_switch.setChecked(config.get("download.normalize_volume", True))
-        self.norm_vol_switch.checkedChanged.connect(lambda v: config.set("download.normalize_volume", v))
+        self.norm_vol_switch.checkedChanged.connect(lambda v: self._save_setting("download.normalize_volume", v))
 
         norm_row.addLayout(norm_info, 1)
         norm_row.addWidget(self.norm_vol_switch)
@@ -1117,7 +1121,7 @@ class SettingsView(QScrollArea):
 
         self.rg_switch = SwitchButton(tag_card)
         self.rg_switch.setChecked(config.get("download.replaygain_tagging", False))
-        self.rg_switch.checkedChanged.connect(lambda v: config.set("download.replaygain_tagging", v))
+        self.rg_switch.checkedChanged.connect(lambda v: self._save_setting("download.replaygain_tagging", v))
 
         rg_row.addLayout(rg_info, 1)
         rg_row.addWidget(self.rg_switch)
@@ -1270,32 +1274,90 @@ class SettingsView(QScrollArea):
     # -------------------------------------------------------------------------
     # Event Handlers
     # -------------------------------------------------------------------------
+    def _save_setting(self, key: str, value: Any) -> bool:
+        return self._save_settings({key: value}, single=True)
+
+    def _save_settings(self, updates: dict, *, single: bool = False) -> bool:
+        try:
+            if single:
+                key, value = next(iter(updates.items()))
+                config.set(key, value)
+            else:
+                config.set_many(updates)
+        except Exception as exc:
+            self._restore_setting_controls(updates)
+            keys = ", ".join(updates)
+            if isinstance(exc, (ValueError, TypeError)):
+                message = f"Invalid setting ({keys}): {exc}. Correct the value and retry."
+            else:
+                message = f"Could not save {keys}. Check disk space and configuration folder permissions, then retry."
+            message += " Previous settings are still active."
+            self.save_status_label.setText(message)
+            InfoBar.error("Settings Not Saved", message, duration=7000, parent=self.window() or self)
+            return False
+        self.save_status_label.setText(f"Saved: {', '.join(updates)}")
+        return True
+
+    def _restore_setting_controls(self, keys):
+        controls = {
+            "source_engine": ("source_combo", "setCurrentIndex", lambda v: int(v == "melobot")),
+            "musilon.enabled": ("musilon_switch", "setChecked", bool),
+            "telegram.enabled": ("melobot_switch", "setChecked", bool),
+            "musilon.safe_mode": ("safe_mode_switch", "setChecked", bool),
+            "musilon.cooldown_min_sec": ("cooldown_min_spin", "setValue", int),
+            "musilon.cooldown_max_sec": ("cooldown_max_spin", "setValue", int),
+            "musilon.session_cookie": ("cookie_input", "setText", str),
+            "musilon.username": ("user_input", "setText", str),
+            "musilon.password": ("pwd_input", "setText", str),
+            "telegram.safe_delay_sec": ("tg_delay_spin", "setValue", int),
+            "spotify.client_id": ("spotify_id", "setText", str),
+            "spotify.client_secret": ("spotify_secret", "setText", str),
+            "download.output_dir": ("folder_input", "setText", str),
+            "download.naming_template": ("naming_input", "setText", str),
+            "download.album_naming_template": ("album_naming_input", "setText", str),
+            "download.cookies_file": ("yt_cookie_input", "setText", str),
+            "download.proxy": ("proxy_input", "setText", str),
+            "download.save_in_subfolders": ("subfolder_switch", "setChecked", bool),
+            "download.allow_fallback": ("fallback_switch", "setChecked", bool),
+            "download.concurrency": ("concurrency_spin", "setValue", int),
+            "download.preferred_quality": ("quality_combo", "setCurrentIndex", lambda v: int(v not in ("320", "mp3", "320k", "mp3_320"))),
+            "download.target_format": ("target_fmt_combo", "setCurrentIndex", lambda v: {"original": 0, "alac": 1, "mp3": 2, "flac": 3, "opus": 4}.get(v, 0)),
+            "download.lyrics_mode": ("lyrics_combo", "setCurrentIndex", lambda v: {"embedded_only": 0, "separate_folder": 1, "same_folder": 2}.get(v, 0)),
+            "download.embed_lyrics": ("embed_switch", "setChecked", bool),
+            "download.embed_cover_art": ("art_switch", "setChecked", bool),
+            "download.generate_m3u8": ("m3u_switch", "setChecked", bool),
+            "download.normalize_volume": ("norm_vol_switch", "setChecked", bool),
+            "download.replaygain_tagging": ("rg_switch", "setChecked", bool),
+        }
+        for key in keys:
+            if key not in controls:
+                continue
+            name, setter, transform = controls[key]
+            widget = getattr(self, name, None)
+            if widget is not None:
+                with QSignalBlocker(widget):
+                    getattr(widget, setter)(transform(config.get(key)))
+
+    def _select_source(self, idx: int) -> bool:
+        is_melobot = idx == 1
+        updates = {
+            "source_engine": "melobot" if is_melobot else "musilon",
+            "musilon.enabled": not is_melobot,
+            "telegram.enabled": is_melobot,
+        }
+        if not self._save_settings(updates):
+            return False
+        self._restore_setting_controls(updates)
+        self.musilon_engine.enabled = not is_melobot
+        if self.qm and hasattr(self.qm, "update_concurrency"):
+            self.qm.update_concurrency(1 if is_melobot else int(config.get("download.concurrency", 5)))
+        self._update_concurrency_ui()
+        return True
+
     def _on_source_engine_changed(self, idx: int):
         engine_name = "melobot" if idx == 1 else "musilon"
-        config.set("source_engine", engine_name)
-        if engine_name == "melobot":
-            config.set("musilon.enabled", False)
-            config.set("telegram.enabled", True)
-            self.musilon_engine.enabled = False
-            if hasattr(self, "musilon_switch"):
-                self.musilon_switch.setChecked(False)
-            if hasattr(self, "melobot_switch"):
-                self.melobot_switch.setChecked(True)
-            if self.qm and hasattr(self.qm, "update_concurrency"):
-                self.qm.update_concurrency(1)
-        else:
-            config.set("musilon.enabled", True)
-            config.set("telegram.enabled", False)
-            self.musilon_engine.enabled = True
-            if hasattr(self, "musilon_switch"):
-                self.musilon_switch.setChecked(True)
-            if hasattr(self, "melobot_switch"):
-                self.melobot_switch.setChecked(False)
-            if self.qm and hasattr(self.qm, "update_concurrency"):
-                base_concur = int(config.get("download.concurrency", 5))
-                self.qm.update_concurrency(base_concur)
-        config.save()
-        self._update_concurrency_ui()
+        if not self._select_source(idx):
+            return
         InfoBar.success(
             "Primary Source Updated",
             f"Active high-quality source set to: {'MeloBot Premium (@melobot Telegram)' if engine_name == 'melobot' else 'Musilon VIP'}",
@@ -1304,32 +1366,12 @@ class SettingsView(QScrollArea):
         )
 
     def _on_melobot_switch_changed(self, enabled: bool):
-        config.set("telegram.enabled", enabled)
+        if not self._select_source(1 if enabled else 0):
+            return
         if enabled:
-            config.set("source_engine", "melobot")
-            config.set("musilon.enabled", False)
-            self.musilon_engine.enabled = False
-            if hasattr(self, "source_combo"):
-                self.source_combo.setCurrentIndex(1)
-            if hasattr(self, "musilon_switch"):
-                self.musilon_switch.setChecked(False)
-            if self.qm and hasattr(self.qm, "update_concurrency"):
-                self.qm.update_concurrency(1)
             InfoBar.info("MeloBot Enabled", "MeloBot Telegram VIP engine is active.", duration=2500, parent=self)
         else:
-            config.set("source_engine", "musilon")
-            config.set("musilon.enabled", True)
-            self.musilon_engine.enabled = True
-            if hasattr(self, "source_combo"):
-                self.source_combo.setCurrentIndex(0)
-            if hasattr(self, "musilon_switch"):
-                self.musilon_switch.setChecked(True)
-            if self.qm and hasattr(self.qm, "update_concurrency"):
-                base_concur = int(config.get("download.concurrency", 5))
-                self.qm.update_concurrency(base_concur)
             InfoBar.info("MeloBot Disabled", "Switched back to Musilon VIP engine.", duration=2500, parent=self)
-        config.save()
-        self._update_concurrency_ui()
 
     def _open_telegram_login(self):
         diag = TelegramLoginDialog(self.melobot_engine, parent=self.window() or self)
@@ -1371,28 +1413,50 @@ class SettingsView(QScrollArea):
 
     def _logout_telegram(self):
         def worker():
-            self.melobot_engine.log_out()
-            safe_emit(self.sig_tg_logout_result)
+            try:
+                success = self.melobot_engine.log_out()
+                message = "" if success else "Telegram logout or saving its settings failed. Check your connection, disk space and folder permissions, then retry."
+            except Exception:
+                success = False
+                message = "Telegram logout settings could not be saved. Check disk space and folder permissions, then retry."
+            safe_emit(self.sig_tg_logout_result, bool(success), message)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_tg_logout_done(self):
+    def _on_tg_logout_done(self, success: bool, message: str):
+        if not success:
+            self.save_status_label.setText(message)
+            InfoBar.error("Telegram Logout Failed", message, parent=self.window() or self, duration=7000)
+            return
         self.tg_status_badge.setText("Not Connected")
         self.tg_status_badge.setStyleSheet("background-color: #555555; color: #CCCCCC; padding: 3px 10px; border-radius: 10px;")
         InfoBar.info("Telegram Disconnected", "You have been logged out of Telegram.", parent=self.window() or self, duration=3000)
 
     def _on_cookie_changed(self, text: str):
-        config.set("musilon.session_cookie", text.strip())
+        self._save_musilon_credentials(session_cookie=text.strip())
+
+    def _save_musilon_credentials(self, **overrides) -> bool:
+        values = {
+            "session_cookie": self.cookie_input.text().strip(),
+            "username": self.user_input.text().strip(),
+            "password": self.pwd_input.text().strip(),
+        }
+        values.update(overrides)
+        if not self._save_settings({f"musilon.{key}": value for key, value in values.items()}):
+            return False
         self.musilon_engine.set_credentials(
-            session_cookie=text.strip(),
-            username=config.get("musilon.username", ""),
-            password=config.get("musilon.password", ""),
+            **values,
             enabled=config.get("musilon.enabled", True)
         )
         self._update_status_badge()
+        return True
 
     def _on_musilon_switch_changed(self, enabled: bool):
-        config.set("musilon.enabled", enabled)
+        if enabled:
+            if not self._select_source(0):
+                return
+        elif not self._save_setting("musilon.enabled", enabled):
+            return
         self.musilon_engine.enabled = enabled
         if enabled:
             InfoBar.info("Musilon Enabled", "Musilon Tier 1-3 lossless engine is active.", duration=2500, parent=self)
@@ -1400,7 +1464,8 @@ class SettingsView(QScrollArea):
             InfoBar.warning("Musilon Disabled", "Switched to direct YouTube Music high-speed mode.", duration=3000, parent=self)
 
     def _on_safe_mode_changed(self, enabled: bool):
-        config.set("musilon.safe_mode", enabled)
+        if not self._save_setting("musilon.safe_mode", enabled):
+            return
         if enabled:
             InfoBar.info("Stealth Shield Active", "Musilon rate-limit protection and pacing active.", duration=3000, parent=self)
         else:
@@ -1410,60 +1475,62 @@ class SettingsView(QScrollArea):
         cur_max = int(config.get("musilon.cooldown_max_sec", 35))
         if val > cur_max:
             val = cur_max
-            self.cooldown_min_spin.setValue(val)
-        config.set("musilon.cooldown_min_sec", val)
+            with QSignalBlocker(self.cooldown_min_spin):
+                self.cooldown_min_spin.setValue(val)
+        self._save_setting("musilon.cooldown_min_sec", val)
 
     def _on_cooldown_max_changed(self, val: int):
         cur_min = int(config.get("musilon.cooldown_min_sec", 15))
         if val < cur_min:
             val = cur_min
-            self.cooldown_max_spin.setValue(val)
-        config.set("musilon.cooldown_max_sec", val)
+            with QSignalBlocker(self.cooldown_max_spin):
+                self.cooldown_max_spin.setValue(val)
+        self._save_setting("musilon.cooldown_max_sec", val)
 
     def _on_subfolder_switch_changed(self, enabled: bool):
-        config.set("download.save_in_subfolders", enabled)
+        if not self._save_setting("download.save_in_subfolders", enabled):
+            return
         if enabled:
             InfoBar.info("Folder Organization", "Songs will be sorted into playlist and album subfolders.", duration=3000, parent=self)
         else:
             InfoBar.info("Single Folder Mode", "All songs will be saved directly into your download output folder.", duration=3000, parent=self)
 
     def _on_fallback_switch_changed(self, enabled: bool):
-        config.set("download.allow_fallback", enabled)
+        if not self._save_setting("download.allow_fallback", enabled):
+            return
         if enabled:
             InfoBar.info("Safety-Net Fallback Enabled", "YouTube Music fallback is active if Musilon has no match.", duration=3000, parent=self)
         else:
             InfoBar.warning("Strict Musilon Mode", "YouTube fallback disabled. Downloads restricted strictly to Musilon.", duration=3500, parent=self)
 
     def _on_concurrency_changed(self, val: int):
-        config.set("download.concurrency", val)
+        if not self._save_setting("download.concurrency", val):
+            return
         if self.qm and hasattr(self.qm, "update_concurrency"):
             self.qm.update_concurrency(val)
         InfoBar.info("Concurrency Updated", f"Download concurrency set to {val} simultaneous worker(s).", duration=2500, parent=self)
 
     def _on_quality_changed(self, index: int):
+        priority = (
+            ["musilon_mp3_320", "musilon_flac_16", "musilon_flac_24", "ytm_opus"]
+            if index == 0 else
+            ["musilon_flac_16", "musilon_flac_24", "musilon_mp3_320", "ytm_opus"]
+        )
+        if not self._save_settings({
+            "download.preferred_quality": "320" if index == 0 else "flac",
+            "download.quality_priority": priority,
+        }):
+            return
         if index == 0:
-            config.set("download.preferred_quality", "320")
-            config.set("download.quality_priority", [
-                "musilon_mp3_320",
-                "musilon_flac_16",
-                "musilon_flac_24",
-                "ytm_opus"
-            ])
             InfoBar.info("Quality Set: MP3 320k", "Musilon downloads will prioritize 320 kbps MP3 files.", duration=3000, parent=self)
         else:
-            config.set("download.preferred_quality", "flac")
-            config.set("download.quality_priority", [
-                "musilon_flac_16",
-                "musilon_flac_24",
-                "musilon_mp3_320",
-                "ytm_opus"
-            ])
             InfoBar.info("Quality Set: Lossless FLAC", "Musilon downloads will prioritize Lossless FLAC (16/24-bit).", duration=3000, parent=self)
 
     def _on_target_format_changed(self, index: int):
         fmt_keys = ["original", "alac", "mp3", "flac", "opus"]
         fmt_key = fmt_keys[index] if 0 <= index < len(fmt_keys) else "original"
-        config.set("download.target_format", fmt_key)
+        if not self._save_setting("download.target_format", fmt_key):
+            return
         labels = {
             "original": "Original / Native Stream (No Transcoding)",
             "alac": "Apple Lossless (ALAC .m4a)",
@@ -1474,19 +1541,16 @@ class SettingsView(QScrollArea):
         InfoBar.info("Target Audio Format", f"Transcoder format set to {labels.get(fmt_key, fmt_key)}.", duration=3000, parent=self)
 
     def _on_user_changed(self, text: str):
-        val = text.strip()
-        config.set("musilon.username", val)
-        self.musilon_engine.username = val
+        self._save_musilon_credentials(username=text.strip())
 
     def _on_pwd_changed(self, text: str):
-        val = text.strip()
-        config.set("musilon.password", val)
-        self.musilon_engine.password = val
+        self._save_musilon_credentials(password=text.strip())
 
     def _paste_cookie(self, *args):
         text = QApplication.clipboard().text().strip()
         if text:
-            self.cookie_input.setText(text)
+            if self._save_musilon_credentials(session_cookie=text):
+                self.cookie_input.setText(text)
 
     def _login_musilon(self, *args):
         user = self.user_input.text().strip()
@@ -1504,15 +1568,35 @@ class SettingsView(QScrollArea):
             )
             return
 
+        if not self._save_musilon_credentials():
+            return
+        self._login_runtime_state = {
+            "session_cookie": self.musilon_engine.session_cookie,
+            "username": self.musilon_engine.username,
+            "password": self.musilon_engine.password,
+            "enabled": self.musilon_engine.enabled,
+            "cookies": self.musilon_engine.session.cookies.copy(),
+        }
         self.login_btn.setEnabled(False)
         self.login_btn.setText("Logging In...")
         self.result_label.setText("Attempting automated login to open.musilon.com...")
 
         def worker():
-            success, msg = self.musilon_engine.login_with_credentials(user, pwd)
+            try:
+                success, msg = self.musilon_engine.login_with_credentials(user, pwd)
+            except Exception:
+                success, msg = False, "Login failed. Check your connection and saved settings, then retry."
             safe_emit(self.sig_login_result, success, msg)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _restore_login_runtime(self):
+        state = getattr(self, "_login_runtime_state", None)
+        if state:
+            for key in ("session_cookie", "username", "password", "enabled"):
+                setattr(self.musilon_engine, key, state[key])
+            self.musilon_engine.session.cookies = state["cookies"]
+            self._login_runtime_state = None
 
     def _on_login_finished(self, success: bool, msg: str):
         self.login_btn.setEnabled(True)
@@ -1523,13 +1607,18 @@ class SettingsView(QScrollArea):
             # Save session cookies extracted by session
             cookie_dict = self.musilon_engine.session.cookies.get_dict()
             cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+            if not self._save_musilon_credentials(session_cookie=cookie_str):
+                self._restore_login_runtime()
+                self.result_label.setText("Login settings were not saved. Check disk space and folder permissions, then retry.")
+                return
+            self._login_runtime_state = None
             self.cookie_input.setText(cookie_str)
-            config.set("musilon.session_cookie", cookie_str)
             self._set_status_badge("active", "Logged In")
             InfoBar.success("Login Successful", "Authenticated with Musilon account!", duration=3500, parent=self)
             # Auto-refresh connection status and VIP quota display
             self._test_musilon()
         else:
+            self._restore_login_runtime()
             self._set_status_badge("offline", "Login Failed")
             InfoBar.error("Login Failed", msg, duration=5000, parent=self)
 
@@ -1563,7 +1652,7 @@ class SettingsView(QScrollArea):
             InfoBar.error("Connection Failed", msg, duration=6000, parent=self)
 
     def _update_status_badge(self):
-        cookie = self.cookie_input.text().strip()
+        cookie = config.get("musilon.session_cookie", "").strip()
         has_cookie_auth = (
             "next-auth" in cookie
             or "__Secure-next-auth" in cookie
@@ -1571,7 +1660,7 @@ class SettingsView(QScrollArea):
             or "wordpress_sec" in cookie
             or cookie.startswith("eyJ")
         )
-        has_cred_auth = bool(self.user_input.text().strip() and self.pwd_input.text().strip())
+        has_cred_auth = bool(config.get("musilon.username", "") and config.get("musilon.password", ""))
         if has_cookie_auth or has_cred_auth:
             self._set_status_badge("active", "Credentials Saved")
         else:
@@ -1605,12 +1694,18 @@ class SettingsView(QScrollArea):
         self.status_badge.adjustSize()
 
     def _on_sp_id_changed(self, text: str):
-        config.set("spotify.client_id", text.strip())
-        self._update_spotify_badge()
+        self._save_spotify_credentials(client_id=text.strip())
 
     def _on_sp_sec_changed(self, text: str):
-        config.set("spotify.client_secret", text.strip())
+        self._save_spotify_credentials(client_secret=text.strip())
+
+    def _save_spotify_credentials(self, **overrides) -> bool:
+        values = {"client_id": self.spotify_id.text().strip(), "client_secret": self.spotify_secret.text().strip()}
+        values.update(overrides)
+        if not self._save_settings({f"spotify.{key}": value for key, value in values.items()}):
+            return False
         self._update_spotify_badge()
+        return True
 
     def _update_spotify_badge(self):
         cid = self.spotify_id.text().strip()
@@ -1661,6 +1756,8 @@ class SettingsView(QScrollArea):
             )
 
     def _authorize_spotify(self, *args):
+        if not self._save_spotify_credentials():
+            return
         cid = self.spotify_id.text().strip()
         sec = self.spotify_secret.text().strip()
         if not cid or not sec:
@@ -1694,6 +1791,8 @@ class SettingsView(QScrollArea):
             InfoBar.error("Authorization Failed", msg, duration=6000, parent=self)
 
     def _validate_spotify(self, *args):
+        if not self._save_spotify_credentials():
+            return
         cid = self.spotify_id.text().strip()
         sec = self.spotify_secret.text().strip()
         if not cid or not sec:
@@ -1728,8 +1827,9 @@ class SettingsView(QScrollArea):
         chosen = QFileDialog.getExistingDirectory(self, "Select Download Directory", cur)
         if chosen:
             norm = os.path.normpath(chosen)
+            if not self._save_setting("download.output_dir", norm):
+                return
             self.folder_input.setText(norm)
-            config.set("download.output_dir", norm)
             InfoBar.success("Saved", f"Download directory updated: {norm}", duration=2500, parent=self)
 
     def _browse_cookies_file(self, *args):
@@ -1742,8 +1842,9 @@ class SettingsView(QScrollArea):
         )
         if path:
             norm = os.path.normpath(path)
+            if not self._save_setting("download.cookies_file", norm):
+                return
             self.yt_cookie_input.setText(norm)
-            config.set("download.cookies_file", norm)
             InfoBar.success("Cookies Loaded", f"YouTube cookies: {os.path.basename(norm)}", duration=3000, parent=self)
 
     def _open_folder(self, *args):
@@ -1806,8 +1907,8 @@ class SettingsView(QScrollArea):
             2: "same_folder"
         }
         mode = rev_map.get(idx, "embedded_only")
-        config.set("download.lyrics_mode", mode)
-        config.set("download.save_lrc", mode != "embedded_only")
+        if not self._save_settings({"download.lyrics_mode": mode, "download.save_lrc": mode != "embedded_only"}):
+            return
         desc_map = {
             "embedded_only": "Lyrics will be embedded directly in songs (no .lrc files).",
             "separate_folder": "Lyrics will be saved to a 'lyrics/' subfolder.",

@@ -661,8 +661,11 @@ class PlaylistsView(QWidget):
         self._auto_sync_timer = QTimer(self)
         self._auto_sync_timer.timeout.connect(lambda: self._run_watched_playlists_sync(is_startup=False))
         self._apply_auto_sync_schedule()
+        self._startup_sync_timer = QTimer(self)
+        self._startup_sync_timer.setSingleShot(True)
+        self._startup_sync_timer.timeout.connect(lambda: self._run_watched_playlists_sync(is_startup=True))
         if bool(config.get("playlists.auto_sync_on_startup", True)):
-            QTimer.singleShot(5000, lambda: self._run_watched_playlists_sync(is_startup=True))
+            self._startup_sync_timer.start(5000)
 
         # Load initial saved playlists
         self.reload_playlists()
