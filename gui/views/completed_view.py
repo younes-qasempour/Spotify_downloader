@@ -173,7 +173,7 @@ class CollectionCard(CardWidget):
 
         self.open_btn = PrimaryPushButton(FluentIcon.FOLDER, "Open Folder", self)
         self.open_btn.clicked.connect(self._open_folder)
-        btn_layout.addWidget(self.open_btn)
+        self.open_btn.hide()
 
         layout.addLayout(btn_layout)
 
@@ -341,7 +341,7 @@ class CompletedView(QWidget):
         self.open_folder_btn.setFixedHeight(30)
         self.open_folder_btn.setToolTip("Open local download directory in Windows Explorer")
         self.open_folder_btn.clicked.connect(self._open_download_folder)
-        nav_row.addWidget(self.open_folder_btn)
+        self.open_folder_btn.hide()
 
         self.rescan_btn = ToolButton(FluentIcon.SYNC, self)
         self.rescan_btn.setFixedHeight(30)

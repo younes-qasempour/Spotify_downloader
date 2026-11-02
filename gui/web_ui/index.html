@@ -132,7 +132,7 @@
             </svg>
             <span>Sync Disk</span>
           </button>
-          <button class="ghost-pill-btn" id="btn-open-downloads" title="Open Downloads Folder in Explorer">
+          <button class="ghost-pill-btn hidden" id="btn-open-downloads" title="Open Downloads Folder in Explorer">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
             </svg>
@@ -329,35 +329,6 @@
               <div class="empty-state">Select a saved playlist on the left to inspect tracks, configure batch download quotas, or toggle Watch Auto-Sync.</div>
             </div>
           </div>
-          
-
-              <!-- Filter Search for Tracks -->
-              <div class="batchtag-table-toolbar">
-                <input type="text" id="batchtag-search-input" class="sleek-input" placeholder="Filter library tracks by title, artist, or album..." style="max-width: 380px;" />
-                <div id="batchtag-status-msg" class="batchtag-status-msg"></div>
-              </div>
-
-              <!-- Track Selection Table -->
-              <div class="batchtag-table-wrap">
-                <table class="batchtag-table">
-                  <thead>
-                    <tr>
-                      <th style="width: 40px;"><input type="checkbox" id="chk-batchtag-master" /></th>
-                      <th style="width: 52px;">Cover</th>
-                      <th>Title</th>
-                      <th>Artist</th>
-                      <th>Album</th>
-                      <th>Format</th>
-                      <th>Filename</th>
-                    </tr>
-                  </thead>
-                  <tbody id="batchtag-table-body">
-                    <!-- Dynamic Rows -->
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
         </section>
 
         <!-- 4. AUDIO LAB & STUDIO TOOLS VIEW (Spectrum Inspector + Smart Duplicate Merger) -->
@@ -498,6 +469,34 @@
                   </div>
                 </div>
               </div>
+
+              <!-- Filter Search for Tracks -->
+              <div class="batchtag-table-toolbar">
+                <input type="text" id="batchtag-search-input" class="sleek-input" placeholder="Filter library tracks by title, artist, or album..." style="max-width: 380px;" />
+                <div id="batchtag-status-msg" class="batchtag-status-msg"></div>
+              </div>
+
+              <!-- Track Selection Table -->
+              <div class="batchtag-table-wrap">
+                <table class="batchtag-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 40px;"><input type="checkbox" id="chk-batchtag-master" /></th>
+                      <th style="width: 52px;">Cover</th>
+                      <th>Title</th>
+                      <th>Artist</th>
+                      <th>Album</th>
+                      <th>Format</th>
+                      <th>Filename</th>
+                    </tr>
+                  </thead>
+                  <tbody id="batchtag-table-body">
+                    <!-- Dynamic Rows -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- 5. SETTINGS VIEW -->

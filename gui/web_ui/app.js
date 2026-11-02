@@ -3008,16 +3008,6 @@ document.addEventListener("DOMContentLoaded", () => {
   initSidebarResizer();
   initSavedResizer();
 
-  // Tools Tabs & Actions
-  document.querySelectorAll("#tools-tabs .seg-tab").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const tab = btn.dataset.tooltab;
-      document.querySelectorAll("#tools-tabs .seg-tab").forEach(b => b.classList.toggle("active", b === btn));
-      document.getElementById("tool-panel-spectrum").classList.toggle("hidden", tab !== "spectrum");
-      document.getElementById("tool-panel-duplicates").classList.toggle("hidden", tab !== "duplicates");
-    });
-  });
-
   document.getElementById("btn-run-spectrum-batch").addEventListener("click", async () => {
     await apiPost("/api/tools/spectrum/batch", { limit: 60 });
     const statusBox = document.getElementById("spectrum-batch-status");
@@ -3795,7 +3785,8 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("#tools-tabs .seg-tab").forEach(btn => {
     btn.addEventListener("click", () => {
       const tab = btn.dataset.tooltab;
-      document.querySelectorAll("#tools-tabs .seg-tab").forEach(b => b.classList.toggle("active", b === btn));
+      if (!tab) return;
+      document.querySelectorAll("#tools-tabs .seg-tab[data-tooltab]").forEach(b => b.classList.toggle("active", b === btn));
       document.getElementById("tool-panel-spectrum")?.classList.toggle("hidden", tab !== "spectrum");
       document.getElementById("tool-panel-duplicates")?.classList.toggle("hidden", tab !== "duplicates");
       document.getElementById("tool-panel-batchtag")?.classList.toggle("hidden", tab !== "batchtag");
