@@ -252,32 +252,66 @@
         <!-- 2. DOWNLOADER & QUEUE VIEW -->
         <section class="view-page" id="view-queue">
           <div class="section-hero-card">
-            <div>
-              <span class="hero-overline">HIGH-FIDELITY SCRAPER ENGINE</span>
-              <h2 class="section-title">Spotify Downloader &amp; Live Queue</h2>
-              <p class="section-desc">Paste any Spotify Track, Album, Playlist, or Liked Songs URL (`open.spotify.com/collection/tracks`).</p>
+            <div class="hero-header-split">
+              <div>
+                <span class="hero-overline">HIGH-FIDELITY SCRAPER ENGINE</span>
+                <h2 class="section-title">Spotify Downloader &amp; Live Queue</h2>
+                <p class="section-desc">Paste any Spotify Track, Album, Playlist, or Liked Songs URL (`open.spotify.com/collection/tracks`).</p>
+              </div>
+              <div id="queue-resolve-status-badge" class="queue-resolve-pill hidden">
+                <span class="spinner-xs"></span>
+                <span id="queue-resolve-status-txt">Resolving...</span>
+                <button class="ghost-pill-btn btn-xs" id="btn-queue-view-saved" title="Jump to Saved Playlists">View in Saved →</button>
+              </div>
             </div>
             <div class="url-ingest-row">
               <input
                 type="text"
                 id="queue-url-input"
                 class="url-input-large"
-                placeholder="https://open.spotify.com/playlist/... or track / album URL"
+                placeholder="https://open.spotify.com/playlist/... or track / album URL (Press Enter to download)"
                 autocomplete="off"
               />
-              <button class="btn-primary-emerald" id="btn-queue-download">
+              <button class="btn-primary-emerald" id="btn-queue-download" title="Download all tracks in URL immediately">
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4">
                   <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round"/>
                 </svg>
-                <span>Download Now</span>
+                <span>Download All</span>
+              </button>
+              <button class="btn-secondary-dark" id="btn-queue-batch" title="Save to Playlists and download first batch">
+                <span>Download Batch (<span id="lbl-queue-batch-size">50</span>)</span>
               </button>
               <button class="btn-secondary-dark" id="btn-queue-save-pl" title="Save to Saved Playlists without downloading immediately">
-                <span>Save to Playlists</span>
+                <span>Save Offline Only</span>
               </button>
+            </div>
+            <div class="queue-ingest-subrow">
+              <div class="sb-presets">
+                <span class="sb-presets-lbl">Batch Size:</span>
+                <button class="btn-preset-mini" data-qpreset="25">25</button>
+                <button class="btn-preset-mini active" data-qpreset="50">50</button>
+                <button class="btn-preset-mini" data-qpreset="100">100</button>
+                <button class="btn-preset-mini" data-qpreset="200">200</button>
+                <input type="number" id="input-queue-batch-size" class="batch-size-input-mini" min="1" max="5000" value="50" title="Custom batch limit" />
+              </div>
+              <div class="queue-ingest-hint">
+                <span id="lbl-queue-ingest-hint">Tip: Downloaded playlists are automatically saved to your Saved Playlists library.</span>
+              </div>
             </div>
           </div>
 
-          <!-- Queue Metrics & Controls -->
+          <!-- Queue Overall Progress Bar -->
+          <div class="queue-master-progress-wrap" id="queue-master-prog-wrap">
+            <div class="queue-master-prog-info">
+              <span id="queue-master-prog-label">Queue: 0 / 0 tracks completed (0%)</span>
+              <span id="queue-master-prog-eta">0 active • 0 pending</span>
+            </div>
+            <div class="queue-master-prog-bar">
+              <div class="queue-master-prog-fill" id="queue-master-prog-fill" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <!-- Queue Metrics & Controls Toolbar -->
           <div class="queue-toolbar">
             <div class="segmented-tabs" id="queue-filter-tabs">
               <button class="seg-tab active" data-qfilter="all">All (<span id="q-cnt-all">0</span>)</button>
@@ -286,11 +320,17 @@
               <button class="seg-tab" data-qfilter="completed">Completed (<span id="q-cnt-done">0</span>)</button>
               <button class="seg-tab" data-qfilter="failed">Failed (<span id="q-cnt-fail">0</span>)</button>
             </div>
+            <div class="queue-search-wrap">
+              <input type="text" id="queue-search-input" placeholder="Search queue tracks or playlists..." autocomplete="off" />
+            </div>
             <div class="queue-actions">
               <span class="speed-badge" id="queue-speed-badge">⚡ 0 B/s</span>
-              <button class="ghost-pill-btn" id="btn-queue-pause">Pause All</button>
-              <button class="ghost-pill-btn" id="btn-queue-retry">Retry Failed</button>
-              <button class="ghost-pill-btn" id="btn-queue-clear">Clear Completed</button>
+              <button class="ghost-pill-btn" id="btn-queue-pause" title="Pause or resume downloading queue">Pause All</button>
+              <button class="btn-secondary-dark btn-sm" id="btn-queue-stop" title="Stop downloading and cancel active jobs">Stop All</button>
+              <button class="ghost-pill-btn" id="btn-queue-retry" title="Retry all failed and stopped downloads">Retry Failed</button>
+              <button class="ghost-pill-btn" id="btn-queue-clear" title="Remove completed downloads from list">Clear Completed</button>
+              <button class="btn-danger-outline btn-sm" id="btn-queue-cancel-all" title="Clear and cancel all tracks in queue">Clear All</button>
+              <button class="ghost-pill-btn" id="btn-queue-open-folder" title="Open Downloads folder in Windows Explorer">📂 Folder</button>
             </div>
           </div>
 

@@ -19,6 +19,7 @@ const state = {
     genres: [],
     stats: { total_tracks: 0, total_size_str: "0 B", playlists_count: 0, albums_count: 0 },
   },
+  libraryTracks: [],
   filteredTracks: [],
 
   // Player & Playlist State
@@ -80,6 +81,8 @@ const state = {
   // Queue & Saved Playlists
   queue: [],
   queueFilter: "all",
+  queueSearchQuery: "",
+  queueBatchSize: 50,
   isPaused: false,
   savedPlaylists: [],
   selectedSavedPlaylistId: null,
@@ -145,11 +148,12 @@ function showToast(msg) {
 async function apiGet(url) {
   try {
     const res = await fetch(url);
-    if (!res.ok) {
-      console.warn(`GET ${url} returned HTTP ${res.status}`);
-      return { ok: false, status: res.status };
+    try {
+      const data = await res.json();
+      return data;
+    } catch {
+      return { ok: res.ok, status: res.status };
     }
-    return await res.json();
   } catch (err) {
     console.warn(`GET ${url} network error:`, err);
     return { ok: false, error: String(err) };
@@ -163,7 +167,11 @@ async function apiPost(url, data = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return await res.json();
+    try {
+      return await res.json();
+    } catch {
+      return { ok: res.ok, status: res.status };
+    }
   } catch (err) {
     console.warn(`POST ${url} network error:`, err);
     return { ok: false, error: String(err) };
@@ -327,6 +335,7 @@ async function loadLibrary(forceRefresh = false) {
   if (!data || !data.tracks) return;
 
   state.library = data;
+  state.libraryTracks = data.tracks || [];
   document.getElementById("nav-lib-count").textContent = data.stats.total_tracks.toLocaleString();
 
   // Populate Genre Select
@@ -1028,7 +1037,7 @@ function updateActiveLyricTicker() {
 
   const offset = state.lyrics.offsetMs || 0;
   const posMs = (audioEl.currentTime * 1000) - offset;
-  let idx = 0;
+  let idx = -1;
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].time_ms <= posMs) idx = i;
     else break;
@@ -1036,6 +1045,18 @@ function updateActiveLyricTicker() {
 
   const changed = idx !== state.lyrics.activeIdx;
   state.lyrics.activeIdx = idx;
+
+  if (idx === -1) {
+    document.getElementById("ticker-orig").textContent = "♪ Intro ♪";
+    document.getElementById("ticker-trans").textContent = lines[0] ? `→ ${lines[0].text}` : "";
+    if (changed) {
+      const drawer = document.getElementById("lyrics-drawer");
+      if (drawer && !drawer.classList.contains("hidden")) {
+        drawer.querySelectorAll(".lyric-line-item").forEach(el => el.classList.remove("active"));
+      }
+    }
+    return;
+  }
 
   const orig = lines[idx].text;
   document.getElementById("ticker-orig").textContent = orig;
@@ -1084,7 +1105,7 @@ async function pollBackendState() {
     if (!st || !st.ok) return;
 
     state.queue = st.queue || [];
-    state.isPaused = st.is_paused;
+    state.isPaused = Boolean(st.is_paused);
 
     const prevResolving = state.isResolving;
     const prevResolvingPid = state.resolvingPlaylistId;
@@ -1098,7 +1119,7 @@ async function pollBackendState() {
     // Topbar resolving pill
     const resPill = document.getElementById("topbar-resolving");
     if (st.is_resolving) {
-      resPill.classList.remove("hidden");
+      if (resPill) resPill.classList.remove("hidden");
       const txtEl = document.getElementById("topbar-resolving-text");
       const pctEl = document.getElementById("topbar-resolving-pct");
       const barEl = document.getElementById("topbar-resolving-bar");
@@ -1141,11 +1162,32 @@ async function pollBackendState() {
       clearTimeout(state._fastPollTimeout);
       state._fastPollTimeout = setTimeout(pollBackendState, 450);
     } else {
-      resPill.classList.add("hidden");
+      if (resPill) resPill.classList.add("hidden");
       const barEl = document.getElementById("topbar-resolving-bar");
       if (barEl) barEl.style.width = "0%";
       const ringEl = document.getElementById("topbar-resolving-ring");
       if (ringEl) ringEl.setAttribute("stroke-dasharray", "0, 100");
+    }
+
+    // Queue View Resolution Status Badge (Hero Card)
+    const qResBadge = document.getElementById("queue-resolve-status-badge");
+    const qResTxt = document.getElementById("queue-resolve-status-txt");
+    const btnQViewSaved = document.getElementById("btn-queue-view-saved");
+    if (qResBadge) {
+      if (st.is_resolving) {
+        qResBadge.classList.remove("hidden");
+        if (qResTxt) qResTxt.textContent = state.resolvingMessage || "Resolving Spotify link...";
+      } else {
+        const lastRes = st.last_resolve || st.last_resolve_result;
+        if (lastRes && (lastRes.playlist_name || lastRes.count)) {
+          qResBadge.classList.remove("hidden");
+          if (qResTxt) qResTxt.textContent = `✓ ${lastRes.playlist_name || "Tracks"} (${lastRes.count || 0} tracks)`;
+          if (btnQViewSaved && lastRes.playlist_id) {
+            btnQViewSaved.setAttribute("data-pid", lastRes.playlist_id);
+            btnQViewSaved.classList.remove("hidden");
+          }
+        }
+      }
     }
 
     if (st.last_resolve && st.last_resolve.message && st.last_resolve.message !== state.lastResolveMsg) {
@@ -1168,11 +1210,13 @@ async function pollBackendState() {
     // Sidebar badges
     const qPill = document.getElementById("nav-queue-count");
     const activeCnt = (st.counts.downloading || 0) + (st.counts.queued || 0);
-    if (activeCnt > 0) {
-      qPill.textContent = activeCnt;
-      qPill.classList.remove("hidden");
-    } else {
-      qPill.classList.add("hidden");
+    if (qPill) {
+      if (activeCnt > 0) {
+        qPill.textContent = activeCnt;
+        qPill.classList.remove("hidden");
+      } else {
+        qPill.classList.add("hidden");
+      }
     }
     const watchBadge = document.getElementById("nav-watch-count");
     if (watchBadge) {
@@ -1182,14 +1226,51 @@ async function pollBackendState() {
       else watchBadge.classList.add("hidden");
     }
 
-    // Queue counts
-    document.getElementById("q-cnt-all").textContent = st.counts.all || 0;
-    document.getElementById("q-cnt-dl").textContent = st.counts.downloading || 0;
-    document.getElementById("q-cnt-wait").textContent = st.counts.queued || 0;
-    document.getElementById("q-cnt-done").textContent = st.counts.completed || 0;
-    document.getElementById("q-cnt-fail").textContent = st.counts.failed || 0;
-    document.getElementById("queue-speed-badge").textContent = `⚡ ${st.total_speed_str || "0 B/s"}`;
-    document.getElementById("btn-queue-pause").textContent = st.is_paused ? "Resume All" : "Pause All";
+    // Queue counts & stats
+    const qCntAll = document.getElementById("q-cnt-all");
+    const qCntDl = document.getElementById("q-cnt-dl");
+    const qCntWait = document.getElementById("q-cnt-wait");
+    const qCntDone = document.getElementById("q-cnt-done");
+    const qCntFail = document.getElementById("q-cnt-fail");
+    if (qCntAll) qCntAll.textContent = st.counts.all || 0;
+    if (qCntDl) qCntDl.textContent = st.counts.downloading || 0;
+    if (qCntWait) qCntWait.textContent = st.counts.queued || 0;
+    if (qCntDone) qCntDone.textContent = st.counts.completed || 0;
+    if (qCntFail) qCntFail.textContent = st.counts.failed || 0;
+    const speedBadge = document.getElementById("queue-speed-badge");
+    if (speedBadge) speedBadge.textContent = `⚡ ${st.total_speed_str || "0 B/s"}`;
+
+    // Synchronize pause/resume buttons across Queue and Saved views
+    const btnQPause = document.getElementById("btn-queue-pause");
+    if (btnQPause) btnQPause.textContent = st.is_paused ? "Resume All" : "Pause All";
+    const lblPlPause = document.getElementById("lbl-pl-pause-text");
+    if (lblPlPause) lblPlPause.textContent = st.is_paused ? "Resume" : "Pause";
+    const btnPlPause = document.getElementById("btn-pl-pause-queue");
+    if (btnPlPause) {
+      btnPlPause.classList.toggle("btn-active", Boolean(st.is_paused));
+      btnPlPause.title = st.is_paused ? "Resume downloading queue" : "Pause downloading queue";
+    }
+
+    // Master Queue Progress Bar
+    const qMasterFill = document.getElementById("queue-master-prog-fill");
+    const qMasterLbl = document.getElementById("queue-master-prog-label");
+    const qMasterEta = document.getElementById("queue-master-prog-eta");
+    if (qMasterFill) {
+      const qTotal = st.counts.all || 0;
+      const qDone = st.counts.completed || 0;
+      const qActive = st.counts.downloading || 0;
+      const qWait = st.counts.queued || 0;
+      const qPct = qTotal > 0 ? Math.min(100, Math.round((qDone / qTotal) * 100)) : 0;
+      qMasterFill.style.width = `${qPct}%`;
+      if (qMasterLbl) qMasterLbl.textContent = `Queue: ${qDone} / ${qTotal} tracks completed (${qPct}%)`;
+      if (qMasterEta) {
+        let meta = `${qActive} active • ${qWait} pending`;
+        if (st.total_speed_str && st.total_speed_str !== "0 B/s") {
+          meta += ` • ⚡ ${st.total_speed_str}`;
+        }
+        qMasterEta.textContent = meta;
+      }
+    }
 
     if (state.activeView === "queue") {
       renderQueueList();
@@ -1245,15 +1326,49 @@ async function pollBackendState() {
         }
       }
 
-      // Live background sync: if completed downloads count changed, refresh track table
-      if (state.selectedSavedPlaylistId && st.counts.completed !== state._lastCompletedCount) {
-        state._lastCompletedCount = st.counts.completed;
-        apiGet(`/api/saved_playlists/tracks?id=${encodeURIComponent(state.selectedSavedPlaylistId)}`).then(res => {
-          if (res && res.ok && res.tracks) {
-            currentSavedTracks = res.tracks;
-            renderFilteredSavedTracks();
-          }
-        }).catch(() => {});
+      // Live background sync: if downloading or completed count changed, refresh track table
+      if (state.selectedSavedPlaylistId) {
+        const hasActiveDownloads = (st.counts.downloading || 0) > 0;
+        const countChanged = st.counts.completed !== state._lastCompletedCount;
+        if (hasActiveDownloads || countChanged) {
+          state._lastCompletedCount = st.counts.completed;
+          apiGet(`/api/saved_playlists/tracks?id=${encodeURIComponent(state.selectedSavedPlaylistId)}`).then(res => {
+            if (res && res.ok && res.tracks) {
+              currentSavedTracks = res.tracks;
+              renderFilteredSavedTracks();
+
+              // Update in-place header statistics and queue button
+              const downloadedCnt = currentSavedTracks.filter(t => t.is_downloaded).length;
+              const unqueuedMissing = currentSavedTracks.filter(t => !t.is_downloaded && (t.status || "").toLowerCase() !== "queued" && (t.status || "").toLowerCase() !== "downloading").length;
+              const queuedCnt = currentSavedTracks.filter(t => (t.status || "").toLowerCase() === "queued" || (t.status || "").toLowerCase() === "downloading").length;
+              
+              const qBadgeLbl = document.getElementById("lbl-pl-active-queue");
+              if (qBadgeLbl) qBadgeLbl.textContent = queuedCnt;
+
+              const batchBtnText = document.getElementById("lbl-batch-btn-text");
+              const dlBatchBtn = document.getElementById("btn-pl-download-batch");
+              if (batchBtnText && dlBatchBtn) {
+                if (unqueuedMissing > 0) {
+                  const eff = Math.min(state.savedBatchSize, unqueuedMissing);
+                  batchBtnText.textContent = `Download Batch (${eff})`;
+                  dlBatchBtn.disabled = false;
+                  dlBatchBtn.style.opacity = "";
+                  dlBatchBtn.style.cursor = "";
+                } else if (queuedCnt > 0) {
+                  batchBtnText.textContent = `All Queued (${queuedCnt})`;
+                  dlBatchBtn.disabled = true;
+                  dlBatchBtn.style.opacity = "0.6";
+                  dlBatchBtn.style.cursor = "default";
+                } else {
+                  batchBtnText.textContent = `✓ All Downloaded`;
+                  dlBatchBtn.disabled = true;
+                  dlBatchBtn.style.opacity = "0.6";
+                  dlBatchBtn.style.cursor = "default";
+                }
+              }
+            }
+          }).catch(() => {});
+        }
       }
     }
   } catch (_) {}
@@ -1271,49 +1386,126 @@ function getQueueBadgeClass(it) {
 
 function renderQueueList() {
   const wrap = document.getElementById("queue-list-container");
+  if (!wrap) return;
+
   const f = state.queueFilter;
+  const qQuery = (state.queueSearchQuery || "").toLowerCase().trim();
+
   const list = state.queue.filter(it => {
-    if (f === "downloading") return it.status === "Downloading" || it.status === "Resolving";
-    if (f === "queued") return it.status === "Queued" || it.status === "Paused" || it.status === "Stopped";
-    if (f === "completed") return it.status === "Completed";
-    if (f === "failed") return it.status === "Failed";
+    if (f === "downloading" && !(it.status === "Downloading" || it.status === "Resolving")) return false;
+    if (f === "queued" && !(it.status === "Queued" || it.status === "Paused" || it.status === "Stopped")) return false;
+    if (f === "completed" && it.status !== "Completed") return false;
+    if (f === "failed" && it.status !== "Failed") return false;
+
+    if (qQuery) {
+      const hay = `${it.title || ""} ${it.artist || ""} ${it.album || ""} ${it.collection_name || ""}`.toLowerCase();
+      if (!hay.includes(qQuery)) return false;
+    }
     return true;
   });
 
   if (!list.length) {
-    wrap.innerHTML = `<div style="padding: 40px; text-align:center; color: var(--text-secondary);">Queue is empty. Paste a Spotify link above to begin downloading.</div>`;
+    const emptyMsg = qQuery
+      ? `No queue items match "${escapeHtml(qQuery)}".`
+      : `Queue is empty. Paste a Spotify link above to begin downloading.`;
+    wrap.innerHTML = `<div style="padding: 40px; text-align:center; color: var(--text-secondary);">${emptyMsg}</div>`;
     return;
   }
 
-  wrap.innerHTML = list.map(it => `
-    <div class="queue-item-card">
-      <img class="row-thumb" src="${coverUrl(it.cover_key)}" onerror="this.style.visibility='hidden'" />
-      <div class="row-title-box">
-        <div class="row-title-text">${escapeHtml(it.title)}</div>
-        <div class="row-artist-text">${escapeHtml(it.artist)} • ${escapeHtml(it.album)}</div>
-      </div>
-      <div class="q-prog-wrap">
-        <div class="q-prog-bar"><div class="q-prog-fill" style="width:${it.progress}%"></div></div>
-        <div class="q-prog-meta">
-          <span>${it.status === "Downloading" ? (it.speed_str || "Downloading...") : escapeHtml(it.error_message || it.status)}</span>
-          <span>${it.progress}%</span>
+  const prevScroll = wrap.scrollTop;
+
+  wrap.innerHTML = list.map(it => {
+    const isCompleted = it.status === "Completed";
+    const isFailed = it.status === "Failed";
+    const isDownloading = it.status === "Downloading";
+
+    let progMeta = escapeHtml(it.error_message || it.status);
+    if (isDownloading) {
+      progMeta = `${escapeHtml(it.stage || "Downloading")} • ${escapeHtml(it.speed_str || "0 B/s")}${it.eta_str ? " • " + escapeHtml(it.eta_str) : ""}`;
+    } else if (isCompleted) {
+      progMeta = "✓ Download complete";
+    }
+
+    const collChip = it.collection_name
+      ? `<span class="q-collection-chip" data-cname="${escapeHtml(it.collection_name)}" title="View playlist '${escapeHtml(it.collection_name)}' in Saved">📁 ${escapeHtml(it.collection_name)}</span>`
+      : "";
+
+    return `
+      <div class="queue-item-card" data-id="${it.item_id}">
+        <img class="row-thumb" src="${coverUrl(it.cover_key)}" onerror="this.style.visibility='hidden'" />
+        <div class="row-title-box">
+          <div class="row-title-text" title="${escapeHtml(it.title)}">${escapeHtml(it.title)}</div>
+          <div class="row-artist-text">${escapeHtml(it.artist)} • ${escapeHtml(it.album)} ${collChip}</div>
+        </div>
+        <div class="q-prog-wrap">
+          <div class="q-prog-bar"><div class="q-prog-fill" style="width:${it.progress}%"></div></div>
+          <div class="q-prog-meta">
+            <span>${progMeta}</span>
+            <span>${it.progress}%</span>
+          </div>
+        </div>
+        <div><span class="${getQueueBadgeClass(it)}">${escapeHtml(it.quality_badge || it.status)}</span></div>
+        <div style="display:flex; gap:4px; justify-content:flex-end;">
+          ${isCompleted && it.file_path ? `<button class="row-act-btn" data-qact="play" data-path="${escapeHtml(it.file_path)}" data-id="${it.item_id}" title="Play Audio">▶</button>` : ""}
+          ${isCompleted && it.file_path ? `<button class="row-act-btn" data-qact="folder" data-path="${escapeHtml(it.file_path)}" title="Reveal in File Explorer">📂</button>` : ""}
+          ${isFailed ? `<button class="row-act-btn" data-qact="retry_item" data-id="${it.item_id}" title="Retry Download">↻</button>` : ""}
+          <button class="row-act-btn" data-qact="remove" data-id="${it.item_id}" title="${isCompleted ? "Dismiss" : "Cancel"}">✕</button>
         </div>
       </div>
-      <div><span class="${getQueueBadgeClass(it)}">${escapeHtml(it.quality_badge || it.status)}</span></div>
-      <div style="display:flex; gap:4px; justify-content:flex-end;">
-        ${it.status === "Failed" ? `<button class="row-act-btn" data-qact="retry_item" data-id="${it.item_id}" title="Retry">↻</button>` : ""}
-        <button class="row-act-btn" data-qact="remove" data-id="${it.item_id}" title="Remove">✕</button>
-      </div>
-    </div>
-  `).join("");
+    `;
+  }).join("");
 
+  wrap.scrollTop = prevScroll;
+
+  // Wire actions
   wrap.querySelectorAll("[data-qact]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      await apiPost("/api/queue/action", {
-        action: btn.getAttribute("data-qact"),
-        item_id: btn.getAttribute("data-id"),
-      });
-      pollBackendState();
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const act = btn.getAttribute("data-qact");
+      const iid = btn.getAttribute("data-id");
+      const fpath = btn.getAttribute("data-path");
+
+      if (act === "play") {
+        const item = state.queue.find(x => x.item_id === iid);
+        if (item && item.file_path) {
+          playTrackFromList([{
+            title: item.title,
+            artist: item.artist,
+            album: item.album,
+            file_path: item.file_path,
+            cover_key: item.cover_key,
+            quality_badge: item.quality_badge,
+            duration_str: item.duration_str,
+          }], 0);
+        }
+      } else if (act === "folder") {
+        if (fpath) {
+          await apiPost("/api/shell/open", { path: fpath });
+        }
+      } else {
+        await apiPost("/api/queue/action", {
+          action: act,
+          item_id: iid,
+        });
+        pollBackendState();
+        if (state.selectedSavedPlaylistId) {
+          loadSavedPlaylistDetail(state.selectedSavedPlaylistId);
+        }
+      }
+    });
+  });
+
+  // Wire collection chips
+  wrap.querySelectorAll(".q-collection-chip").forEach(chip => {
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const cname = chip.getAttribute("data-cname");
+      if (!cname) return;
+      const pl = state.savedPlaylists.find(p => p.name.toLowerCase() === cname.toLowerCase());
+      switchView("saved");
+      if (pl) {
+        loadSavedPlaylistDetail(pl.id);
+      }
     });
   });
 }
@@ -1487,6 +1679,7 @@ async function loadSavedPlaylistDetail(pid) {
   const downloadedCnt = tracks.filter(t => t.is_downloaded).length;
   const unqueuedMissing = tracks.filter(t => !t.is_downloaded && (t.status || "").toLowerCase() !== "queued" && (t.status || "").toLowerCase() !== "downloading").length;
   const queuedCnt = tracks.filter(t => (t.status || "").toLowerCase() === "queued" || (t.status || "").toLowerCase() === "downloading").length;
+  const failedCnt = tracks.filter(t => (t.status || "").toLowerCase() === "failed" || (t.queue_status || "").toLowerCase() === "failed").length;
   const pct = tracks.length > 0 ? Math.round((downloadedCnt / tracks.length) * 100) : 0;
   const cUrl = coverUrl(pl.local_cover || pl.cover_url);
   const effBatch = Math.min(state.savedBatchSize, unqueuedMissing);
@@ -1525,6 +1718,8 @@ async function loadSavedPlaylistDetail(pid) {
           ? `<button class="btn-secondary-dark btn-sm" id="btn-pl-sync-now" disabled title="Sync in progress"><span class="spinner-xs" style="margin-right:6px;"></span> Syncing ${state.resolvingPercent > 0 ? Math.round(state.resolvingPercent) + '%' : '...'}</button>`
           : `<button class="btn-secondary-dark btn-sm" id="btn-pl-sync-now" title="Check Spotify for updates">↻ Sync</button>`
         }
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-open-folder" title="Open playlist folder in Windows Explorer">📂 Folder</button>
+        <button class="ghost-pill-btn btn-sm" id="btn-pl-view-queue" title="View active downloads in Downloader tab">⚡ <span id="lbl-pl-active-queue">${queuedCnt}</span> in Queue →</button>
         <button class="btn-secondary-dark btn-sm" id="btn-pl-edit" title="Edit playlist metadata">⚙ Edit</button>
         <button class="btn-secondary-dark btn-sm" id="btn-pl-export-m3u" title="Export .m3u8">⤓ M3U8</button>
         <button class="btn-danger-outline btn-sm" id="btn-pl-delete" title="Delete playlist">✕</button>
@@ -1561,9 +1756,13 @@ async function loadSavedPlaylistDetail(pid) {
           <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
           <span id="lbl-batch-btn-text">${batchBtnText}</span>
         </button>
+        <button class="btn-secondary-dark btn-sm" id="btn-pl-download-all" ${isBatchDisabled ? "disabled style='opacity:0.6; cursor:default;'" : ""} title="Download all missing tracks in this playlist">
+          ⤓ All Missing (${unqueuedMissing})
+        </button>
         <button class="btn-secondary-dark btn-sm" id="btn-pl-download-selected" disabled>
           Download Selected (0)
         </button>
+        ${failedCnt > 0 ? `<button class="btn-secondary-dark btn-sm" id="btn-pl-retry-failed" title="Retry ${failedCnt} failed downloads">↻ Retry Failed (${failedCnt})</button>` : ""}
         <div class="sb-presets">
           <span class="sb-presets-lbl">Batch:</span>
           <button class="btn-preset-mini ${state.savedBatchSize === 25 ? "active" : ""}" data-preset="25">25</button>
@@ -1577,7 +1776,7 @@ async function loadSavedPlaylistDetail(pid) {
       <div class="sb-right">
         <button class="btn-secondary-dark btn-sm" id="btn-pl-pause-queue" title="Pause or resume downloading queue">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-          <span id="lbl-pl-pause-text">Pause</span>
+          <span id="lbl-pl-pause-text">${state.isPaused ? "Resume" : "Pause"}</span>
         </button>
         <button class="btn-secondary-dark btn-sm" id="btn-pl-stop-queue" title="Stop downloading current queue">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
@@ -1606,7 +1805,7 @@ async function loadSavedPlaylistDetail(pid) {
           <option value="dur_asc">Duration (Shortest)</option>
           <option value="dur_desc">Duration (Longest)</option>
         </select>
-        <input type="text" id="saved-track-search" class="sidebar-search-wrap compact-search" placeholder="Search tracks..." autocomplete="off" />
+        <input type="text" id="saved-track-search" class="compact-search" placeholder="Search tracks..." autocomplete="off" />
       </div>
     </div>
 
@@ -1666,7 +1865,12 @@ async function loadSavedPlaylistDetail(pid) {
 
   // 5. Open Folder
   document.getElementById("btn-pl-open-folder")?.addEventListener("click", async () => {
-    await apiPost("/api/saved_playlists/action", { action: "open_folder" });
+    await apiPost("/api/saved_playlists/action", { action: "open_folder", playlist_id: pid });
+  });
+
+  // 5b. View Queue Button
+  document.getElementById("btn-pl-view-queue")?.addEventListener("click", () => {
+    switchView("queue");
   });
 
   // 6. Edit Playlist Details
@@ -1759,8 +1963,46 @@ async function loadSavedPlaylistDetail(pid) {
         });
       }
       loadSavedPlaylistDetail(pid);
+      pollBackendState();
     } else {
       showToast(r ? r.error : "Batch download failed.");
+    }
+  });
+
+  // 10b. Download All Missing Button
+  document.getElementById("btn-pl-download-all")?.addEventListener("click", async () => {
+    const r = await apiPost("/api/saved_playlists/action", {
+      action: "download_batch",
+      playlist_id: pid,
+      limit: unqueuedMissing || 99999,
+    });
+    if (r && r.ok) {
+      showToast(`Queued all ${r.queued || 0} missing track(s) for download.`);
+      if (r.queued_ids && r.queued_ids.length > 0) {
+        const qSet = new Set(r.queued_ids);
+        currentSavedTracks.forEach(t => {
+          if (qSet.has(t.spotify_id)) t.status = "queued";
+        });
+      }
+      loadSavedPlaylistDetail(pid);
+      pollBackendState();
+    } else {
+      showToast(r ? r.error : "Download all failed.");
+    }
+  });
+
+  // 10c. Retry Failed Button
+  document.getElementById("btn-pl-retry-failed")?.addEventListener("click", async () => {
+    const r = await apiPost("/api/saved_playlists/action", { action: "reset_status", playlist_id: pid });
+    if (r && r.ok) {
+      const r2 = await apiPost("/api/saved_playlists/action", {
+        action: "download_batch",
+        playlist_id: pid,
+        limit: 99999,
+      });
+      showToast(`Re-queued ${r2.queued || 0} tracks for download.`);
+      loadSavedPlaylistDetail(pid);
+      pollBackendState();
     }
   });
 
@@ -1783,23 +2025,28 @@ async function loadSavedPlaylistDetail(pid) {
         });
       }
       loadSavedPlaylistDetail(pid);
+      pollBackendState();
     }
   });
 
   // 12. Pause / Resume Download Queue
-  let isQueuePaused = false;
   document.getElementById("btn-pl-pause-queue")?.addEventListener("click", async () => {
-    isQueuePaused = !isQueuePaused;
-    await apiPost("/api/queue/action", { action: isQueuePaused ? "pause" : "resume" });
+    const nextPaused = !state.isPaused;
+    await apiPost("/api/queue/action", { action: nextPaused ? "pause" : "resume" });
+    state.isPaused = nextPaused;
     const lbl = document.getElementById("lbl-pl-pause-text");
-    if (lbl) lbl.textContent = isQueuePaused ? "Resume" : "Pause";
-    showToast(isQueuePaused ? "Paused download queue." : "Resumed download queue.");
+    if (lbl) lbl.textContent = nextPaused ? "Resume" : "Pause";
+    const btn = document.getElementById("btn-pl-pause-queue");
+    if (btn) btn.classList.toggle("btn-active", nextPaused);
+    showToast(nextPaused ? "Paused download queue." : "Resumed download queue.");
+    pollBackendState();
   });
 
   // 13. Stop Queue
   document.getElementById("btn-pl-stop-queue")?.addEventListener("click", async () => {
     await apiPost("/api/queue/action", { action: "stop_all" });
     showToast("Stopped downloads.");
+    pollBackendState();
   });
 
   // 14. Reset Status Button
@@ -1808,6 +2055,7 @@ async function loadSavedPlaylistDetail(pid) {
     if (r && r.ok) {
       showToast(`Reset ${r.reset || 0} queued/failed tracks back to pending.`);
       loadSavedPlaylistDetail(pid);
+      pollBackendState();
     }
   });
 
@@ -1844,8 +2092,9 @@ function renderFilteredSavedTracks() {
   const q = savedTrackQuery;
 
   let filtered = currentSavedTracks.filter(t => {
-    const st = (t.status || "").toLowerCase();
-    const isQueued = st === "queued" || st === "downloading";
+    const qSt = (t.queue_status || "").toLowerCase();
+    const rawSt = (t.status || "").toLowerCase();
+    const isQueued = qSt === "queued" || qSt === "downloading" || rawSt === "queued" || rawSt === "downloading";
     if (f === "downloaded" && !t.is_downloaded) return false;
     if (f === "missing" && (t.is_downloaded || isQueued)) return false;
     if (f === "queued" && !isQueued) return false;
@@ -1874,12 +2123,13 @@ function renderFilteredSavedTracks() {
     return;
   }
 
+  const prevScroll = wrap.scrollTop;
   const sliced = filtered.slice(0, savedTrackSliceLimit);
   const playableList = filtered.filter(t => t.is_downloaded && t.file_path);
   const allSelected = sliced.length > 0 && sliced.every(t => state.selectedSavedTrackIds.has(t.spotify_id));
 
   wrap.innerHTML = `
-    <div class="track-table-header" style="grid-template-columns: 32px 40px minmax(200px, 2fr) minmax(130px, 1.2fr) 120px 65px 115px;">
+    <div class="track-table-header saved-track-grid">
       <div class="col-check"><input type="checkbox" id="chk-saved-select-all" ${allSelected ? "checked" : ""} /></div>
       <div class="col-num">#</div>
       <div class="col-title">Title</div>
@@ -1893,17 +2143,42 @@ function renderFilteredSavedTracks() {
       const qbClass = qbLower.includes("flac") ? "flac" : qbLower.includes("opus") ? "opus" : "melobot";
       const isCur = state.currentTrack && t.file_path && t.file_path === state.currentTrack.file_path;
       const isChecked = state.selectedSavedTrackIds.has(t.spotify_id);
-      const isQueued = (t.status || "").toLowerCase() === "queued" || (t.status || "").toLowerCase() === "downloading";
+
+      const qSt = (t.queue_status || "").toLowerCase();
+      const rawSt = (t.status || "").toLowerCase();
+      const isDownloading = qSt === "downloading" || rawSt === "downloading";
+      const isQueued = !isDownloading && (qSt === "queued" || rawSt === "queued");
+      const isFailed = qSt === "failed" || rawSt === "failed";
+      const isDone = Boolean(t.is_downloaded || qSt === "completed");
 
       const numCell = isCur && state.isPlaying
         ? `<div class="eq-bars"><span></span><span></span><span></span><span></span></div>`
         : `<span class="row-idx-text">${t.index || (idx + 1)}</span><span class="row-play-icon">▶</span>`;
 
-      const badgeCls = t.is_downloaded ? qbClass : isQueued ? "queued" : "missing";
-      const badgeText = t.is_downloaded ? escapeHtml(t.quality_badge || "✓ Downloaded") : isQueued ? "⏳ Queued" : "Missing";
+      let badgeHtml = "";
+      if (isDone) {
+        badgeHtml = `<span class="q-badge ${qbClass}">${escapeHtml(t.quality_badge || "✓ Downloaded")}</span>`;
+      } else if (isDownloading) {
+        const prog = t.queue_progress || 0;
+        badgeHtml = `
+          <div style="width:100%;">
+            <div class="saved-track-prog-bar"><div class="saved-track-prog-fill" style="width:${prog}%"></div></div>
+            <div style="font-size:10px; color:#4ade80; display:flex; justify-content:space-between; margin-top:2px;">
+              <span>${escapeHtml(t.queue_speed_str || t.queue_stage || "Downloading")}</span>
+              <span>${prog}%</span>
+            </div>
+          </div>
+        `;
+      } else if (isQueued) {
+        badgeHtml = `<span class="q-badge queued">⏳ Queued</span>`;
+      } else if (isFailed) {
+        badgeHtml = `<span class="q-badge failed" title="${escapeHtml(t.queue_error || t.error_message || "Download failed")}">⚠️ Failed</span>`;
+      } else {
+        badgeHtml = `<span class="q-badge missing">Missing</span>`;
+      }
 
       return `
-        <div class="track-row ${isCur ? "playing" : ""}" style="grid-template-columns: 32px 40px minmax(200px, 2fr) minmax(130px, 1.2fr) 120px 65px 115px;" data-sidx="${idx}">
+        <div class="track-row saved-track-grid ${isCur ? "playing" : ""}" data-sidx="${idx}">
           <div class="col-check" onclick="event.stopPropagation();">
             <input type="checkbox" class="chk-track-row" data-sid="${escapeHtml(t.spotify_id || "")}" ${isChecked ? "checked" : ""} />
           </div>
@@ -1911,20 +2186,21 @@ function renderFilteredSavedTracks() {
           <div class="col-title">
             <img class="row-thumb" src="${coverUrl(t.cover_key || t.cover_url)}" loading="lazy" onerror="this.style.visibility='hidden'" />
             <div class="row-title-box">
-              <div class="row-title-text">${escapeHtml(t.title)}</div>
+              <div class="row-title-text" title="${escapeHtml(t.title)}">${escapeHtml(t.title)}</div>
               <div class="row-artist-text">${escapeHtml(t.artist)}</div>
             </div>
           </div>
           <div class="col-album">${escapeHtml(t.album || "—")}</div>
           <div class="col-quality">
-            <span class="q-badge ${badgeCls}">
-              ${badgeText}
-            </span>
+            ${badgeHtml}
           </div>
           <div class="col-dur">${t.duration_str || "--:--"}</div>
           <div class="col-actions" style="display:flex; justify-content:flex-end; gap:4px;" onclick="event.stopPropagation();">
-            ${!t.is_downloaded && !isQueued ? `<button class="mini-row-btn btn-dl-single" data-sid="${escapeHtml(t.spotify_id)}" title="Download track">⤓</button>` : ""}
-            ${t.is_downloaded ? `<button class="mini-row-btn btn-play-single" data-sidx="${idx}" title="Play track">▶</button>` : ""}
+            ${(!isDone && !isDownloading && !isQueued) ? `<button class="mini-row-btn btn-dl-single" data-sid="${escapeHtml(t.spotify_id)}" title="Download track">⤓</button>` : ""}
+            ${(isDownloading || isQueued) ? `<button class="mini-row-btn btn-cancel-single" data-sid="${escapeHtml(t.spotify_id)}" data-qid="${escapeHtml(t.queue_item_id || "")}" title="Cancel download">✕</button>` : ""}
+            ${isDone ? `<button class="mini-row-btn btn-play-single" data-sidx="${idx}" title="Play track">▶</button>` : ""}
+            ${isDone && t.file_path ? `<button class="mini-row-btn btn-folder-single" data-path="${escapeHtml(t.file_path)}" title="Reveal in Windows Explorer">📂</button>` : ""}
+            ${isDone ? `<button class="mini-row-btn btn-redl-single" data-sid="${escapeHtml(t.spotify_id)}" title="Re-download track">↻</button>` : ""}
             <button class="mini-row-btn btn-edit-single" data-sid="${escapeHtml(t.spotify_id)}" title="Edit metadata">✎</button>
             <button class="mini-row-btn btn-del-single" data-sid="${escapeHtml(t.spotify_id)}" title="Remove from playlist">✕</button>
           </div>
@@ -1937,6 +2213,8 @@ function renderFilteredSavedTracks() {
       </div>
     ` : ""}
   `;
+
+  wrap.scrollTop = prevScroll;
 
   // -------------------------------------------------------------
   // Wire Table Interactions
@@ -1984,7 +2262,7 @@ function renderFilteredSavedTracks() {
         const pIdx = playableList.findIndex(x => x.spotify_id === track.spotify_id || x.file_path === track.file_path);
         playTrackFromList(playableList, pIdx >= 0 ? pIdx : 0);
       } else {
-        showToast(`"${track.title}" is missing. Click the ⤓ button on the right to download it.`);
+        showToast(`"${track.title}" is missing. Click ⤓ on the right to download it.`);
       }
     });
   });
@@ -2004,8 +2282,71 @@ function renderFilteredSavedTracks() {
         const tr = currentSavedTracks.find(t => t.spotify_id === sid);
         if (tr) tr.status = "queued";
         renderFilteredSavedTracks();
+        pollBackendState();
       } else {
         showToast("Failed to queue track.");
+      }
+    });
+  });
+
+  // 4b. Cancel Single Download
+  wrap.querySelectorAll(".btn-cancel-single").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const sid = btn.getAttribute("data-sid");
+      const qid = btn.getAttribute("data-qid");
+      if (qid) {
+        await apiPost("/api/queue/action", { action: "remove", item_id: qid });
+      }
+      if (sid && state.selectedSavedPlaylistId) {
+        await apiPost("/api/saved_playlists/action", {
+          action: "cancel_track",
+          playlist_id: state.selectedSavedPlaylistId,
+          spotify_id: sid,
+        });
+      }
+      showToast("Download cancelled.");
+      const tr = currentSavedTracks.find(t => t.spotify_id === sid);
+      if (tr) {
+        tr.status = "pending";
+        delete tr.queue_status;
+        delete tr.queue_progress;
+      }
+      renderFilteredSavedTracks();
+      pollBackendState();
+    });
+  });
+
+  // 4c. Reveal in Explorer
+  wrap.querySelectorAll(".btn-folder-single").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const p = btn.getAttribute("data-path");
+      if (p) {
+        await apiPost("/api/shell/open", { path: p });
+      }
+    });
+  });
+
+  // 4d. Re-download Track
+  wrap.querySelectorAll(".btn-redl-single").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const sid = btn.getAttribute("data-sid");
+      if (!sid || !state.selectedSavedPlaylistId) return;
+      const r = await apiPost("/api/saved_playlists/action", {
+        action: "redownload",
+        playlist_id: state.selectedSavedPlaylistId,
+        spotify_ids: [sid],
+      });
+      if (r && r.ok) {
+        showToast("Re-queued track for download.");
+        const tr = currentSavedTracks.find(t => t.spotify_id === sid);
+        if (tr) {
+          tr.status = "queued";
+          tr.is_downloaded = 0;
+        }
+        renderFilteredSavedTracks();
+        pollBackendState();
+      } else {
+        showToast(r ? r.error : "Failed to re-download track.");
       }
     });
   });
@@ -2805,7 +3146,10 @@ function renderBatchTagTable() {
   if (!tbody) return;
 
   const q = (state.batchTag.filterQuery || "").toLowerCase();
-  const tracks = state.libraryTracks.filter(t => {
+  const allTracks = (state.library && Array.isArray(state.library.tracks) && state.library.tracks.length)
+    ? state.library.tracks
+    : (Array.isArray(state.libraryTracks) ? state.libraryTracks : []);
+  const tracks = allTracks.filter(t => {
     if (!q) return true;
     return (t.title && t.title.toLowerCase().includes(q))
       || (t.artist && t.artist.toLowerCase().includes(q))
@@ -2865,6 +3209,12 @@ function switchView(viewName) {
   if (viewName === "queue") renderQueueList();
   if (viewName === "saved") loadSavedPlaylists();
   if (viewName === "settings") loadSettings();
+  if (viewName === "tools") {
+    const activeTab = document.querySelector("#tools-tabs .seg-tab.active")?.dataset.tooltab;
+    if (activeTab === "batchtag") {
+      renderBatchTagTable();
+    }
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -3031,20 +3381,78 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Queue View Actions
-  document.getElementById("btn-queue-download").addEventListener("click", async () => {
-    const url = document.getElementById("queue-url-input").value.trim();
-    if (!url) return;
-    const r = await apiPost("/api/queue/add", { url, save_playlist: false });
-    showToast(r.message || r.error || "Resolving...");
-    document.getElementById("queue-url-input").value = "";
+  const queueUrlInput = document.getElementById("queue-url-input");
+  const handleQueueDownload = async (batchLimit = null, downloadNow = true) => {
+    const url = queueUrlInput ? queueUrlInput.value.trim() : "";
+    if (!url) {
+      showToast("Please paste a Spotify track, album, or playlist URL first.");
+      return;
+    }
+    const payload = {
+      url: url,
+      save_playlist: true,
+      download_now: downloadNow,
+    };
+    if (batchLimit !== null) {
+      payload.batch_limit = batchLimit;
+    }
+    showToast(downloadNow ? "Resolving and queueing downloads..." : "Saving playlist offline...");
+    const r = await apiPost("/api/queue/add", payload);
+    if (r) {
+      showToast(r.message || r.error || "Resolving...");
+      if (r.ok && r.playlist_id) {
+        const resBadge = document.getElementById("queue-resolve-status-badge");
+        const resTxt = document.getElementById("queue-resolve-status-txt");
+        const btnViewSaved = document.getElementById("btn-queue-view-saved");
+        if (resBadge) resBadge.classList.remove("hidden");
+        if (resTxt) resTxt.textContent = `✓ ${r.playlist_name || "Playlist"} (${r.count || 0} tracks)`;
+        if (btnViewSaved) {
+          btnViewSaved.setAttribute("data-pid", r.playlist_id);
+          btnViewSaved.classList.remove("hidden");
+        }
+        loadSavedPlaylists();
+      }
+    }
+    if (queueUrlInput) queueUrlInput.value = "";
+    pollBackendState();
+  };
+
+  document.getElementById("btn-queue-download")?.addEventListener("click", () => handleQueueDownload(null, true));
+  document.getElementById("btn-queue-batch")?.addEventListener("click", () => handleQueueDownload(state.queueBatchSize || 50, true));
+  document.getElementById("btn-queue-save-pl")?.addEventListener("click", () => handleQueueDownload(null, false));
+
+  queueUrlInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleQueueDownload(null, true);
+    }
   });
 
-  document.getElementById("btn-queue-save-pl").addEventListener("click", async () => {
-    const url = document.getElementById("queue-url-input").value.trim();
-    if (!url) return;
-    const r = await apiPost("/api/queue/add", { url, save_playlist: true });
-    showToast(r.message || r.error || "Saving playlist...");
-    document.getElementById("queue-url-input").value = "";
+  // Batch Presets in Queue View
+  document.querySelectorAll("[data-qpreset]").forEach(b => {
+    b.addEventListener("click", () => {
+      const val = parseInt(b.dataset.qpreset) || 50;
+      state.queueBatchSize = val;
+      const bInput = document.getElementById("input-queue-batch-size");
+      const bLbl = document.getElementById("lbl-queue-batch-size");
+      if (bInput) bInput.value = val;
+      if (bLbl) bLbl.textContent = val;
+      document.querySelectorAll("[data-qpreset]").forEach(x => x.classList.toggle("active", x === b));
+    });
+  });
+
+  document.getElementById("input-queue-batch-size")?.addEventListener("input", (e) => {
+    const val = Math.max(1, parseInt(e.target.value) || 1);
+    state.queueBatchSize = val;
+    const bLbl = document.getElementById("lbl-queue-batch-size");
+    if (bLbl) bLbl.textContent = val;
+    document.querySelectorAll("[data-qpreset]").forEach(x => x.classList.remove("active"));
+  });
+
+  // Search Queue input
+  document.getElementById("queue-search-input")?.addEventListener("input", (e) => {
+    state.queueSearchQuery = e.target.value;
+    renderQueueList();
   });
 
   document.querySelectorAll("#queue-filter-tabs .seg-tab").forEach(btn => {
@@ -3055,14 +3463,40 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  document.getElementById("btn-queue-pause").addEventListener("click", () => {
+  document.getElementById("btn-queue-pause")?.addEventListener("click", () => {
     apiPost("/api/queue/action", { action: state.isPaused ? "resume" : "pause" }).then(pollBackendState);
   });
-  document.getElementById("btn-queue-retry").addEventListener("click", () => {
+  document.getElementById("btn-queue-stop")?.addEventListener("click", () => {
+    apiPost("/api/queue/action", { action: "stop_all" }).then(() => {
+      showToast("Stopped all active downloads.");
+      pollBackendState();
+    });
+  });
+  document.getElementById("btn-queue-retry")?.addEventListener("click", () => {
     apiPost("/api/queue/action", { action: "retry_failed" }).then(pollBackendState);
   });
-  document.getElementById("btn-queue-clear").addEventListener("click", () => {
+  document.getElementById("btn-queue-clear")?.addEventListener("click", () => {
     apiPost("/api/queue/action", { action: "clear_completed" }).then(pollBackendState);
+  });
+  document.getElementById("btn-queue-cancel-all")?.addEventListener("click", async () => {
+    if (state.queue.length > 0 && confirm("Cancel all queued and active downloads?")) {
+      await apiPost("/api/queue/action", { action: "clear_all" });
+      showToast("Cleared and cancelled all downloads in queue.");
+      pollBackendState();
+      if (state.selectedSavedPlaylistId) {
+        loadSavedPlaylistDetail(state.selectedSavedPlaylistId);
+      }
+    }
+  });
+  document.getElementById("btn-queue-open-folder")?.addEventListener("click", () => {
+    apiPost("/api/saved_playlists/action", { action: "open_folder" });
+  });
+  document.getElementById("btn-queue-view-saved")?.addEventListener("click", (e) => {
+    const pid = e.currentTarget.getAttribute("data-pid");
+    switchView("saved");
+    if (pid) {
+      loadSavedPlaylistDetail(pid);
+    }
   });
 
   // Save Spotify Playlist Modal Wiring
@@ -3098,7 +3532,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (confirmBtn) confirmBtn.disabled = true;
 
     try {
-      await apiPost("/api/queue/add", { url: url, save_playlist: true });
+      const addRes = await apiPost("/api/queue/add", { url: url, save_playlist: true, download_now: false });
       showToast("Resolving and saving Spotify playlist offline...");
 
       // Poll until resolution finishes
@@ -3108,17 +3542,20 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollTimer);
           closeSavePlaylistModal();
           if (confirmBtn) confirmBtn.disabled = false;
-          if (st.last_resolve_result && st.last_resolve_result.ok) {
-            showToast(st.last_resolve_result.message || "Playlist saved successfully!");
+          const lr = st.last_resolve || st.last_resolve_result || addRes;
+          if (lr && lr.ok !== false) {
+            showToast(lr.message || "Playlist saved successfully!");
             await loadSavedPlaylists();
-            if (state.savedPlaylists.length > 0) {
-              loadSavedPlaylistDetail(state.savedPlaylists[state.savedPlaylists.length - 1].id);
+            const targetPid = lr.playlist_id || (state.savedPlaylists.length > 0 ? state.savedPlaylists[state.savedPlaylists.length - 1].id : null);
+            switchView("saved");
+            if (targetPid) {
+              loadSavedPlaylistDetail(targetPid);
             }
           } else {
-            showToast((st.last_resolve_result && st.last_resolve_result.message) || "Failed to save playlist.");
+            showToast((lr && lr.message) || (lr && lr.error) || "Failed to save playlist.");
           }
         }
-      }, 800);
+      }, 700);
     } catch (err) {
       if (resolving) resolving.classList.add("hidden");
       if (confirmBtn) confirmBtn.disabled = false;
@@ -3145,6 +3582,20 @@ document.addEventListener("DOMContentLoaded", () => {
   // Edit Playlist Modal Wiring
   document.getElementById("btn-close-edit-modal")?.addEventListener("click", closeEditPlaylistModal);
   document.getElementById("btn-cancel-edit-playlist")?.addEventListener("click", closeEditPlaylistModal);
+
+  // File Picker for Playlist Cover
+  document.getElementById("btn-browse-pl-cover")?.addEventListener("click", async () => {
+    const res = await apiPost("/api/dialog/file", {
+      title: "Select Playlist Cover Image",
+      filter: "Image Files (*.jpg *.jpeg *.png *.webp);;All Files (*.*)",
+    });
+    if (res && res.ok && res.path) {
+      const coverInput = document.getElementById("input-edit-pl-cover");
+      if (coverInput) coverInput.value = res.path;
+      showToast("Cover image selected.");
+    }
+  });
+
   document.getElementById("btn-confirm-edit-playlist")?.addEventListener("click", async () => {
     const pid = document.getElementById("edit-pl-id").value;
     const name = document.getElementById("input-edit-pl-name").value.trim();
@@ -3208,30 +3659,39 @@ document.addEventListener("DOMContentLoaded", () => {
   initSidebarResizer();
   initSavedResizer();
 
-  document.getElementById("btn-run-spectrum-batch").addEventListener("click", async () => {
+  let spectrumBatchTimer = null;
+  document.getElementById("btn-run-spectrum-batch")?.addEventListener("click", async () => {
+    if (spectrumBatchTimer) {
+      clearInterval(spectrumBatchTimer);
+      spectrumBatchTimer = null;
+    }
     await apiPost("/api/tools/spectrum/batch", { limit: 60 });
     const statusBox = document.getElementById("spectrum-batch-status");
     const tableWrap = document.getElementById("spectrum-results-table");
-    statusBox.classList.remove("hidden");
+    if (statusBox) statusBox.classList.remove("hidden");
 
-    const timer = setInterval(async () => {
+    spectrumBatchTimer = setInterval(async () => {
       const st = await apiGet("/api/tools/spectrum/status");
-      statusBox.textContent = `Auditing library spectrum: ${st.progress} / ${st.total} tracks analyzed...`;
-      tableWrap.innerHTML = (st.results || []).map(r => `
-        <div class="track-row" style="grid-template-columns: 1fr 120px 130px 140px;">
-          <div class="row-title-text">${escapeHtml(r.title)} <span style="color:var(--text-secondary); font-weight:400;">— ${escapeHtml(r.artist)}</span></div>
-          <div><span class="q-badge melobot">${escapeHtml(r.quality_badge)}</span></div>
-          <div style="font-family:var(--font-mono);">${r.cutoff_khz} kHz</div>
-          <div>
-            <span class="q-badge ${r.verdict === "authentic" ? "melobot" : "flac"}">
-              ${r.verdict === "authentic" ? "✓ Authentic" : `⚠ ${escapeHtml(r.verdict)}`}
-            </span>
+      if (!st || !st.ok) return;
+      if (statusBox) statusBox.textContent = `Auditing library spectrum: ${st.progress || 0} / ${st.total || 0} tracks analyzed...`;
+      if (tableWrap) {
+        tableWrap.innerHTML = (st.results || []).map(r => `
+          <div class="track-row" style="grid-template-columns: 1fr 120px 130px 140px;">
+            <div class="row-title-text">${escapeHtml(r.title)} <span style="color:var(--text-secondary); font-weight:400;">— ${escapeHtml(r.artist)}</span></div>
+            <div><span class="q-badge melobot">${escapeHtml(r.quality_badge)}</span></div>
+            <div style="font-family:var(--font-mono);">${r.cutoff_khz} kHz</div>
+            <div>
+              <span class="q-badge ${r.verdict === "authentic" ? "melobot" : "flac"}">
+                ${r.verdict === "authentic" ? "✓ Authentic" : `⚠ ${escapeHtml(r.verdict)}`}
+              </span>
+            </div>
           </div>
-        </div>
-      `).join("");
+        `).join("");
+      }
       if (!st.scanning) {
-        clearInterval(timer);
-        statusBox.textContent = `Audit complete: ${st.results.length} tracks analyzed.`;
+        clearInterval(spectrumBatchTimer);
+        spectrumBatchTimer = null;
+        if (statusBox) statusBox.textContent = `Audit complete: ${(st.results || []).length} tracks analyzed.`;
       }
     }, 900);
   });
@@ -3914,7 +4374,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("btn-batchtag-select-all")?.addEventListener("click", () => {
-    state.libraryTracks.forEach(t => state.batchTag.selectedPaths.add(t.file_path));
+    const allTracks = (state.library && Array.isArray(state.library.tracks) && state.library.tracks.length)
+      ? state.library.tracks
+      : (Array.isArray(state.libraryTracks) ? state.libraryTracks : []);
+    allTracks.forEach(t => state.batchTag.selectedPaths.add(t.file_path));
     renderBatchTagTable();
   });
 
@@ -3925,8 +4388,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("btn-batchtag-select-missing-art")?.addEventListener("click", () => {
     state.batchTag.selectedPaths.clear();
-    state.libraryTracks.forEach(t => {
-      if (!t.cover_key || t.cover_key === "default") {
+    const allTracks = (state.library && Array.isArray(state.library.tracks) && state.library.tracks.length)
+      ? state.library.tracks
+      : (Array.isArray(state.libraryTracks) ? state.libraryTracks : []);
+    allTracks.forEach(t => {
+      if (!t.cover_key || t.cover_key === "default" || t.cover_key.includes("placeholder")) {
         state.batchTag.selectedPaths.add(t.file_path);
       }
     });

@@ -453,11 +453,17 @@ class DownloadQueueManager:
         self._persist_queue()
 
     def remove_track(self, track_id: str):
-        """Cancels track if running and removes it completely from queue tracking."""
+        """Cancels track if running and removes it completely from queue tracking, reverting pending status in archive."""
         with self._lock:
             if track_id in self._items:
-                self._items[track_id].cancelled = True
+                item = self._items[track_id]
+                item.cancelled = True
                 del self._items[track_id]
+                if item.status != "Completed":
+                    try:
+                        self.archive.update_saved_track_status_by_spotify_id(track_id, "pending")
+                    except Exception as e_arc:
+                        logger.debug(f"Could not update archive status on remove: {e_arc}")
         logger.info(f"Removed track {track_id} from queue manager.")
         self._persist_queue()
 
@@ -466,8 +472,14 @@ class DownloadQueueManager:
         with self._lock:
             for tid in track_ids:
                 if tid in self._items:
-                    self._items[tid].cancelled = True
+                    item = self._items[tid]
+                    item.cancelled = True
                     del self._items[tid]
+                    if item.status != "Completed":
+                        try:
+                            self.archive.update_saved_track_status_by_spotify_id(tid, "pending")
+                        except Exception as e_arc:
+                            logger.debug(f"Could not update archive status on bulk remove: {e_arc}")
         logger.info(f"Removed {len(track_ids)} tracks from queue manager.")
         self._persist_queue()
 
@@ -477,6 +489,31 @@ class DownloadQueueManager:
             for tid in completed_ids:
                 del self._items[tid]
         logger.info(f"Cleared {len(completed_ids)} completed items from tracker.")
+        self._persist_queue()
+
+    def clear_all(self):
+        """Cancels all active downloads, drains queue, and resets pending/queued items in archive."""
+        with self._lock:
+            while not self._queue.empty():
+                try:
+                    it = self._queue.get_nowait()
+                    it.cancelled = True
+                    self._queue.task_done()
+                except Exception:
+                    break
+            track_ids = list(self._items.keys())
+            for tid in track_ids:
+                item = self._items[tid]
+                item.cancelled = True
+                if item.status != "Completed":
+                    try:
+                        self.archive.update_saved_track_status_by_spotify_id(tid, "pending")
+                    except Exception as e_arc:
+                        logger.debug(f"Could not update archive status on clear_all: {e_arc}")
+                del self._items[tid]
+            self._active_track_ids.clear()
+        logger.info("Cleared all items from queue manager.")
+        self._persist_queue()
 
     def get_items(self) -> List[QueueItem]:
         with self._lock:

@@ -23,6 +23,7 @@ class WebStudioView(QWidget):
     """
 
     _sig_request_folder = pyqtSignal(str)
+    _sig_request_file = pyqtSignal(str, str)
     _sig_toggle_mini_player = pyqtSignal()
     _sig_show_recovery = pyqtSignal()
 
@@ -43,6 +44,10 @@ class WebStudioView(QWidget):
         self._chosen_folder = ""
         self._sig_request_folder.connect(self._on_main_thread_folder_dialog)
 
+        self._file_event = threading.Event()
+        self._chosen_file = ""
+        self._sig_request_file.connect(self._on_main_thread_file_dialog)
+
         # Resolve web_ui directory path
         web_root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web_ui")
         if not os.path.isdir(web_root):
@@ -56,6 +61,7 @@ class WebStudioView(QWidget):
             archive_manager=self.archive,
             web_root=web_root,
             folder_picker_cb=self._pick_folder_threadsafe,
+            file_picker_cb=self._pick_file_threadsafe,
             mini_player_toggle_cb=self._sig_toggle_mini_player.emit,
             recovery_toggle_cb=self._sig_show_recovery.emit,
             musilon_engine=musilon_engine,
@@ -113,6 +119,28 @@ class WebStudioView(QWidget):
             self._chosen_folder = ""
         finally:
             self._folder_event.set()
+
+    def _pick_file_threadsafe(self, title: str = "", filter_str: str = "") -> str:
+        self._chosen_file = ""
+        self._file_event.clear()
+        self._sig_request_file.emit(title or "Select File", filter_str or "Image Files (*.jpg *.jpeg *.png *.webp);;All Files (*.*)")
+        self._file_event.wait(timeout=60.0)
+        return self._chosen_file
+
+    def _on_main_thread_file_dialog(self, title: str, filter_str: str):
+        try:
+            chosen, _ = QFileDialog.getOpenFileName(
+                self.window() or self,
+                title or "Select File",
+                "",
+                filter_str or "Image Files (*.jpg *.jpeg *.png *.webp);;All Files (*.*)",
+            )
+            self._chosen_file = chosen or ""
+        except Exception as e:
+            logger.debug(f"File dialog error: {e}")
+            self._chosen_file = ""
+        finally:
+            self._file_event.set()
 
     def _on_toggle_mini_player(self):
         if hasattr(self, "floating_mini_player") and self.floating_mini_player:

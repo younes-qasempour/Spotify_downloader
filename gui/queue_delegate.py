@@ -3,7 +3,7 @@ import os
 import re
 import base64
 import threading
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 import requests
 from PyQt6.QtCore import Qt, QRectF, QSize, QPointF, QModelIndex, QTimer, QObject, pyqtSignal
 from PyQt6.QtGui import (

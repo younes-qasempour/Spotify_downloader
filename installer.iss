@@ -2,7 +2,7 @@
 ; Production-Grade Per-User Windows Installer
 
 #define MyAppName "Flacify"
-#define MyAppVersion "1.7.2"
+#define MyAppVersion "1.7.3"
 #define MyAppPublisher "Flacify Project"
 #define MyAppExeName "Flacify.exe"
 #define MyAppMutex "FlacifyMutex"
@@ -24,7 +24,7 @@ AllowNoIcons=yes
 
 ; Output Configuration
 OutputDir=dist\installer
-OutputBaseFilename=Flacify_Setup_v1.7.2
+OutputBaseFilename=Flacify_Setup_v1.7.3
 SetupIconFile=assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 

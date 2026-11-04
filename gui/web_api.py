@@ -23,6 +23,14 @@ from core.paths import get_cache_dir, get_covers_dir
 from core.queue_manager import DownloadQueueManager, QueueItem
 from core.spotify_client import SpotifyClient, TrackMetadata
 from core.tagger import AudioTagger
+try:
+    from mutagen.flac import FLAC
+    from mutagen.id3 import ID3
+    from mutagen.mp4 import MP4
+except ImportError:
+    FLAC = None
+    ID3 = None
+    MP4 = None
 from core.utils import (
     EQ_FREQUENCIES,
     EQ_PRESETS,
@@ -78,6 +86,7 @@ class WebBackendState:
         queue_manager: DownloadQueueManager,
         archive_manager: ArchiveManager,
         folder_picker_cb: Optional[Callable[[str], str]] = None,
+        file_picker_cb: Optional[Callable[[str, str], str]] = None,
         on_track_play_cb: Optional[Callable[[str, str, str], None]] = None,
         mini_player_toggle_cb: Optional[Callable[[], None]] = None,
         recovery_toggle_cb: Optional[Callable[[], None]] = None,
@@ -87,6 +96,7 @@ class WebBackendState:
         self.qm = queue_manager
         self.archive = archive_manager
         self.folder_picker_cb = folder_picker_cb
+        self.file_picker_cb = file_picker_cb
         self.on_track_play_cb = on_track_play_cb
         self.mini_player_toggle_cb = mini_player_toggle_cb
         self.recovery_toggle_cb = recovery_toggle_cb
@@ -738,6 +748,8 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 return self._handle_shell_open(body)
             elif path == "/api/dialog/folder":
                 return self._handle_folder_dialog(body)
+            elif path == "/api/dialog/file":
+                return self._handle_file_dialog(body)
             elif path == "/api/player/notify":
                 return self._handle_player_notify(body)
             elif path == "/api/window/mini_player/toggle":
@@ -829,12 +841,15 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             "resolving_percent": res_pct,
             "resolving_playlist_id": res_pid,
             "last_resolve": last_res,
+            "last_resolve_result": last_res,
             "watched_playlists_count": len(watched),
         })
 
     def _handle_queue_add(self, body: Dict[str, Any]):
         url = (body.get("url") or "").strip()
         save_to_playlists = bool(body.get("save_playlist", False))
+        batch_limit = int(body.get("batch_limit") or 0)
+        download_now = bool(body.get("download_now", not save_to_playlists))
         if not url:
             return self._send_json({"ok": False, "error": "Please enter a Spotify URL or search query."}, status=400)
 
@@ -881,10 +896,20 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                         self.state.last_resolve_result = {"ok": False, "message": "No tracks found for that URL."}
                     return
 
-                if save_to_playlists:
-                    coll_name = getattr(tracks[0], "collection_name", "") or "Saved Playlist"
-                    coll_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
-                    self.state.archive.save_playlist(coll_name, url, coll_cover, tracks)
+                is_collection = len(tracks) > 1 or getattr(tracks[0], "collection_type", "track") in ("playlist", "album", "collection")
+                coll_name = getattr(tracks[0], "collection_name", "") or "Saved Playlist"
+                coll_cover = getattr(tracks[0], "collection_cover_url", "") or tracks[0].cover_url or ""
+
+                saved_info = None
+                if is_collection or save_to_playlists:
+                    try:
+                        saved_info = self.state.archive.save_playlist(coll_name, url, coll_cover, tracks)
+                    except Exception as e_save:
+                        logger.warning(f"Could not auto-save playlist record: {e_save}")
+
+                playlist_id = (saved_info.get("id") if saved_info else "") or ""
+
+                if not download_now and batch_limit == 0:
                     with self.state.resolving_lock:
                         self.state.is_resolving = False
                         self.state.resolving_message = ""
@@ -896,12 +921,26 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                             "ok": True,
                             "message": f"Saved '{coll_name}' ({len(tracks)} tracks) to Playlists.",
                             "count": len(tracks),
+                            "playlist_id": playlist_id,
+                            "playlist_name": coll_name,
+                            "is_collection": is_collection,
                         }
+                    self.state.invalidate_library_cache()
                     return
 
-                self.state.qm.enqueue(tracks)
+                tracks_to_queue = tracks[:batch_limit] if (batch_limit > 0 and len(tracks) > batch_limit) else tracks
+                if playlist_id:
+                    q_ids = [t.id for t in tracks_to_queue if t.id]
+                    self.state.archive.mark_saved_tracks_queued(playlist_id, q_ids)
+
+                self.state.qm.enqueue(tracks_to_queue)
                 self.state.qm.start_all()
-                added = len(tracks)
+                added = len(tracks_to_queue)
+
+                msg = f"Queued {added} track(s) for download."
+                if is_collection:
+                    msg = f"Queued {added} track(s) from '{coll_name}'. Playlist saved ({len(tracks)} total)."
+
                 with self.state.resolving_lock:
                     self.state.is_resolving = False
                     self.state.resolving_message = ""
@@ -911,8 +950,12 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                     self.state.resolving_playlist_id = ""
                     self.state.last_resolve_result = {
                         "ok": True,
-                        "message": f"Queued {added} track(s) for download",
-                        "count": added,
+                        "message": msg,
+                        "count": len(tracks),
+                        "queued_count": added,
+                        "playlist_id": playlist_id,
+                        "playlist_name": coll_name,
+                        "is_collection": is_collection,
                     }
                 self.state.invalidate_library_cache()
             except Exception as e:
@@ -938,14 +981,22 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             qm.pause()
         elif action == "resume":
             qm.resume()
+        elif action == "start_all":
+            qm.start_all()
         elif action == "retry_failed":
             qm.retry_failed()
         elif action == "clear_completed":
             qm.clear_completed()
+        elif action in ("clear_all", "cancel_all"):
+            qm.clear_all()
         elif action == "stop_all":
             qm.stop()
         elif action == "remove" and item_id:
             qm.remove_track(item_id)
+        elif action == "remove_batch":
+            item_ids = body.get("item_ids") or []
+            if item_ids:
+                qm.remove_tracks(item_ids)
         elif action == "retry_item" and item_id:
             qm.retry_track(item_id)
         else:
@@ -1039,17 +1090,19 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         if not playlist_id:
             return self._send_json({"ok": False, "error": "Missing playlist id"}, status=400)
 
-        with self.state.lib_lock:
-            cached_entry = getattr(self.state, "playlist_tracks_cache", {}).get(playlist_id)
-            if cached_entry:
-                cache_time, cached_payload = cached_entry
-                if time.time() - cache_time < 30.0:
-                    return self._send_json(cached_payload)
-
         pl = self.state.archive.get_saved_playlist(playlist_id)
         if pl and not pl.get("local_cover"):
             pl["local_cover"] = resolve_collection_cover(pl["name"]) or pl.get("cover_url") or ""
         pl_cover = (pl.get("local_cover") or pl.get("cover_url") or "") if pl else ""
+
+        # Map active items currently tracked in DownloadQueueManager for live progress syncing
+        qm_items = {}
+        try:
+            for it in self.state.qm.get_items():
+                if it and it.track and it.track.id:
+                    qm_items[it.track.id] = it
+        except Exception:
+            pass
 
         tracks = self.state.archive.get_saved_playlist_tracks(playlist_id)
         out_tracks = []
@@ -1066,10 +1119,19 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             qb = tr.get("quality_badge") or tr.get("quality") or ("Downloaded" if is_dl else "Missing")
             t_cov = tr.get("cover_url") or pl_cover
             cov_key = fp if is_dl else t_cov
+            sid = tr.get("spotify_id", "")
+            q_it = qm_items.get(sid)
+
+            if is_dl:
+                status_str = "downloaded"
+            elif q_it:
+                status_str = q_it.status.lower()
+            else:
+                status_str = (tr.get("status") or "pending").lower()
 
             out_tracks.append({
                 "index": idx,
-                "spotify_id": tr.get("spotify_id", ""),
+                "spotify_id": sid,
                 "title": tr.get("title", ""),
                 "artist": tr.get("artist", ""),
                 "album": tr.get("album", ""),
@@ -1079,19 +1141,18 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 "cover_key": cov_key,
                 "genre": tr.get("genre", ""),
                 "is_downloaded": is_dl,
-                "status": "downloaded" if is_dl else (tr.get("status") or "pending"),
+                "status": status_str,
                 "file_path": fp if is_dl else "",
                 "local_path": fp if is_dl else "",
                 "quality_badge": qb,
                 "quality": qb,
+                "queue_progress": round(float(q_it.progress_percent or 0.0), 1) if q_it else 0.0,
+                "queue_speed_str": q_it.speed_str or "" if q_it else "",
+                "queue_stage": getattr(q_it, "stage", "") or (q_it.status if q_it else ""),
+                "queue_error": q_it.error_message or "" if q_it else "",
             })
 
         payload = {"ok": True, "playlist": pl, "tracks": out_tracks}
-        with self.state.lib_lock:
-            if not hasattr(self.state, "playlist_tracks_cache"):
-                self.state.playlist_tracks_cache = {}
-            self.state.playlist_tracks_cache[playlist_id] = (time.time(), payload)
-
         self._send_json(payload)
 
     def _handle_saved_playlists_action(self, body: Dict[str, Any]):
@@ -1181,6 +1242,7 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 # 2. Enqueue into DownloadQueueManager and start downloading
                 self.state.qm.enqueue(to_queue)
                 self.state.qm.start()
+                self.state.invalidate_library_cache()
 
             return self._send_json({"ok": True, "queued": len(to_queue), "limit": limit, "queued_ids": queued_ids})
 
@@ -1201,11 +1263,58 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
 
         elif action == "reset_status" and pid:
             count = self.state.archive.reset_saved_playlist_tracks_status(pid)
+            self.state.invalidate_library_cache()
             return self._send_json({"ok": True, "reset": count})
+
+        elif action == "redownload" and pid:
+            sid = (body.get("spotify_id") or "").strip()
+            if not sid:
+                return self._send_json({"ok": False, "error": "Missing spotify_id"}, status=400)
+            pl = self.state.archive.get_saved_playlist(pid)
+            tracks = self.state.archive.get_saved_playlist_tracks(pid)
+            target = next((t for t in tracks if t.get("spotify_id") == sid), None)
+            if not target:
+                return self._send_json({"ok": False, "error": "Track not found in playlist"}, status=404)
+            
+            meta_json = target.get("metadata_json")
+            tm = None
+            if meta_json:
+                try:
+                    d = json.loads(meta_json)
+                    tm = TrackMetadata(**{k: v for k, v in d.items() if k in TrackMetadata.__dataclass_fields__})
+                except Exception:
+                    tm = None
+            
+            if tm is None:
+                tm = TrackMetadata(
+                    id=target.get("spotify_id", ""),
+                    title=target.get("title", "Unknown"),
+                    artists=[a.strip() for a in (target.get("artist") or "Unknown").split(",") if a.strip()],
+                    album=target.get("album", ""),
+                    duration_ms=int(target.get("duration_ms") or 0),
+                    cover_url=target.get("cover_url", ""),
+                    collection_name=pl["name"] if pl else "Saved Playlist",
+                    collection_type="playlist",
+                )
+            tm.skip_archive = True
+            self.state.archive.mark_saved_tracks_queued(pid, [sid])
+            self.state.qm.enqueue([tm])
+            self.state.qm.start()
+            self.state.invalidate_library_cache()
+            return self._send_json({"ok": True, "message": f"Queued '{tm.title}' for re-download."})
+
+        elif action == "cancel_track" and pid:
+            sid = (body.get("spotify_id") or "").strip()
+            if sid:
+                self.state.qm.remove_track(sid)
+                self.state.archive.update_saved_track_status_by_spotify_id(sid, "pending")
+                self.state.invalidate_library_cache()
+            return self._send_json({"ok": True})
 
         elif action == "delete_track" and pid:
             sid = (body.get("spotify_id") or "").strip()
             if sid:
+                self.state.qm.remove_track(sid)
                 self.state.archive.delete_saved_playlist_track(pid, sid)
                 self.state.invalidate_library_cache()
             return self._send_json({"ok": True})
@@ -1311,12 +1420,28 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             return self._send_json({"ok": True, "file_path": m3u_path, "count": len(valid)})
 
         elif action == "open_folder":
-            folder = config.get("download.output_dir", "downloads")
-            if os.path.isdir(folder):
-                try:
-                    os.startfile(folder)
-                except Exception:
-                    subprocess.Popen(["explorer", folder])
+            fp = (body.get("file_path") or "").strip()
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            if fp and os.path.isfile(fp):
+                subprocess.Popen(["explorer", f"/select,{os.path.normpath(fp)}"], creationflags=flags)
+                return self._send_json({"ok": True})
+
+            base_dir = config.get("download.output_dir", "downloads")
+            target_dir = base_dir
+            if pid:
+                pl = self.state.archive.get_saved_playlist(pid)
+                if pl and pl.get("name"):
+                    sub = os.path.join(base_dir, sanitize_filename(pl["name"]))
+                    if os.path.isdir(sub):
+                        target_dir = sub
+                    else:
+                        m3u = os.path.join(base_dir, "Playlists", f"{sanitize_filename(pl['name'])}.m3u8")
+                        if os.path.isfile(m3u):
+                            subprocess.Popen(["explorer", f"/select,{os.path.normpath(m3u)}"], creationflags=flags)
+                            return self._send_json({"ok": True})
+
+            if os.path.isdir(target_dir):
+                subprocess.Popen(["explorer", os.path.normpath(target_dir)], creationflags=flags)
             return self._send_json({"ok": True})
 
         elif action == "sync" and pid:
@@ -1726,7 +1851,7 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
 
         results = []
         tagger = AudioTagger()
-        archive = self.archive
+        archive = self.state.archive
 
         if action == "set_artist":
             new_artist = (body.get("new_artist") or "").strip()
@@ -2364,6 +2489,15 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True, "path": chosen})
         self._send_json({"ok": False, "path": ""})
 
+    def _handle_file_dialog(self, body: Dict[str, Any]):
+        title = (body.get("title") or "Select Image").strip()
+        filter_str = (body.get("filter") or "Image Files (*.jpg *.jpeg *.png *.webp);;All Files (*.*)").strip()
+        if callable(getattr(self.state, "file_picker_cb", None)):
+            chosen = self.state.file_picker_cb(title, filter_str)
+            if chosen:
+                return self._send_json({"ok": True, "path": chosen})
+        self._send_json({"ok": False, "path": ""})
+
     def _handle_mini_player_toggle(self, body: Dict[str, Any]):
         if callable(self.state.mini_player_toggle_cb):
             try:
@@ -2545,6 +2679,7 @@ class FlacifyWebServer:
         archive_manager: ArchiveManager,
         web_root: str,
         folder_picker_cb: Optional[Callable[[str], str]] = None,
+        file_picker_cb: Optional[Callable[[str, str], str]] = None,
         on_track_play_cb: Optional[Callable[[str, str, str], None]] = None,
         mini_player_toggle_cb: Optional[Callable[[], None]] = None,
         recovery_toggle_cb: Optional[Callable[[], None]] = None,
@@ -2555,8 +2690,10 @@ class FlacifyWebServer:
             queue_manager=queue_manager,
             archive_manager=archive_manager,
             folder_picker_cb=folder_picker_cb,
+            file_picker_cb=file_picker_cb,
             on_track_play_cb=on_track_play_cb,
             mini_player_toggle_cb=mini_player_toggle_cb,
+            recovery_toggle_cb=recovery_toggle_cb,
             musilon_engine=musilon_engine,
             melobot_engine=melobot_engine,
         )

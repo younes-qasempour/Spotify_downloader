@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import threading
+from typing import Optional, List, Any
 from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QEasingCurve, QPoint, QCoreApplication
 if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
     try:
@@ -19,6 +20,7 @@ from gui.player_bar import MiniPlayerBar
 from gui.media_keys import MediaControllerManager
 
 from core.queue_manager import DownloadQueueManager
+from core.spotify_client import TrackMetadata
 from core.musilon import MusilonEngine
 from core.melobot import MeloBotEngine
 from core.ytdlp_engine import YtdlpEngine
@@ -165,7 +167,6 @@ class MainWindow(FluentWindow):
         # Background scan of output directory to index any pre-existing downloads into archive
         output_dir = config.get("download.output_dir", "downloads")
         if os.path.exists(output_dir):
-            import threading
             threading.Thread(
                 target=self._scan_and_index_startup,
                 args=(output_dir,),
