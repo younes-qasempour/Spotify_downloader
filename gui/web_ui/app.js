@@ -1142,10 +1142,12 @@ async function pollBackendState() {
     }
 
     // Check if playlist sync just finished
-    if (prevResolving && !st.is_resolving && prevResolvingPid) {
+    if ((prevResolving && !st.is_resolving) || (state.activeSyncPlaylistId && !st.is_resolving)) {
+      const finishedPid = state.activeSyncPlaylistId || prevResolvingPid;
+      state.activeSyncPlaylistId = "";
       loadSavedPlaylists();
-      if (state.selectedSavedPlaylistId === prevResolvingPid) {
-        loadSavedPlaylistDetail(prevResolvingPid);
+      if (finishedPid && state.selectedSavedPlaylistId === finishedPid) {
+        loadSavedPlaylistDetail(finishedPid);
       }
     }
 
@@ -1635,6 +1637,7 @@ async function loadSavedPlaylistDetail(pid) {
   document.getElementById("btn-pl-sync-now")?.addEventListener("click", async () => {
     state.isResolving = true;
     state.resolvingPlaylistId = pid;
+    state.activeSyncPlaylistId = pid;
     state.resolvingMessage = `Syncing '${pl.name}' with Spotify...`;
     state.resolvingCurrent = 0;
     state.resolvingTotal = 0;

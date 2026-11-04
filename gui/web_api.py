@@ -1351,12 +1351,18 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                     if fresh:
                         res = self.state.archive.sync_saved_playlist(pid, fresh)
                         new_tracks = res.get("delta_tracks", [])
-                        if auto_queue and new_tracks:
-                            for t in new_tracks:
-                                t.collection_name = pl["name"]
-                                t.collection_type = "playlist"
-                            self.state.qm.enqueue(new_tracks)
-                            self.state.qm.start_all()
+                        if auto_queue:
+                            pending_tracks = self.state.archive.get_saved_playlist_tracks(pid, status="pending")
+                            pending_sids = {t["spotify_id"] for t in pending_tracks}
+                            tracks_to_queue = [t for t in fresh if t.id in pending_sids]
+                            if not tracks_to_queue:
+                                tracks_to_queue = new_tracks
+                            if tracks_to_queue:
+                                for t in tracks_to_queue:
+                                    t.collection_name = pl["name"]
+                                    t.collection_type = "playlist"
+                                self.state.qm.enqueue(tracks_to_queue)
+                                self.state.qm.start_all()
                         with self.state.resolving_lock:
                             self.state.is_resolving = False
                             self.state.resolving_message = ""
