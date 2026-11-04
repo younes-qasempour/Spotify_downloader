@@ -477,7 +477,6 @@ function applyLibraryFilters() {
   });
 
   const sort = state.sortBy || "playlist_order";
-  const coll = state.activeCollection;
 
   list.sort((a, b) => {
     if (sort === "playlist_order") {
