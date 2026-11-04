@@ -36,6 +36,10 @@ class ProviderCooldowns:
             deadline = self._deadlines.get(provider, 0.0)
         return max(0.0, deadline - time.monotonic())
 
+    def is_available(self, provider: str) -> bool:
+        """Returns True if the provider is currently available and not in cooldown."""
+        return self.remaining(provider) <= 0.0
+
     def wait(self, provider: str, cancel_check: Optional[Callable[[], bool]] = None) -> bool:
         while True:
             if cancel_check and cancel_check():

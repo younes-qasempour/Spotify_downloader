@@ -166,7 +166,7 @@ class CascadingAudioEngine:
             if not self.musilon.enabled or skip_musilon or is_melobot_mode:
                 return None
             from core.provider_cooldown import provider_cooldowns
-            if not provider_cooldowns.is_available("musilon"):
+            if provider_cooldowns.remaining("musilon") > 0.0:
                 logger.info(f"Musilon is currently in cooldown/offline; skipping to secondary engine for '{track.title}'.")
                 return None
             try:
