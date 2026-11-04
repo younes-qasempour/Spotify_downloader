@@ -1072,13 +1072,66 @@ async function pollBackendState() {
     state.queue = st.queue || [];
     state.isPaused = st.is_paused;
 
+    const prevResolving = state.isResolving;
+    const prevResolvingPid = state.resolvingPlaylistId;
+    state.isResolving = Boolean(st.is_resolving);
+    state.resolvingMessage = st.resolving_message || "";
+    state.resolvingCurrent = st.resolving_current || 0;
+    state.resolvingTotal = st.resolving_total || 0;
+    state.resolvingPercent = Math.min(100, Math.max(0, parseFloat(st.resolving_percent || 0)));
+    state.resolvingPlaylistId = st.resolving_playlist_id || "";
+
     // Topbar resolving pill
     const resPill = document.getElementById("topbar-resolving");
     if (st.is_resolving) {
       resPill.classList.remove("hidden");
-      document.getElementById("topbar-resolving-text").textContent = st.resolving_message || "Resolving Spotify URL...";
+      const txtEl = document.getElementById("topbar-resolving-text");
+      const pctEl = document.getElementById("topbar-resolving-pct");
+      const barEl = document.getElementById("topbar-resolving-bar");
+      const ringEl = document.getElementById("topbar-resolving-ring");
+      const spinEl = document.getElementById("topbar-resolving-spinner");
+
+      const pct = state.resolvingPercent;
+      const hasTotal = state.resolvingTotal > 0;
+
+      if (txtEl) txtEl.textContent = state.resolvingMessage || "Resolving Spotify URL...";
+      if (pctEl) {
+        if (hasTotal) {
+          pctEl.textContent = `${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%`;
+          pctEl.style.display = "inline";
+        } else {
+          pctEl.style.display = "none";
+        }
+      }
+
+      if (barEl) {
+        if (hasTotal) {
+          barEl.classList.remove("indeterminate");
+          barEl.style.width = `${pct}%`;
+        } else {
+          barEl.classList.add("indeterminate");
+        }
+      }
+
+      if (ringEl) {
+        if (hasTotal) {
+          ringEl.setAttribute("stroke-dasharray", `${pct}, 100`);
+          if (spinEl) spinEl.classList.remove("active");
+        } else {
+          ringEl.setAttribute("stroke-dasharray", "25, 100");
+          if (spinEl) spinEl.classList.add("active");
+        }
+      }
+
+      // Fast polling while sync / resolving is active (every 450ms)
+      clearTimeout(state._fastPollTimeout);
+      state._fastPollTimeout = setTimeout(pollBackendState, 450);
     } else {
       resPill.classList.add("hidden");
+      const barEl = document.getElementById("topbar-resolving-bar");
+      if (barEl) barEl.style.width = "0%";
+      const ringEl = document.getElementById("topbar-resolving-ring");
+      if (ringEl) ringEl.setAttribute("stroke-dasharray", "0, 100");
     }
 
     if (st.last_resolve && st.last_resolve.message && st.last_resolve.message !== state.lastResolveMsg) {
@@ -1086,6 +1139,14 @@ async function pollBackendState() {
       showToast(st.last_resolve.message);
       loadLibrary(true);
       loadSavedPlaylists();
+    }
+
+    // Check if playlist sync just finished
+    if (prevResolving && !st.is_resolving && prevResolvingPid) {
+      loadSavedPlaylists();
+      if (state.selectedSavedPlaylistId === prevResolvingPid) {
+        loadSavedPlaylistDetail(prevResolvingPid);
+      }
     }
 
     // Sidebar badges
@@ -1116,9 +1177,60 @@ async function pollBackendState() {
 
     if (state.activeView === "queue") {
       renderQueueList();
-    } else if (state.activeView === "saved" && state.selectedSavedPlaylistId) {
+    } else if (state.activeView === "saved") {
+      // Live sync UI updates for Saved & Watch view
+      if (state.isResolving && state.resolvingPlaylistId) {
+        // Update playlist card in left list
+        const activeSyncRow = document.querySelector(`.side-coll-row[data-pid="${state.resolvingPlaylistId}"]`);
+        if (activeSyncRow) {
+          const sub = activeSyncRow.querySelector(".side-coll-sub");
+          const fill = activeSyncRow.querySelector(".side-coll-prog-fill");
+          if (sub && state.resolvingTotal > 0) {
+            sub.textContent = `Syncing: ${(state.resolvingCurrent || 0).toLocaleString()} / ${state.resolvingTotal.toLocaleString()} tracks (${state.resolvingPercent}%)`;
+          }
+          if (fill) fill.style.width = `${state.resolvingPercent || 0}%`;
+        }
+
+        // Update detail banner if viewing this syncing playlist
+        if (state.selectedSavedPlaylistId === state.resolvingPlaylistId) {
+          const psbRing = document.getElementById("psb-ring-fill");
+          const psbPct = document.getElementById("psb-pct-txt");
+          const psbCount = document.getElementById("psb-count-txt");
+          const psbBar = document.getElementById("psb-bar-fill");
+          const psbHint = document.getElementById("psb-hint-txt");
+          const syncBtn = document.getElementById("btn-pl-sync-now");
+
+          const pct = state.resolvingPercent;
+          if (psbRing && psbBar) {
+            psbRing.setAttribute("stroke-dasharray", `${pct}, 100`);
+            psbBar.style.width = `${pct}%`;
+            if (psbPct) psbPct.textContent = state.resolvingTotal > 0 ? `${Math.round(pct)}%` : "...";
+            if (psbCount) psbCount.textContent = state.resolvingTotal > 0 ? `${(state.resolvingCurrent || 0).toLocaleString()} / ${state.resolvingTotal.toLocaleString()} tracks` : "Fetching tracks...";
+            if (psbHint) psbHint.textContent = state.resolvingMessage || "Retrieving Spotify metadata...";
+            if (syncBtn) {
+              syncBtn.innerHTML = `<span class="spinner-xs" style="margin-right:6px;"></span> Syncing ${pct > 0 ? Math.round(pct) + "%" : "..."}`;
+              syncBtn.disabled = true;
+            }
+          }
+
+          // In case the big center loading state is showing
+          const loadRing = document.getElementById("psb-loading-ring");
+          if (loadRing) {
+            loadRing.setAttribute("stroke-dasharray", `${pct}, 100`);
+            const loadBar = document.getElementById("psb-loading-bar");
+            if (loadBar) loadBar.style.width = `${pct}%`;
+            const loadPct = document.getElementById("psb-loading-pct");
+            if (loadPct) loadPct.textContent = state.resolvingTotal > 0 ? `${Math.round(pct)}%` : "...";
+            const loadTitle = document.getElementById("psb-loading-title");
+            if (loadTitle) loadTitle.textContent = state.resolvingMessage || "Syncing playlist with Spotify...";
+            const loadSub = document.getElementById("psb-loading-sub");
+            if (loadSub) loadSub.textContent = state.resolvingTotal > 0 ? `${(state.resolvingCurrent || 0).toLocaleString()} of ${state.resolvingTotal.toLocaleString()} tracks synchronized` : "Connecting to Spotify...";
+          }
+        }
+      }
+
       // Live background sync: if completed downloads count changed, refresh track table
-      if (st.counts.completed !== state._lastCompletedCount) {
+      if (state.selectedSavedPlaylistId && st.counts.completed !== state._lastCompletedCount) {
         state._lastCompletedCount = st.counts.completed;
         apiGet(`/api/saved_playlists/tracks?id=${encodeURIComponent(state.selectedSavedPlaylistId)}`).then(res => {
           if (res && res.ok && res.tracks) {
@@ -1281,14 +1393,23 @@ function renderSavedPlaylistsList() {
   listEl.innerHTML = filtered.map(p => {
     const total = p.total_tracks || p.track_count || 0;
     const dl = p.downloaded_count || 0;
-    const pct = total > 0 ? Math.round((dl / total) * 100) : 0;
+    const isSyncing = state.isResolving && state.resolvingPlaylistId === p.id;
+    const pct = isSyncing
+      ? (state.resolvingPercent || 0)
+      : (total > 0 ? Math.round((dl / total) * 100) : 0);
+    const subText = isSyncing
+      ? (state.resolvingTotal > 0
+          ? `Syncing: ${(state.resolvingCurrent || 0).toLocaleString()} / ${state.resolvingTotal.toLocaleString()} tracks (${state.resolvingPercent}%)`
+          : `Syncing with Spotify...`)
+      : `${dl.toLocaleString()} / ${total.toLocaleString()} downloaded (${pct}%)`;
+
     return `
-      <div class="side-coll-row ${state.selectedSavedPlaylistId === p.id ? "active" : ""}" data-pid="${escapeHtml(p.id)}">
+      <div class="side-coll-row ${state.selectedSavedPlaylistId === p.id ? "active" : ""} ${isSyncing ? "is-syncing" : ""}" data-pid="${escapeHtml(p.id)}">
         <img class="side-coll-thumb" src="${coverUrl(p.local_cover || p.cover_url)}" onerror="this.style.visibility='hidden'" />
         <div class="side-coll-meta">
-          <div class="side-coll-title">${p.auto_sync ? "⏱ " : ""}${escapeHtml(p.name)}</div>
-          <div class="side-coll-sub">${dl.toLocaleString()} / ${total.toLocaleString()} downloaded (${pct}%)</div>
-          <div class="side-coll-prog"><div class="side-coll-prog-fill" style="width: ${pct}%"></div></div>
+          <div class="side-coll-title">${p.auto_sync ? "⏱ " : ""}${escapeHtml(p.name)}${isSyncing ? ` <span class="syncing-badge"><span class="spinner-xs"></span> Syncing</span>` : ""}</div>
+          <div class="side-coll-sub">${subText}</div>
+          <div class="side-coll-prog"><div class="side-coll-prog-fill ${isSyncing ? "syncing" : ""}" style="width: ${pct}%"></div></div>
         </div>
       </div>
     `;
@@ -1313,7 +1434,28 @@ async function loadSavedPlaylistDetail(pid) {
   renderSavedPlaylistsList();
 
   const pane = document.getElementById("saved-detail-pane");
-  pane.innerHTML = `<div style="padding:40px; color:var(--text-secondary); text-align:center;"><span class="spinner-xs"></span> Loading playlist tracks...</div>`;
+  const isSyncing = state.isResolving && state.resolvingPlaylistId === pid;
+  if (isSyncing) {
+    const cur = state.resolvingCurrent || 0;
+    const tot = state.resolvingTotal || 0;
+    const pct = state.resolvingPercent || 0;
+    pane.innerHTML = `
+      <div class="playlist-sync-loading-pane">
+        <div class="psb-circle-lg">
+          <svg class="psb-ring-lg" viewBox="0 0 36 36">
+            <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+            <path class="ring-fill" id="psb-loading-ring" stroke-dasharray="${pct}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+          </svg>
+          <span class="psb-pct-lg" id="psb-loading-pct">${pct > 0 ? Math.round(pct) + '%' : '...'}</span>
+        </div>
+        <div class="psb-loading-title" id="psb-loading-title">${escapeHtml(state.resolvingMessage || 'Syncing playlist with Spotify...')}</div>
+        <div class="psb-loading-sub" id="psb-loading-sub">${tot > 0 ? `${cur.toLocaleString()} of ${tot.toLocaleString()} tracks synchronized` : 'Connecting to Spotify...'}</div>
+        <div class="psb-loading-bar"><div class="psb-loading-bar-fill" id="psb-loading-bar" style="width: ${pct}%"></div></div>
+      </div>
+    `;
+  } else {
+    pane.innerHTML = `<div style="padding:40px; color:var(--text-secondary); text-align:center;"><span class="spinner-xs"></span> Loading playlist tracks...</div>`;
+  }
 
   const res = await apiGet(`/api/saved_playlists/tracks?id=${encodeURIComponent(pid)}`);
   if (!res || !res.ok || !res.playlist) {
@@ -1363,13 +1505,38 @@ async function loadSavedPlaylistDetail(pid) {
           <input type="checkbox" id="chk-pl-watch" ${pl.auto_sync ? "checked" : ""} />
           <span>⏱ Auto-Sync</span>
         </label>
-        <button class="btn-secondary-dark btn-sm" id="btn-pl-sync-now" title="Check Spotify for updates">↻ Sync</button>
-        <button class="btn-secondary-dark btn-sm" id="btn-pl-open-folder" title="Open download folder">📁 Folder</button>
+        ${(state.isResolving && state.resolvingPlaylistId === pid)
+          ? `<button class="btn-secondary-dark btn-sm" id="btn-pl-sync-now" disabled title="Sync in progress"><span class="spinner-xs" style="margin-right:6px;"></span> Syncing ${state.resolvingPercent > 0 ? Math.round(state.resolvingPercent) + '%' : '...'}</button>`
+          : `<button class="btn-secondary-dark btn-sm" id="btn-pl-sync-now" title="Check Spotify for updates">↻ Sync</button>`
+        }
         <button class="btn-secondary-dark btn-sm" id="btn-pl-edit" title="Edit playlist metadata">⚙ Edit</button>
         <button class="btn-secondary-dark btn-sm" id="btn-pl-export-m3u" title="Export .m3u8">⤓ M3U8</button>
         <button class="btn-danger-outline btn-sm" id="btn-pl-delete" title="Delete playlist">✕</button>
       </div>
     </div>
+
+    <!-- Live Sync Progression Banner (Shown when syncing) -->
+    ${(state.isResolving && state.resolvingPlaylistId === pid) ? `
+    <div class="playlist-sync-banner" id="playlist-active-sync-banner">
+      <div class="psb-circle">
+        <svg class="psb-ring" viewBox="0 0 36 36">
+          <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+          <path class="ring-fill" id="psb-ring-fill" stroke-dasharray="${state.resolvingPercent || 0}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+        </svg>
+        <span class="psb-pct" id="psb-pct-txt">${state.resolvingPercent > 0 ? Math.round(state.resolvingPercent) + '%' : '...'}</span>
+      </div>
+      <div class="psb-meta">
+        <div class="psb-title-row">
+          <span class="psb-title">Syncing with Spotify...</span>
+          <span class="psb-count" id="psb-count-txt">${state.resolvingTotal > 0 ? `${(state.resolvingCurrent || 0).toLocaleString()} / ${state.resolvingTotal.toLocaleString()} tracks` : 'Fetching tracks...'}</span>
+        </div>
+        <div class="psb-bar">
+          <div class="psb-bar-fill" id="psb-bar-fill" style="width: ${state.resolvingPercent || 0}%"></div>
+        </div>
+        <div class="psb-hint" id="psb-hint-txt">${escapeHtml(state.resolvingMessage || 'Retrieving latest Spotify metadata...')}</div>
+      </div>
+    </div>
+    ` : ""}
 
     <!-- 2. Integrated Sleek Batch Toolbar (Height ~34px, all in one line!) -->
     <div class="saved-batch-toolbar">
@@ -1466,10 +1633,18 @@ async function loadSavedPlaylistDetail(pid) {
 
   // 4. Sync Single Playlist
   document.getElementById("btn-pl-sync-now")?.addEventListener("click", async () => {
+    state.isResolving = true;
+    state.resolvingPlaylistId = pid;
+    state.resolvingMessage = `Syncing '${pl.name}' with Spotify...`;
+    state.resolvingCurrent = 0;
+    state.resolvingTotal = 0;
+    state.resolvingPercent = 0;
+    renderSavedPlaylistsList();
+    loadSavedPlaylistDetail(pid);
     showToast(`Checking Spotify for new tracks in "${pl.name}"...`);
     const r = await apiPost("/api/saved_playlists/action", { action: "sync", playlist_id: pid, queue_new: true });
-    showToast(r.message || "Sync started...");
-    loadSavedPlaylistDetail(pid);
+    if (r && r.message) showToast(r.message);
+    pollBackendState();
   });
 
   // 5. Open Folder
@@ -2932,8 +3107,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Sync All Playlists Button
   document.getElementById("btn-sync-all-saved")?.addEventListener("click", async () => {
+    state.isResolving = true;
+    state.resolvingMessage = "Syncing all saved playlists...";
+    state.resolvingPercent = 0;
     const r = await apiPost("/api/saved_playlists/action", { action: "sync_all" });
     showToast(r ? r.message : "Sync started for all saved playlists...");
+    pollBackendState();
   });
 
   // Saved Playlists Filter Input
@@ -3518,20 +3697,104 @@ document.addEventListener("DOMContentLoaded", () => {
     showToast(r.message || "Finished mastering file.");
   });
 
-  // Global Keyboard Shortcuts
+  // Global Keyboard & Media Shortcuts
   document.addEventListener("keydown", (e) => {
-    const tag = (e.target && e.target.tagName) || "";
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-    if (e.code === "Space") {
+    // 1. Hardware Media Keys (ALWAYS active, even when typing or in background)
+    if (e.key === "MediaPlayPause" || e.code === "MediaPlayPause") {
       e.preventDefault();
-      document.getElementById("btn-play-pause").click();
-    } else if (e.code === "Escape") {
-      document.getElementById("lyrics-drawer").classList.add("hidden");
-      document.getElementById("eq-modal").classList.add("hidden");
-    } else if (e.code === "ArrowRight") {
-      if (audioEl.duration) audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + 5);
-    } else if (e.code === "ArrowLeft") {
-      if (audioEl.duration) audioEl.currentTime = Math.max(0, audioEl.currentTime - 5);
+      if (typeof window.triggerMediaPlayPause === "function") window.triggerMediaPlayPause();
+      return;
+    }
+    if (e.key === "MediaTrackNext" || e.code === "MediaTrackNext") {
+      e.preventDefault();
+      if (typeof window.triggerMediaNext === "function") window.triggerMediaNext();
+      return;
+    }
+    if (e.key === "MediaTrackPrevious" || e.code === "MediaTrackPrevious") {
+      e.preventDefault();
+      if (typeof window.triggerMediaPrev === "function") window.triggerMediaPrev();
+      return;
+    }
+    if (e.key === "MediaStop" || e.code === "MediaStop") {
+      e.preventDefault();
+      if (typeof window.triggerMediaStop === "function") window.triggerMediaStop();
+      return;
+    }
+
+    // 2. Comprehensive Text Input & Search Safeguard
+    // When the user is typing in ANY input, textarea, contenteditable, or search box,
+    // ALL shortcuts (Space, Arrows, Letters, etc.) are strictly disabled so typing is 100% natural.
+    const activeEl = document.activeElement;
+    const target = e.target;
+    const isTextInput = (
+      (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) ||
+      (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.tagName === "SELECT" || activeEl.isContentEditable))
+    );
+    if (isTextInput) {
+      if (e.code === "Escape" || e.key === "Escape") {
+        if (target && typeof target.blur === "function") target.blur();
+        if (activeEl && typeof activeEl.blur === "function") activeEl.blur();
+      }
+      return;
+    }
+
+    // 3. Escape: Close Modals and Drawers
+    if (e.code === "Escape" || e.key === "Escape") {
+      const ld = document.getElementById("lyrics-drawer");
+      if (ld) ld.classList.add("hidden");
+      const eq = document.getElementById("eq-modal");
+      if (eq) eq.classList.add("hidden");
+      return;
+    }
+
+    // 4. Play / Pause (Space bar ONLY - NO letter keys like K)
+    if (e.code === "Space" || e.key === " ") {
+      e.preventDefault();
+      if (typeof window.triggerMediaPlayPause === "function") {
+        window.triggerMediaPlayPause();
+      } else {
+        const btn = document.getElementById("btn-play-pause");
+        if (btn) btn.click();
+      }
+      return;
+    }
+
+    // 5. Track Skip: Ctrl+Left / Ctrl+Right (NO single letter keys like N/P)
+    if (e.ctrlKey && (e.code === "ArrowRight" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      if (typeof window.triggerMediaNext === "function") window.triggerMediaNext();
+      return;
+    }
+    if (e.ctrlKey && (e.code === "ArrowLeft" || e.key === "ArrowLeft")) {
+      e.preventDefault();
+      if (typeof window.triggerMediaPrev === "function") window.triggerMediaPrev();
+      return;
+    }
+
+    // 6. Volume Control: ArrowUp / ArrowDown
+    if (e.code === "ArrowUp" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (typeof window.triggerMediaVolume === "function") window.triggerMediaVolume(5);
+      return;
+    }
+    if (e.code === "ArrowDown" || e.key === "ArrowDown") {
+      e.preventDefault();
+      if (typeof window.triggerMediaVolume === "function") window.triggerMediaVolume(-5);
+      return;
+    }
+
+    // 7. Scrubbing / Seeking: ArrowLeft / ArrowRight (Shift = 10s, plain = 5s)
+    if (e.code === "ArrowRight" || e.key === "ArrowRight") {
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 5;
+      if (audioEl.duration) audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + step);
+      return;
+    }
+    if (e.code === "ArrowLeft" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 5;
+      if (audioEl.duration) audioEl.currentTime = Math.max(0, audioEl.currentTime - step);
+      return;
     }
   });
 

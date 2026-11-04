@@ -383,24 +383,50 @@ class MainWindow(FluentWindow):
             self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaPlayPause === 'function') window.triggerMediaPlayPause();")
         elif getattr(self, "player_bar", None):
             self.player_bar.toggle_play_pause()
+        if hasattr(self, "media_controller") and self.media_controller:
+            QTimer.singleShot(150, self.media_controller.sync_playback_state)
 
     def media_next(self):
         if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
             self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaNext === 'function') window.triggerMediaNext();")
         elif getattr(self, "player_bar", None):
             self.player_bar.play_next()
+        if hasattr(self, "media_controller") and self.media_controller:
+            QTimer.singleShot(150, self.media_controller.sync_playback_state)
 
     def media_prev(self):
         if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
             self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaPrev === 'function') window.triggerMediaPrev();")
         elif getattr(self, "player_bar", None):
             self.player_bar.play_previous()
+        if hasattr(self, "media_controller") and self.media_controller:
+            QTimer.singleShot(150, self.media_controller.sync_playback_state)
 
     def media_stop(self):
         if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
             self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaStop === 'function') window.triggerMediaStop();")
         elif getattr(self, "player_bar", None):
             self.player_bar.player.stop()
+        if hasattr(self, "media_controller") and self.media_controller:
+            self.media_controller.set_playing(False)
+
+    def media_toggle_mute(self):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaMute === 'function') window.triggerMediaMute();")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.toggle_mute()
+
+    def media_toggle_shuffle(self):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaShuffle === 'function') window.triggerMediaShuffle();")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.toggle_shuffle()
+
+    def media_toggle_repeat(self):
+        if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):
+            self.web_studio_view.webview.page().runJavaScript("if (typeof window.triggerMediaRepeat === 'function') window.triggerMediaRepeat();")
+        elif getattr(self, "player_bar", None):
+            self.player_bar.toggle_repeat()
 
     def media_adjust_volume(self, delta: int):
         if hasattr(self, "web_studio_view") and getattr(self.web_studio_view, "webview", None):

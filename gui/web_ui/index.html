@@ -116,9 +116,23 @@
         </div>
 
         <div class="topbar-right">
-          <div class="resolving-pill hidden" id="topbar-resolving">
-            <span class="spinner-xs"></span>
-            <span id="topbar-resolving-text">Resolving...</span>
+          <div class="resolving-pill hidden" id="topbar-resolving" title="Spotify sync & metadata resolution in progress">
+            <div class="resolving-circle-wrap">
+              <svg class="resolving-svg-ring" viewBox="0 0 36 36">
+                <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                <path class="ring-fill" id="topbar-resolving-ring" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+              </svg>
+              <span class="ring-spinner" id="topbar-resolving-spinner"></span>
+            </div>
+            <div class="resolving-content">
+              <div class="resolving-row">
+                <span id="topbar-resolving-text">Resolving...</span>
+                <span class="resolving-pct-badge" id="topbar-resolving-pct">0%</span>
+              </div>
+              <div class="resolving-mini-bar">
+                <div class="resolving-mini-bar-fill" id="topbar-resolving-bar" style="width: 0%"></div>
+              </div>
+            </div>
           </div>
           <button class="ghost-pill-btn" id="btn-open-recovery" title="Open Recovery & Diagnostics Workspace">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">

@@ -78,6 +78,13 @@ def generate_mosaic_cover(track_files: List[str], output_path: str, size: Tuple[
         return False
 
 
+_collection_cover_cache: Dict[str, str] = {}
+
+
+def clear_collection_cover_cache():
+    _collection_cover_cache.clear()
+
+
 def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = "") -> str:
     """
     Resolves or extracts collection cover artwork into the dedicated app cache directory:
@@ -87,6 +94,12 @@ def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = 
     """
     if not collection_name_or_folder:
         return ""
+
+    cache_key = f"{collection_name_or_folder}|{sample_file}"
+    if cache_key in _collection_cover_cache:
+        cached = _collection_cover_cache[cache_key]
+        if not cached or (os.path.isfile(cached) and os.path.getsize(cached) > 500):
+            return cached
 
     # Normalize name: if it's a directory path, use folder name
     # But if folder name is 'downloads' or 'music', it's generic and NOT a valid collection name!
@@ -200,10 +213,12 @@ def resolve_collection_cover(collection_name_or_folder: str, sample_file: str = 
                 with open(cached_cover, "wb") as f:
                     f.write(art_bytes)
                 logger.info(f"Cached collection cover in app cache: {cached_cover}")
+                _collection_cover_cache[cache_key] = cached_cover
                 return cached_cover
         except Exception as e:
             logger.debug(f"Could not extract collection cover from audio file: {e}")
 
+    _collection_cover_cache[cache_key] = ""
     return ""
 
 

@@ -503,14 +503,312 @@ html, body {
 .resolving-pill {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  border-radius: 16px;
-  background: rgba(29, 185, 84, 0.18);
+  gap: 9px;
+  padding: 4px 12px 4px 8px;
+  border-radius: 18px;
+  background: rgba(20, 30, 24, 0.92);
   border: 1px solid rgba(29, 185, 84, 0.45);
-  color: var(--spotify-bright);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4), 0 0 10px rgba(29, 185, 84, 0.2);
+  color: #fff;
   font-size: 12px;
   font-weight: 600;
+  min-width: 210px;
+  max-width: 380px;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(8px);
+}
+
+.resolving-circle-wrap {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.resolving-svg-ring {
+  width: 24px;
+  height: 24px;
+  transform: rotate(-90deg);
+}
+
+.ring-bg {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.12);
+  stroke-width: 3.5;
+}
+
+.ring-fill {
+  fill: none;
+  stroke: #1ed760;
+  stroke-width: 3.6;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.35s ease;
+}
+
+.ring-spinner {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(30, 215, 96, 0.2);
+  border-top-color: #1ed760;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  display: none;
+}
+
+.ring-spinner.active {
+  display: block;
+}
+
+.resolving-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.resolving-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#topbar-resolving-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #e5e7eb;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.resolving-pct-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #1ed760;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.resolving-mini-bar {
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  position: relative;
+}
+
+.resolving-mini-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #1db954, #1ed760);
+  box-shadow: 0 0 8px rgba(30, 215, 96, 0.7);
+  transition: width 0.35s ease;
+}
+
+.resolving-mini-bar-fill.indeterminate {
+  width: 40% !important;
+  animation: indeterminateBar 1.3s infinite ease-in-out;
+}
+
+@keyframes indeterminateBar {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+/* Playlist sync card in left sidebar list */
+.side-coll-row.is-syncing {
+  border-color: rgba(29, 185, 84, 0.4) !important;
+  background: rgba(29, 185, 84, 0.08) !important;
+}
+
+.syncing-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(29, 185, 84, 0.2);
+  color: #1ed760;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.side-coll-prog-fill.syncing {
+  background: linear-gradient(90deg, #1db954, #1ed760, #38ef7d) !important;
+  animation: pulseSync 1.5s infinite alternate ease-in-out;
+  box-shadow: 0 0 8px rgba(30, 215, 96, 0.6);
+}
+
+@keyframes pulseSync {
+  0% { opacity: 0.75; }
+  100% { opacity: 1; }
+}
+
+/* Live Playlist Sync Progression Banner */
+.playlist-sync-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 10px 16px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(29, 185, 84, 0.12), rgba(16, 24, 20, 0.75));
+  border: 1px solid rgba(29, 185, 84, 0.4);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35), inset 0 0 15px rgba(29, 185, 84, 0.08);
+}
+
+.psb-circle {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.psb-ring {
+  width: 44px;
+  height: 44px;
+  transform: rotate(-90deg);
+}
+
+.psb-pct {
+  position: absolute;
+  font-size: 11px;
+  font-weight: 800;
+  color: #1ed760;
+  font-variant-numeric: tabular-nums;
+}
+
+.psb-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.psb-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.psb-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.2px;
+}
+
+.psb-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1ed760;
+  font-variant-numeric: tabular-nums;
+}
+
+.psb-bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  position: relative;
+}
+
+.psb-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #1db954, #1ed760, #38ef7d);
+  box-shadow: 0 0 10px rgba(30, 215, 96, 0.8);
+  transition: width 0.35s ease;
+}
+
+.psb-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Big center loading state during playlist initial sync */
+.playlist-sync-loading-pane {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.psb-circle-lg {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.psb-ring-lg {
+  width: 72px;
+  height: 72px;
+  transform: rotate(-90deg);
+}
+
+.psb-pct-lg {
+  position: absolute;
+  font-size: 15px;
+  font-weight: 800;
+  color: #1ed760;
+  font-variant-numeric: tabular-nums;
+}
+
+.psb-loading-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 6px;
+}
+
+.psb-loading-sub {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.psb-loading-bar {
+  width: 280px;
+  max-width: 90%;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.psb-loading-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #1db954, #1ed760);
+  box-shadow: 0 0 12px rgba(30, 215, 96, 0.8);
+  transition: width 0.35s ease;
 }
 
 .spinner-xs {

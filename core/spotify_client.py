@@ -502,6 +502,12 @@ class SpotifyClient:
             cover_url = (album.get("images") or [{}])[0].get("url", "")
             release_date = album.get("release_date", "")
             album_name = clean_watermarks(album.get("name", "Unknown Album"))
+            total_expected = album.get("total_tracks") or 0
+            if progress_callback and total_expected:
+                try:
+                    progress_callback(0, total_expected)
+                except Exception:
+                    pass
 
             tracks: List[TrackMetadata] = []
             results = self._sp.album_tracks(entity_id, limit=50)
@@ -519,6 +525,11 @@ class SpotifyClient:
                         collection_name=album_name,
                         collection_cover_url=cover_url
                     ))
+                if progress_callback and total_expected:
+                    try:
+                        progress_callback(len(tracks), total_expected)
+                    except Exception:
+                        pass
                 if results.get("next"):
                     results = self._sp.next(results)
                 else:
@@ -590,6 +601,11 @@ class SpotifyClient:
 
                 if not total_expected and results.get("total"):
                     total_expected = results.get("total", 0)
+                    if progress_callback and total_expected:
+                        try:
+                            progress_callback(0, total_expected)
+                        except Exception:
+                            pass
 
                 for idx_in_batch, item_wrapper in enumerate(results["items"]):
                     track_item = item_wrapper.get("item") or item_wrapper.get("track")
@@ -659,6 +675,11 @@ class SpotifyClient:
 
                 if not total_expected and results.get("total"):
                     total_expected = results.get("total", 0)
+                    if progress_callback and total_expected:
+                        try:
+                            progress_callback(0, total_expected)
+                        except Exception:
+                            pass
 
                 for idx_in_batch, item_wrapper in enumerate(results["items"]):
                     track_item = item_wrapper.get("track")

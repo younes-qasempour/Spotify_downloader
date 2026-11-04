@@ -1,23 +1,26 @@
 """
 Media Key & Keyboard Transport Control System for Flacify.
-Provides dual-layer keyboard and hardware controller integration:
+Provides comprehensive keyboard, hardware controller, and taskbar integration:
 1. Application-wide Qt Key Filter (GlobalMediaKeyFilter):
    Intercepts Space, Left/Right scrubbing, Up/Down volume, Ctrl+Left/Right track skips,
-   and YouTube/Spotify hotkeys (J/K/L/M/N/P) everywhere in Flacify without stealing
+   and YouTube/Spotify hotkeys (J/K/L/M/N/P/S/R) everywhere in Flacify without stealing
    focus or interfering with text-input fields.
 2. Windows Hardware Native Filter (WindowsMediaNativeFilter):
    Hooks Windows multimedia hotkeys and WM_APPCOMMAND messages so Bluetooth headsets,
    earbuds, and multimedia keyboards seamlessly control Flacify even in background.
+3. Windows Taskbar Thumbnail Toolbar Integration (TaskbarThumbnailManager):
+   Wires interactive Previous, Play/Pause, and Next buttons directly into the Windows
+   taskbar thumbnail hover preview flyout.
 """
 
 import sys
 import logging
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
-from PyQt6.QtCore import QObject, QEvent, Qt, QAbstractNativeEventFilter
+from PyQt6.QtCore import QObject, QEvent, Qt, QAbstractNativeEventFilter, QTimer
 from PyQt6.QtWidgets import (
     QApplication, QLineEdit, QTextEdit, QPlainTextEdit,
-    QAbstractSpinBox, QComboBox
+    QAbstractSpinBox, QComboBox, QWidget
 )
 
 logger = logging.getLogger("gui.media_keys")
@@ -40,6 +43,7 @@ if sys.platform == "win32":
 
     WM_HOTKEY = 0x0312
     WM_APPCOMMAND = 0x0319
+    WM_COMMAND = 0x0111
 
     # AppCommand Codes (lParam high word)
     APPCOMMAND_MEDIA_NEXTTRACK = 11
@@ -63,7 +67,7 @@ if sys.platform == "win32":
 
 
 def is_text_input_widget(w: Optional[QObject]) -> bool:
-    """Checks whether the given widget is an active text input."""
+    """Checks whether the given widget is an active text input or editing component."""
     if w is None:
         return False
     if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)):
@@ -72,6 +76,19 @@ def is_text_input_widget(w: Optional[QObject]) -> bool:
         return True
     if hasattr(w, "inherits") and (w.inherits("QLineEdit") or w.inherits("QTextEdit") or w.inherits("QPlainTextEdit")):
         return True
+    return False
+
+
+def is_inside_web_view(w: Optional[QObject]) -> bool:
+    """Checks whether the widget is a Chromium QWebEngineView or child thereof."""
+    if w is None:
+        return False
+    curr = w
+    while curr:
+        cls_name = curr.metaObject().className() if hasattr(curr, "metaObject") else curr.__class__.__name__
+        if "WebEngine" in cls_name or "RenderWidgetHost" in cls_name:
+            return True
+        curr = curr.parent() if hasattr(curr, "parent") else None
     return False
 
 
@@ -131,136 +148,149 @@ class GlobalMediaKeyFilter(QObject):
                 return True
 
             # ---------------------------------------------------------
-            # 2. Check if a text input widget is focused or being typed into
+            # 2. Text Input & Web View Safeguard:
+            # If the user is typing into any input or within the web view,
+            # NEVER hijack typing keys, space, or navigation. Let Chromium/Qt handle it.
             # ---------------------------------------------------------
-            if is_text_input_widget(QApplication.focusWidget()) or is_text_input_widget(watched):
+            focused_widget = QApplication.focusWidget()
+            if is_text_input_widget(focused_widget) or is_text_input_widget(watched):
                 return super().eventFilter(watched, event)
 
-            player_bar = getattr(self.main_window, "player_bar", None)
-            is_web = hasattr(self.main_window, "web_studio_view")
+            if is_inside_web_view(focused_widget) or is_inside_web_view(watched):
+                return super().eventFilter(watched, event)
 
             # ---------------------------------------------------------
-            # 3. In-App Keyboard Shortcuts (Active when not editing text)
+            # 3. Native In-App Shortcuts (ONLY for non-web, non-text focus)
+            # All letter keys (K, L, M, N, P, S, R, etc.) are strictly NOT bound
+            # to guarantee that typing is never hijacked anywhere in Flacify.
             # ---------------------------------------------------------
             if key == Qt.Key.Key_Space:
-                if is_web:
+                if hasattr(self.main_window, "media_play_pause"):
                     self.main_window.media_play_pause()
-                elif player_bar and player_bar.isVisible():
+                elif player_bar:
                     player_bar.toggle_play_pause()
                 return True
 
             elif key == Qt.Key.Key_Left:
                 if has_ctrl:
-                    if is_web: self.main_window.media_prev()
-                    elif player_bar: player_bar.play_previous()
+                    if hasattr(self.main_window, "media_prev"):
+                        self.main_window.media_prev()
+                    elif player_bar:
+                        player_bar.play_previous()
                 elif has_shift:
-                    if is_web: self.main_window.media_seek_relative(-10000)
-                    elif player_bar: player_bar.seek_relative(-10000)
+                    if hasattr(self.main_window, "media_seek_relative"):
+                        self.main_window.media_seek_relative(-10000)
+                    elif player_bar:
+                        player_bar.seek_relative(-10000)
                 else:
-                    if is_web: self.main_window.media_seek_relative(-5000)
-                    elif player_bar: player_bar.seek_relative(-5000)
+                    if hasattr(self.main_window, "media_seek_relative"):
+                        self.main_window.media_seek_relative(-5000)
+                    elif player_bar:
+                        player_bar.seek_relative(-5000)
                 return True
 
             elif key == Qt.Key.Key_Right:
                 if has_ctrl:
-                    if is_web: self.main_window.media_next()
-                    elif player_bar: player_bar.play_next()
+                    if hasattr(self.main_window, "media_next"):
+                        self.main_window.media_next()
+                    elif player_bar:
+                        player_bar.play_next()
                 elif has_shift:
-                    if is_web: self.main_window.media_seek_relative(10000)
-                    elif player_bar: player_bar.seek_relative(10000)
+                    if hasattr(self.main_window, "media_seek_relative"):
+                        self.main_window.media_seek_relative(10000)
+                    elif player_bar:
+                        player_bar.seek_relative(10000)
                 else:
-                    if is_web: self.main_window.media_seek_relative(5000)
-                    elif player_bar: player_bar.seek_relative(5000)
+                    if hasattr(self.main_window, "media_seek_relative"):
+                        self.main_window.media_seek_relative(5000)
+                    elif player_bar:
+                        player_bar.seek_relative(5000)
                 return True
 
             elif key == Qt.Key.Key_Up:
-                if is_web: self.main_window.media_adjust_volume(5)
-                elif player_bar: player_bar.adjust_volume(5)
+                if hasattr(self.main_window, "media_adjust_volume"):
+                    self.main_window.media_adjust_volume(5)
+                elif player_bar:
+                    player_bar.adjust_volume(5)
                 return True
 
             elif key == Qt.Key.Key_Down:
-                if is_web: self.main_window.media_adjust_volume(-5)
-                elif player_bar: player_bar.adjust_volume(-5)
+                if hasattr(self.main_window, "media_adjust_volume"):
+                    self.main_window.media_adjust_volume(-5)
+                elif player_bar:
+                    player_bar.adjust_volume(-5)
                 return True
-
-            elif not has_ctrl and not has_alt:
-                if key == Qt.Key.Key_K:
-                    player_bar.toggle_play_pause()
-                    return True
-                elif key == Qt.Key.Key_J:
-                    player_bar.seek_relative(-10000)
-                    return True
-                elif key == Qt.Key.Key_L:
-                    player_bar.seek_relative(10000)
-                    return True
-                elif key == Qt.Key.Key_N:
-                    player_bar.play_next()
-                    return True
-                elif key == Qt.Key.Key_P:
-                    player_bar.play_previous()
-                    return True
-                elif key == Qt.Key.Key_M:
-                    player_bar.toggle_mute()
-                    return True
-                elif key == Qt.Key.Key_S:
-                    player_bar.toggle_shuffle()
-                    return True
-                elif key == Qt.Key.Key_R:
-                    player_bar.toggle_repeat()
-                    return True
 
         return super().eventFilter(watched, event)
 
 
 class WindowsMediaNativeFilter(QAbstractNativeEventFilter):
     """
-    Native Windows Message Filter for system-wide media hotkeys and WM_APPCOMMAND events.
-    Enables background and headset controls even when Flacify is minimized or unfocused.
+    Native Windows Message Filter for system-wide media hotkeys, WM_APPCOMMAND events,
+    and Taskbar Thumbnail Toolbar clicks.
+    Enables background, headset, and taskbar controls even when Flacify is minimized or unfocused.
     """
 
-    def __init__(self, main_window):
+    def __init__(self, main_window, taskbar_manager=None):
         super().__init__()
         self.main_window = main_window
+        self.taskbar_manager = taskbar_manager
 
     def nativeEventFilter(self, eventType, message) -> tuple:
         if sys.platform == "win32" and eventType == b"windows_generic_MSG":
             try:
                 msg = MSG.from_address(int(message))
-                player_bar = getattr(self.main_window, "player_bar", None)
 
-                # WM_HOTKEY
+                # 1. WM_HOTKEY (Registered system-wide media keys)
                 if msg.message == WM_HOTKEY:
                     hk_id = msg.wParam
-                    if player_bar and player_bar.isVisible():
-                        if hk_id == HK_PLAY_PAUSE:
-                            player_bar.toggle_play_pause()
-                            return True, 0
-                        elif hk_id == HK_NEXT:
-                            player_bar.play_next()
-                            return True, 0
-                        elif hk_id == HK_PREV:
-                            player_bar.play_previous()
-                            return True, 0
-                        elif hk_id == HK_STOP:
-                            player_bar.player.stop()
-                            return True, 0
+                    if hk_id == HK_PLAY_PAUSE:
+                        if hasattr(self.main_window, "media_play_pause"):
+                            self.main_window.media_play_pause()
+                        return True, 0
+                    elif hk_id == HK_NEXT:
+                        if hasattr(self.main_window, "media_next"):
+                            self.main_window.media_next()
+                        return True, 0
+                    elif hk_id == HK_PREV:
+                        if hasattr(self.main_window, "media_prev"):
+                            self.main_window.media_prev()
+                        return True, 0
+                    elif hk_id == HK_STOP:
+                        if hasattr(self.main_window, "media_stop"):
+                            self.main_window.media_stop()
+                        return True, 0
 
-                # WM_APPCOMMAND (Headset buttons, multimedia keyboard commands)
+                # 2. WM_APPCOMMAND (Headset buttons, multimedia keyboard commands)
                 elif msg.message == WM_APPCOMMAND:
                     cmd = (msg.lParam >> 16) & ~0xF000
-                    if player_bar and player_bar.isVisible():
-                        if cmd in (APPCOMMAND_MEDIA_PLAY_PAUSE, APPCOMMAND_MEDIA_PLAY, APPCOMMAND_MEDIA_PAUSE):
-                            player_bar.toggle_play_pause()
-                            return True, 1
-                        elif cmd == APPCOMMAND_MEDIA_NEXTTRACK:
-                            player_bar.play_next()
-                            return True, 1
-                        elif cmd == APPCOMMAND_MEDIA_PREVIOUSTRACK:
-                            player_bar.play_previous()
-                            return True, 1
-                        elif cmd == APPCOMMAND_MEDIA_STOP:
-                            player_bar.player.stop()
-                            return True, 1
+                    if cmd in (APPCOMMAND_MEDIA_PLAY_PAUSE, APPCOMMAND_MEDIA_PLAY, APPCOMMAND_MEDIA_PAUSE):
+                        if hasattr(self.main_window, "media_play_pause"):
+                            self.main_window.media_play_pause()
+                        return True, 1
+                    elif cmd == APPCOMMAND_MEDIA_NEXTTRACK:
+                        if hasattr(self.main_window, "media_next"):
+                            self.main_window.media_next()
+                        return True, 1
+                    elif cmd == APPCOMMAND_MEDIA_PREVIOUSTRACK:
+                        if hasattr(self.main_window, "media_prev"):
+                            self.main_window.media_prev()
+                        return True, 1
+                    elif cmd == APPCOMMAND_MEDIA_STOP:
+                        if hasattr(self.main_window, "media_stop"):
+                            self.main_window.media_stop()
+                        return True, 1
+
+                # 3. WM_COMMAND (Taskbar Thumbnail Toolbar Buttons)
+                elif msg.message == WM_COMMAND:
+                    if self.taskbar_manager and self.taskbar_manager.handle_command(msg.wParam):
+                        return True, 0
+
+                # 4. Registered TaskbarButtonCreated Message
+                elif self.taskbar_manager and self.taskbar_manager.wm_taskbar_created and msg.message == self.taskbar_manager.wm_taskbar_created:
+                    self.taskbar_manager.init_buttons(msg.hwnd)
+                    return True, 0
+
             except Exception as e:
                 logger.debug(f"Error processing Windows media message: {e}")
 
@@ -268,16 +298,18 @@ class WindowsMediaNativeFilter(QAbstractNativeEventFilter):
 
 
 class MediaControllerManager:
-    """Manages the lifecycle of application and native media filters and hotkeys."""
+    """Manages the lifecycle of application and native media filters, taskbar thumbnail toolbar, and hotkeys."""
 
     def __init__(self, main_window):
         self.main_window = main_window
         self.key_filter: Optional[GlobalMediaKeyFilter] = None
         self.native_filter: Optional[WindowsMediaNativeFilter] = None
+        self.taskbar_manager: Optional[Any] = None
         self.registered_hotkeys: Dict[int, int] = {}
+        self._sync_timer: Optional[QTimer] = None
 
     def setup(self):
-        """Installs global key filter and registers Windows media hotkeys."""
+        """Installs global key filter, taskbar thumbnail toolbar, and registers Windows media hotkeys."""
         app = QApplication.instance()
         if not app:
             return
@@ -286,13 +318,67 @@ class MediaControllerManager:
         self.key_filter = GlobalMediaKeyFilter(self.main_window)
         app.installEventFilter(self.key_filter)
 
-        # On Windows, install native filter and register global media hotkeys
+        # On Windows, install native filter, taskbar thumbnail toolbar, and register global media hotkeys
         if sys.platform == "win32":
-            self.native_filter = WindowsMediaNativeFilter(self.main_window)
+            try:
+                from gui.taskbar_thumbnail import TaskbarThumbnailManager
+                self.taskbar_manager = TaskbarThumbnailManager(self.main_window)
+                self.taskbar_manager.setup()
+            except Exception as e:
+                logger.debug(f"TaskbarThumbnailManager init failed: {e}")
+                self.taskbar_manager = None
+
+            self.native_filter = WindowsMediaNativeFilter(self.main_window, self.taskbar_manager)
             app.installNativeEventFilter(self.native_filter)
             self._register_windows_hotkeys()
 
+            # Schedule delayed initialization of thumbnail toolbar buttons once window is shown
+            if self.taskbar_manager:
+                QTimer.singleShot(800, self._delayed_init_taskbar)
+
+            # Start playback state sync timer for taskbar buttons
+            self._sync_timer = QTimer(self.main_window if isinstance(self.main_window, QWidget) else None)
+            self._sync_timer.setInterval(1000)
+            self._sync_timer.timeout.connect(self.sync_playback_state)
+            self._sync_timer.start()
+
         logger.info("MediaControllerManager successfully initialized")
+
+    def _delayed_init_taskbar(self):
+        if self.taskbar_manager and self.main_window:
+            try:
+                hwnd = int(self.main_window.winId())
+                if hwnd:
+                    self.taskbar_manager.init_buttons(hwnd)
+            except Exception as e:
+                logger.debug(f"Delayed taskbar init: {e}")
+
+    def set_playing(self, is_playing: bool):
+        """Notifies the taskbar thumbnail manager of the latest playback state."""
+        if self.taskbar_manager:
+            self.taskbar_manager.update_playback_state(bool(is_playing))
+
+    def sync_playback_state(self):
+        """Queries the active player state and updates taskbar thumbnail buttons."""
+        if not self.taskbar_manager:
+            return
+
+        # 1. Chromium WebStudioView
+        if hasattr(self.main_window, "web_studio_view") and getattr(self.main_window.web_studio_view, "webview", None):
+            wv = self.main_window.web_studio_view.webview
+            if hasattr(wv, "page"):
+                try:
+                    wv.page().runJavaScript(
+                        "(typeof window.getMiniPlayerState === 'function') ? (window.getMiniPlayerState().is_playing ? true : false) : false;",
+                        self.set_playing
+                    )
+                except Exception:
+                    pass
+        # 2. Native PlayerBar fallback
+        elif getattr(self.main_window, "player_bar", None):
+            pb = self.main_window.player_bar
+            is_playing = bool(hasattr(pb, "is_playing") and pb.is_playing)
+            self.set_playing(is_playing)
 
     def _register_windows_hotkeys(self):
         try:
@@ -312,7 +398,15 @@ class MediaControllerManager:
             logger.debug(f"Failed to register Windows media hotkeys: {e}")
 
     def cleanup(self):
-        """Cleanly unregisters Windows hotkeys and removes installed filters."""
+        """Cleanly unregisters Windows hotkeys, stops timers, and removes installed filters."""
+        if self._sync_timer:
+            self._sync_timer.stop()
+            self._sync_timer = None
+
+        if self.taskbar_manager:
+            self.taskbar_manager.cleanup()
+            self.taskbar_manager = None
+
         app = QApplication.instance()
         if app and self.key_filter:
             app.removeEventFilter(self.key_filter)

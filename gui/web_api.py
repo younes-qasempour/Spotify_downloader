@@ -107,12 +107,17 @@ class WebBackendState:
         self.resolving_lock = threading.Lock()
         self.is_resolving = False
         self.resolving_message = ""
+        self.resolving_current = 0
+        self.resolving_total = 0
+        self.resolving_percent = 0.0
+        self.resolving_playlist_id = ""
         self.last_resolve_result: Dict[str, Any] = {}
 
         # Cached library snapshot for ultra-fast UI rendering
         self.lib_lock = threading.Lock()
         self.lib_cache: Optional[Dict[str, Any]] = None
         self.lib_cache_time: float = 0.0
+        self.playlist_tracks_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 
         # Spectrum batch scan state
         self.spectrum_scan_lock = threading.Lock()
@@ -132,6 +137,8 @@ class WebBackendState:
         with self.lib_lock:
             self.lib_cache = None
             self.lib_cache_time = 0.0
+            if hasattr(self, "playlist_tracks_cache"):
+                self.playlist_tracks_cache.clear()
 
     def get_cover_bytes(self, key: str) -> Tuple[Optional[bytes], str]:
         if not key:
@@ -790,6 +797,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         with self.state.resolving_lock:
             is_res = self.state.is_resolving
             res_msg = self.state.resolving_message
+            res_cur = self.state.resolving_current
+            res_tot = self.state.resolving_total
+            res_pct = self.state.resolving_percent
+            res_pid = self.state.resolving_playlist_id
             last_res = dict(self.state.last_resolve_result)
 
         watched = self.state.archive.get_watched_playlists()
@@ -802,6 +813,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
             "total_speed_str": f"{format_bytes(int(total_speed_bps))}/s" if total_speed_bps > 0 else "0 B/s",
             "is_resolving": is_res,
             "resolving_message": res_msg,
+            "resolving_current": res_cur,
+            "resolving_total": res_tot,
+            "resolving_percent": res_pct,
+            "resolving_playlist_id": res_pid,
             "last_resolve": last_res,
             "watched_playlists_count": len(watched),
         })
@@ -817,6 +832,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "error": "Already resolving a URL. Please wait..."})
             self.state.is_resolving = True
             self.state.resolving_message = f"Resolving Spotify metadata for {url[:48]}..."
+            self.state.resolving_current = 0
+            self.state.resolving_total = 0
+            self.state.resolving_percent = 0.0
+            self.state.resolving_playlist_id = ""
             self.state.last_resolve_result = {}
 
         def worker():
@@ -826,15 +845,28 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                     client_secret=config.get("spotify.client_secret", ""),
                 )
 
-                def prog_cb(msg: str):
+                def prog_cb(cur, tot=0):
                     with self.state.resolving_lock:
-                        self.state.resolving_message = msg
+                        if isinstance(cur, int) and isinstance(tot, int) and tot > 0:
+                            pct = round((cur / tot) * 100, 1)
+                            self.state.resolving_message = f"Resolving: {cur:,} / {tot:,} tracks ({pct}%)"
+                            self.state.resolving_current = cur
+                            self.state.resolving_total = tot
+                            self.state.resolving_percent = pct
+                        elif isinstance(cur, str):
+                            self.state.resolving_message = cur
+                        else:
+                            self.state.resolving_message = f"Resolving: {cur}..."
 
                 tracks = sp.resolve(url, progress_callback=prog_cb)
                 if not tracks:
                     with self.state.resolving_lock:
                         self.state.is_resolving = False
                         self.state.resolving_message = ""
+                        self.state.resolving_current = 0
+                        self.state.resolving_total = 0
+                        self.state.resolving_percent = 0.0
+                        self.state.resolving_playlist_id = ""
                         self.state.last_resolve_result = {"ok": False, "message": "No tracks found for that URL."}
                     return
 
@@ -845,6 +877,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                     with self.state.resolving_lock:
                         self.state.is_resolving = False
                         self.state.resolving_message = ""
+                        self.state.resolving_current = 0
+                        self.state.resolving_total = 0
+                        self.state.resolving_percent = 0.0
+                        self.state.resolving_playlist_id = ""
                         self.state.last_resolve_result = {
                             "ok": True,
                             "message": f"Saved '{coll_name}' ({len(tracks)} tracks) to Playlists.",
@@ -858,6 +894,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 with self.state.resolving_lock:
                     self.state.is_resolving = False
                     self.state.resolving_message = ""
+                    self.state.resolving_current = 0
+                    self.state.resolving_total = 0
+                    self.state.resolving_percent = 0.0
+                    self.state.resolving_playlist_id = ""
                     self.state.last_resolve_result = {
                         "ok": True,
                         "message": f"Queued {added} track(s) for download",
@@ -869,6 +909,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 with self.state.resolving_lock:
                     self.state.is_resolving = False
                     self.state.resolving_message = ""
+                    self.state.resolving_current = 0
+                    self.state.resolving_total = 0
+                    self.state.resolving_percent = 0.0
+                    self.state.resolving_playlist_id = ""
                     self.state.last_resolve_result = {"ok": False, "message": f"Resolution failed: {e}"}
 
         threading.Thread(target=worker, daemon=True, name="WebURLResolver").start()
@@ -983,21 +1027,35 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
     def _handle_get_saved_playlist_tracks(self, playlist_id: str):
         if not playlist_id:
             return self._send_json({"ok": False, "error": "Missing playlist id"}, status=400)
+
+        with self.state.lib_lock:
+            cached_entry = getattr(self.state, "playlist_tracks_cache", {}).get(playlist_id)
+            if cached_entry:
+                cache_time, cached_payload = cached_entry
+                if time.time() - cache_time < 30.0:
+                    return self._send_json(cached_payload)
+
         pl = self.state.archive.get_saved_playlist(playlist_id)
         if pl and not pl.get("local_cover"):
             pl["local_cover"] = resolve_collection_cover(pl["name"]) or pl.get("cover_url") or ""
+        pl_cover = (pl.get("local_cover") or pl.get("cover_url") or "") if pl else ""
+
         tracks = self.state.archive.get_saved_playlist_tracks(playlist_id)
         out_tracks = []
         for idx, tr in enumerate(tracks, 1):
             fp = tr.get("file_path") or tr.get("local_path") or ""
-            is_dl = (tr.get("status") == "downloaded") and bool(fp) and os.path.isfile(fp)
-            if not is_dl and fp and os.path.isfile(fp):
-                is_dl = True
+            is_dl = False
+            if fp:
+                if tr.get("status") == "downloaded":
+                    is_dl = os.path.isfile(fp)
+                elif os.path.isfile(fp):
+                    is_dl = True
+
             dur_ms = int(tr.get("duration_ms") or 0)
-            qb = tr.get("quality_badge") or tr.get("quality") or ""
-            if not qb and is_dl and fp:
-                qb, _ = ArchiveManager.infer_badge_from_file(fp)
-            cov = resolve_collection_cover(tr.get("album") or "") or tr.get("cover_url") or ""
+            qb = tr.get("quality_badge") or tr.get("quality") or ("Downloaded" if is_dl else "Missing")
+            t_cov = tr.get("cover_url") or pl_cover
+            cov_key = fp if is_dl else t_cov
+
             out_tracks.append({
                 "index": idx,
                 "spotify_id": tr.get("spotify_id", ""),
@@ -1007,16 +1065,23 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                 "duration_ms": dur_ms,
                 "duration_str": format_duration(dur_ms) if dur_ms > 0 else "--:--",
                 "cover_url": tr.get("cover_url", ""),
-                "cover_key": fp if (fp and os.path.isfile(fp)) else (tr.get("cover_url") or cov),
+                "cover_key": cov_key,
                 "genre": tr.get("genre", ""),
                 "is_downloaded": is_dl,
                 "status": "downloaded" if is_dl else (tr.get("status") or "pending"),
                 "file_path": fp if is_dl else "",
                 "local_path": fp if is_dl else "",
-                "quality_badge": qb or ("Downloaded" if is_dl else "Missing"),
+                "quality_badge": qb,
                 "quality": qb,
             })
-        self._send_json({"ok": True, "playlist": pl, "tracks": out_tracks})
+
+        payload = {"ok": True, "playlist": pl, "tracks": out_tracks}
+        with self.state.lib_lock:
+            if not hasattr(self.state, "playlist_tracks_cache"):
+                self.state.playlist_tracks_cache = {}
+            self.state.playlist_tracks_cache[playlist_id] = (time.time(), payload)
+
+        self._send_json(payload)
 
     def _handle_saved_playlists_action(self, body: Dict[str, Any]):
         action = (body.get("action") or "").strip()
@@ -1154,17 +1219,55 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                     )
                     synced_count = 0
                     total_added = 0
-                    for pl in pls:
+                    total_pls = len(pls)
+                    for i, pl in enumerate(pls, start=1):
                         src_url = (pl.get("spotify_url") or pl.get("source_url") or "").strip()
                         if src_url:
-                            fresh = sp.resolve(src_url)
+                            with self.state.resolving_lock:
+                                self.state.is_resolving = True
+                                self.state.resolving_playlist_id = pl.get("id", "")
+                                self.state.resolving_message = f"Syncing ({i}/{total_pls}) '{pl.get('name', 'Playlist')}'..."
+                                self.state.resolving_current = 0
+                                self.state.resolving_total = 0
+                                self.state.resolving_percent = round(((i - 1) / max(1, total_pls)) * 100, 1)
+
+                            def on_sync_all_progress(cur, tot=0, idx=i, p_name=pl.get('name', 'Playlist')):
+                                with self.state.resolving_lock:
+                                    if isinstance(cur, int) and isinstance(tot, int) and tot > 0:
+                                        p_pct = round((cur / tot) * 100, 1)
+                                        self.state.resolving_message = f"Syncing ({idx}/{total_pls}) '{p_name}': {cur:,} / {tot:,} ({p_pct}%)"
+                                        self.state.resolving_current = cur
+                                        self.state.resolving_total = tot
+                                        self.state.resolving_percent = p_pct
+                                    elif isinstance(cur, str):
+                                        self.state.resolving_message = f"({idx}/{total_pls}) {cur}"
+
+                            fresh = sp.resolve(src_url, progress_callback=on_sync_all_progress)
                             if fresh:
                                 res = self.state.archive.sync_saved_playlist(pl["id"], fresh)
                                 total_added += res.get("added", 0)
                                 synced_count += 1
+                    with self.state.resolving_lock:
+                        self.state.is_resolving = False
+                        self.state.resolving_message = ""
+                        self.state.resolving_current = 0
+                        self.state.resolving_total = 0
+                        self.state.resolving_percent = 0.0
+                        self.state.resolving_playlist_id = ""
+                        self.state.last_resolve_result = {
+                            "ok": True,
+                            "message": f"Sync all completed: {synced_count} playlists, +{total_added} new tracks."
+                        }
                     self.state.invalidate_library_cache()
                     logger.info(f"Sync all completed: {synced_count} playlists checked, {total_added} new tracks.")
                 except Exception as e_sa:
+                    with self.state.resolving_lock:
+                        self.state.is_resolving = False
+                        self.state.resolving_message = ""
+                        self.state.resolving_current = 0
+                        self.state.resolving_total = 0
+                        self.state.resolving_percent = 0.0
+                        self.state.resolving_playlist_id = ""
                     logger.error(f"Sync all playlists error: {e_sa}")
 
             threading.Thread(target=sync_all_worker, daemon=True, name="SyncAllPlaylistsThread").start()
@@ -1218,11 +1321,33 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                     with self.state.resolving_lock:
                         self.state.is_resolving = True
                         self.state.resolving_message = f"Syncing '{pl['name']}' with Spotify..."
+                        self.state.resolving_current = 0
+                        self.state.resolving_total = 0
+                        self.state.resolving_percent = 0.0
+                        self.state.resolving_playlist_id = pid
                     sp = SpotifyClient(
                         client_id=config.get("spotify.client_id", ""),
                         client_secret=config.get("spotify.client_secret", ""),
                     )
-                    fresh = sp.resolve(source_url)
+
+                    def on_sync_progress(cur, tot=0):
+                        try:
+                            pct = round((cur / tot) * 100, 1) if (isinstance(cur, int) and isinstance(tot, int) and tot > 0) else 0.0
+                            if isinstance(cur, int) and isinstance(tot, int) and tot > 0:
+                                msg = f"Syncing '{pl['name']}': {cur:,} / {tot:,} tracks ({pct}%)"
+                            elif isinstance(cur, str):
+                                msg = cur
+                            else:
+                                msg = f"Syncing '{pl['name']}': {cur:,} tracks..."
+                            with self.state.resolving_lock:
+                                self.state.resolving_message = msg
+                                self.state.resolving_current = cur if isinstance(cur, int) else 0
+                                self.state.resolving_total = tot if isinstance(tot, int) else 0
+                                self.state.resolving_percent = pct
+                        except Exception:
+                            pass
+
+                    fresh = sp.resolve(source_url, progress_callback=on_sync_progress)
                     if fresh:
                         res = self.state.archive.sync_saved_playlist(pid, fresh)
                         new_tracks = res.get("delta_tracks", [])
@@ -1235,6 +1360,10 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                         with self.state.resolving_lock:
                             self.state.is_resolving = False
                             self.state.resolving_message = ""
+                            self.state.resolving_current = 0
+                            self.state.resolving_total = 0
+                            self.state.resolving_percent = 0.0
+                            self.state.resolving_playlist_id = ""
                             self.state.last_resolve_result = {
                                 "ok": True,
                                 "message": f"Synced '{pl['name']}': +{res.get('added', 0)} new tracks",
@@ -1244,10 +1373,18 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
                         with self.state.resolving_lock:
                             self.state.is_resolving = False
                             self.state.resolving_message = ""
+                            self.state.resolving_current = 0
+                            self.state.resolving_total = 0
+                            self.state.resolving_percent = 0.0
+                            self.state.resolving_playlist_id = ""
                 except Exception as e:
                     with self.state.resolving_lock:
                         self.state.is_resolving = False
                         self.state.resolving_message = ""
+                        self.state.resolving_current = 0
+                        self.state.resolving_total = 0
+                        self.state.resolving_percent = 0.0
+                        self.state.resolving_playlist_id = ""
                         self.state.last_resolve_result = {"ok": False, "message": f"Sync error: {e}"}
 
             threading.Thread(target=sync_worker, daemon=True, name="WebPlaylistSync").start()
