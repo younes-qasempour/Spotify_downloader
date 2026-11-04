@@ -1744,7 +1744,7 @@ async function loadSavedPlaylistDetail(pid) {
 
   // 10. Download Next Batch Button (Stay on playlist page, update statuses immediately)
   document.getElementById("btn-pl-download-batch")?.addEventListener("click", async () => {
-    const count = Math.min(state.savedBatchSize, missingCnt || 1);
+    const count = Math.min(state.savedBatchSize || 200, unqueuedMissing || 1);
     const r = await apiPost("/api/saved_playlists/action", {
       action: "download_batch",
       playlist_id: pid,

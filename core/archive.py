@@ -2668,7 +2668,7 @@ class ArchiveManager:
                     conn.execute(f"""
                         UPDATE saved_playlist_tracks
                         SET status = 'queued'
-                        WHERE playlist_id = ? AND spotify_id IN ({placeholders}) AND status = 'pending'
+                        WHERE playlist_id = ? AND spotify_id IN ({placeholders}) AND status != 'downloaded'
                     """, (playlist_id, *spotify_ids))
         except Exception as e:
             logger.debug(f"Failed to mark tracks queued: {e}")
