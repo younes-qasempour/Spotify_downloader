@@ -9,7 +9,7 @@ const state = {
   sideSearch: "",
   searchQuery: "",
   selectedGenre: "all",
-  sortBy: "title_asc",
+  sortBy: "playlist_order",
   activeCollection: null, // { name, type, folder_path, cover_key, subtitle }
 
   library: {
@@ -476,10 +476,25 @@ function applyLibraryFilters() {
     return true;
   });
 
-  const sort = state.sortBy;
+  const sort = state.sortBy || "playlist_order";
+  const coll = state.activeCollection;
+
   list.sort((a, b) => {
-    if (sort === "artist_asc") return a.artist.localeCompare(b.artist);
+    if (sort === "playlist_order") {
+      if (coll && coll.name) {
+        const collName = coll.name;
+        const numA = (a.playlist_numbers && a.playlist_numbers[collName] !== undefined)
+          ? a.playlist_numbers[collName]
+          : ((a.playlist_numbers && a.playlist_numbers["_default"] !== undefined) ? a.playlist_numbers["_default"] : (a.track_number || 999999));
+        const numB = (b.playlist_numbers && b.playlist_numbers[collName] !== undefined)
+          ? b.playlist_numbers[collName]
+          : ((b.playlist_numbers && b.playlist_numbers["_default"] !== undefined) ? b.playlist_numbers["_default"] : (b.track_number || 999999));
+        if (numA !== numB) return numA - numB;
+      }
+      return (b.mtime || 0) - (a.mtime || 0);
+    }
     if (sort === "recent") return (b.mtime || 0) - (a.mtime || 0);
+    if (sort === "artist_asc") return a.artist.localeCompare(b.artist);
     if (sort === "dur_desc") return (b.duration_ms || 0) - (a.duration_ms || 0);
     if (sort === "dur_asc") return (a.duration_ms || 0) - (b.duration_ms || 0);
     if (sort === "genre_asc") return (a.genre || "zzz").localeCompare(b.genre || "zzz");

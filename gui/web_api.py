@@ -222,20 +222,24 @@ class WebBackendState:
         base_dir = config.get("download.output_dir", "")
         archive_records = self.archive.get_all_tracks()
 
-        # Fetch true playlist memberships from saved_playlists and saved_playlist_tracks
+        # Fetch true playlist memberships and playlist track numbers from saved_playlists and saved_playlist_tracks
         saved_pls = self.archive.get_saved_playlists()
         track_collections_map: Dict[str, Set[str]] = collections.defaultdict(set)
+        track_playlist_numbers: Dict[str, Dict[str, int]] = collections.defaultdict(dict)
         try:
             with self.archive.connection() as conn:
                 cur = conn.execute("""
-                    SELECT s.spotify_id, p.name 
+                    SELECT s.spotify_id, p.name, s.track_number 
                     FROM saved_playlist_tracks s
                     JOIN saved_playlists p ON s.playlist_id = p.id
                     WHERE s.spotify_id IS NOT NULL AND s.spotify_id != ''
                 """)
-                for sid, pname in cur.fetchall():
+                for sid, pname, trk_num in cur.fetchall():
                     if pname:
-                        track_collections_map[sid].add(pname.strip())
+                        clean_pname = pname.strip()
+                        track_collections_map[sid].add(clean_pname)
+                        if trk_num:
+                            track_playlist_numbers[sid][clean_pname] = int(trk_num)
         except Exception as e_mem:
             logger.debug(f"Could not load playlist track memberships: {e_mem}")
 
@@ -365,6 +369,10 @@ class WebBackendState:
             artist = rec.get("artist") or "Unknown Artist"
             album = rec.get("album") or coll_name or "Singles"
 
+            trk_numbers = dict(track_playlist_numbers.get(sid, {}))
+            if rec.get("track_number"):
+                trk_numbers["_default"] = int(rec.get("track_number") or 0)
+
             track_obj = {
                 "id": sid or norm_p,
                 "title": title,
@@ -384,6 +392,9 @@ class WebBackendState:
                 "folder_path": folder,
                 "size_bytes": fsize,
                 "mtime": mtime,
+                "added_at": rec.get("downloaded_at") or rec.get("added_at") or "",
+                "playlist_numbers": trk_numbers,
+                "track_number": int(rec.get("track_number") or 0),
             }
             tracks_out.append(track_obj)
 
