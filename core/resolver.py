@@ -163,7 +163,7 @@ class CascadingAudioEngine:
             return None
 
         def _try_musilon() -> Optional[ResolvedTrackSource]:
-            if not self.musilon.enabled or skip_musilon or is_melobot_mode:
+            if not self.musilon.enabled or skip_musilon:
                 return None
             from core.provider_cooldown import provider_cooldowns
             if provider_cooldowns.remaining("musilon") > 0.0:
@@ -251,6 +251,25 @@ class CascadingAudioEngine:
                     logger.warning(f"Preferred engine YouTube failed for {track.title}: {e}")
                 return None
 
+        # Direct YouTube Music mode
+        if source_engine in ("ytm", "youtube"):
+            allow_fallback = config.get("download.allow_fallback", True) and not musilon_only
+            if allow_fallback:
+                try:
+                    yt_src = self.ytdlp.resolve_track(track, cancel_check=cancel_check)
+                    if yt_src:
+                        act_ext = yt_src.audio_format or "opus"
+                        badge = "YTM M4A" if act_ext.lower() == "m4a" else "YTM Opus"
+                        return ResolvedTrackSource(
+                            source_type="YouTube Music",
+                            quality_badge=badge,
+                            source_obj=yt_src,
+                            file_extension=act_ext
+                        )
+                except Exception as e:
+                    logger.warning(f"Preferred engine YouTube failed for {track.title}: {e}")
+            return None
+
         # 1. Primary Engine Attempt
         primary_res = _try_melobot() if use_melobot_primary else _try_musilon()
         if primary_res:
@@ -259,11 +278,10 @@ class CascadingAudioEngine:
         if cancel_check and cancel_check():
             return None
 
-        # 2. Secondary Engine Attempt (Cascade between Musilon and MeloBot, but NEVER call Musilon if is_melobot_mode)
-        if not is_melobot_mode:
-            secondary_res = _try_musilon() if use_melobot_primary else _try_melobot()
-            if secondary_res:
-                return secondary_res
+        # 2. Secondary Engine Attempt (Cascade between Musilon and MeloBot)
+        secondary_res = _try_musilon() if use_melobot_primary else _try_melobot()
+        if secondary_res:
+            return secondary_res
 
         if cancel_check and cancel_check():
             return None

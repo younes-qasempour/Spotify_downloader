@@ -388,8 +388,8 @@ class ConfigManager:
             raise ValueError("'ui.player_volume' must be between 0 and 100.")
         if key_path == "download.target_lufs" and not -24 <= value <= -5:
             raise ValueError("'download.target_lufs' must be between -24 and -5 LUFS.")
-        if key_path == "source_engine" and value not in {"musilon", "melobot"}:
-            raise ValueError("'source_engine' must be 'musilon' or 'melobot'.")
+        if key_path == "source_engine" and value not in {"musilon", "melobot", "ytm", "youtube"}:
+            raise ValueError("'source_engine' must be 'musilon', 'melobot', or 'ytm'.")
         if key_path == "download.target_format":
             from core.transcoder import SUPPORTED_TARGET_FORMATS
             if value not in SUPPORTED_TARGET_FORMATS:
