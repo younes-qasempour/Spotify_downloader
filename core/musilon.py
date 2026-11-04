@@ -513,6 +513,9 @@ class MusilonEngine:
                 if resp is not None:
                     resp.close()
                 logger.warning(f"Musilon request failed (attempt {attempt + 1}/{max_retries}): {e}")
+                if isinstance(e, (requests.exceptions.SSLError, requests.exceptions.ConnectionError)):
+                    provider_cooldowns.defer("musilon", 60.0)
+                    raise e
                 if attempt == max_retries - 1:
                     raise e
                 time.sleep(backoff)

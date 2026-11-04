@@ -103,10 +103,11 @@ class YtdlpEngine:
         opts["extractor_args"]["youtubepot-bgutilscriptnode"] = {"script_path": ["disabled"]}
 
         try:
-            from yt_dlp.extractor.youtube.pot import _director
-            if hasattr(_director, "_pot_providers") and hasattr(_director._pot_providers, "value"):
-                _director._pot_providers.value.pop('BgUtilScriptDeno', None)
-                _director._pot_providers.value.pop('BgUtilScriptNode', None)
+            import yt_dlp.extractor.youtube.pot as pot
+            for reg in (getattr(pot, "_director", None), getattr(pot, "_registry", None)):
+                if reg and hasattr(reg, "_pot_providers") and hasattr(reg._pot_providers, "value"):
+                    reg._pot_providers.value.pop('BgUtilScriptDeno', None)
+                    reg._pot_providers.value.pop('BgUtilScriptNode', None)
         except Exception:
             pass
 
@@ -1268,6 +1269,13 @@ class YtdlpEngine:
                     ydl_opts["outtmpl"] = attempt_base.replace("%", "%%") + ".%(ext)s"
                     logger.info(f"Attempting yt-dlp download from: {url} (attempt {attempt_idx}/{max_dl_attempts})")
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        try:
+                            import yt_dlp.extractor.youtube.pot as pot
+                            if hasattr(pot, "_registry") and hasattr(pot._registry, "_pot_providers"):
+                                pot._registry._pot_providers.value.pop('BgUtilScriptDeno', None)
+                                pot._registry._pot_providers.value.pop('BgUtilScriptNode', None)
+                        except Exception:
+                            pass
                         result = ydl.download([url])
                     if cancel_check and cancel_check():
                         raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")

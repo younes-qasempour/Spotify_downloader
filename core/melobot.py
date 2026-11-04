@@ -242,6 +242,7 @@ class MeloBotEngine:
         self._login_phone_code_hash: Optional[str] = None
         self._login_phone: Optional[str] = None
         self._closed = False
+        self._cached_authorized: Optional[bool] = None
 
         # Dedicated background asyncio thread & loop
         self._loop = asyncio.new_event_loop()
@@ -320,12 +321,21 @@ class MeloBotEngine:
             if self._loop_thread.is_alive():
                 logger.warning("Telegram loop is still finishing shutdown.")
 
+    def has_saved_session(self) -> bool:
+        session_file = f"{self._session_path}.session"
+        return bool(os.path.isfile(session_file) and os.path.getsize(session_file) > 100)
+
     @property
     def enabled(self) -> bool:
         """Checks if Telegram/MeloBot is enabled in settings."""
-        source_engine = config.get("source_engine", "musilon")
+        source_engine = str(config.get("source_engine", "musilon")).strip().lower()
         tg_enabled = config.get("telegram.enabled", False)
-        return tg_enabled or (source_engine == "melobot")
+        if tg_enabled or source_engine == "melobot":
+            return True
+        try:
+            return bool(self.has_saved_session() and self.is_authorized())
+        except Exception:
+            return False
 
     # =========================================================================
     # Client Lifecycle & Authentication
@@ -362,8 +372,12 @@ class MeloBotEngine:
 
     def is_authorized(self) -> bool:
         """Returns True if the user account is actively signed in."""
+        if getattr(self, "_cached_authorized", None) is not None:
+            return self._cached_authorized
         try:
-            return bool(self._run_async(self._async_is_authorized(), timeout=10.0))
+            val = bool(self._run_async(self._async_is_authorized(), timeout=10.0))
+            self._cached_authorized = val
+            return val
         except Exception as e:
             logger.debug(f"is_authorized check failed: {e}")
             return False
@@ -494,6 +508,7 @@ class MeloBotEngine:
                 pass
         self._client = None
         self._client_connected = False
+        self._cached_authorized = False
         config.set("telegram.enabled", False)
         config.set("telegram.phone", "")
         config.save()

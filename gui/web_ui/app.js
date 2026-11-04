@@ -2375,6 +2375,10 @@ function updateTelegramUI(data) {
       info.textContent = `✈️ Telegram Authorized: @${u.username || u.phone || "user"} (ID: ${u.id || ""})`;
       info.classList.remove("hidden");
     }
+    const tgToggle = document.getElementById("set-tg-enabled");
+    if (tgToggle && !tgToggle.checked) {
+      tgToggle.checked = true;
+    }
   } else if (data.phone) {
     badge.classList.add("disconnected");
     badge.textContent = "Logged Out";

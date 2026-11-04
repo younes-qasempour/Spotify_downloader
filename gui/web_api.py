@@ -2107,6 +2107,9 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         try:
             melobot = self.state.melobot
             authorized = melobot.is_authorized() if melobot else False
+            if authorized and not config.get("telegram.enabled", False):
+                config.set("telegram.enabled", True)
+                config.save()
             user = melobot.get_me() if (melobot and authorized) else None
             self._send_json({
                 "ok": True,
