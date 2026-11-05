@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">open.spotify.com</domain>
+        <domain includeSubdomains="true">api.spotify.com</domain>
+        <domain includeSubdomains="true">accounts.spotify.com</domain>
+        <domain includeSubdomains="true">i.scdn.co</domain>
+        <domain includeSubdomains="true">lrclib.net</domain>
+        <domain includeSubdomains="true">open.musilon.com</domain>
+    </domain-config>
+</network-security-config>
+

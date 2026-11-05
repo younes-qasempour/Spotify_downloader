@@ -19,6 +19,7 @@ class TestSettingsFeedback(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        os.makedirs("scratch", exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir="scratch")
         self.addCleanup(self.temporary.cleanup)
         self.config = object.__new__(ConfigManager)

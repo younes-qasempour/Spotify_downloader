@@ -285,12 +285,18 @@ class ReliabilityView(QWidget):
             self.refresh_history()
 
     def _fill_table(self, table, rows):
-        table.setRowCount(0)
-        for row in rows:
-            index = table.rowCount()
-            table.insertRow(index)
-            for column, value in enumerate(row):
-                table.setItem(index, column, QTableWidgetItem(_safe_text(value or "")))
+        scroll_val = table.verticalScrollBar().value()
+        table.setUpdatesEnabled(False)
+        try:
+            table.setRowCount(0)
+            for row in rows:
+                index = table.rowCount()
+                table.insertRow(index)
+                for column, value in enumerate(row):
+                    table.setItem(index, column, QTableWidgetItem(_safe_text(value or "")))
+            table.verticalScrollBar().setValue(scroll_val)
+        finally:
+            table.setUpdatesEnabled(True)
 
     @staticmethod
     def _selected_rows(table):
@@ -320,15 +326,23 @@ class ReliabilityView(QWidget):
             } for item in self.queue_manager.get_items() if item.status != "Completed"]
 
         def show(rows):
-            selected = {self._queue_rows[row]["id"] for row in self._selected_rows(self.queue_table)}
-            self._queue_rows = rows
-            self._fill_table(self.queue_table, [
-                [row[key] for key in ("title", "artist", "status", "stage", "error", "hint")] for row in rows
-            ])
-            for index, row in enumerate(rows):
-                if row["id"] in selected:
-                    for column in range(self.queue_table.columnCount()):
-                        self.queue_table.item(index, column).setSelected(True)
+            scroll_val = self.queue_table.verticalScrollBar().value()
+            self.queue_table.setUpdatesEnabled(False)
+            try:
+                selected = {self._queue_rows[row]["id"] for row in self._selected_rows(self.queue_table)}
+                self._queue_rows = rows
+                self._fill_table(self.queue_table, [
+                    [row[key] for key in ("title", "artist", "status", "stage", "error", "hint")] for row in rows
+                ])
+                for index, row in enumerate(rows):
+                    if row["id"] in selected:
+                        for column in range(self.queue_table.columnCount()):
+                            item = self.queue_table.item(index, column)
+                            if item:
+                                item.setSelected(True)
+                self.queue_table.verticalScrollBar().setValue(scroll_val)
+            finally:
+                self.queue_table.setUpdatesEnabled(True)
 
         self._run("queue", load, show, (self.refresh_button,))
 

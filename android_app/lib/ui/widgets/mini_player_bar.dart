@@ -1,6 +1,5 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
-import '../../models/track_metadata.dart';
 import '../../services/audio_player_service.dart';
 import '../theme.dart';
 import '../views/player_view.dart';
@@ -34,7 +33,7 @@ class MiniPlayerBar extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.4),
+                  color: Colors.black.withValues(alpha: 0.4),
                   blurRadius: 8,
                   offset: const Offset(0, 4),
                 ),

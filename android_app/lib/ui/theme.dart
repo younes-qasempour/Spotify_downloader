@@ -11,6 +11,7 @@ class FlacifyTheme {
 
   static ThemeData get darkTheme {
     return ThemeData(
+      useMaterial3: true,
       brightness: Brightness.dark,
       scaffoldBackgroundColor: spotifyBlack,
       primaryColor: spotifyEmerald,
@@ -38,6 +39,63 @@ class FlacifyTheme {
         unselectedItemColor: textSecondary,
         type: BottomNavigationBarType.fixed,
         elevation: 10,
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: elevatedDark,
+        hintStyle: const TextStyle(color: textSecondary),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: spotifyEmerald, width: 1.5),
+        ),
+      ),
+      sliderTheme: const SliderThemeData(
+        activeTrackColor: spotifyEmerald,
+        thumbColor: spotifyEmerald,
+        inactiveTrackColor: elevatedDark,
+        trackHeight: 4.0,
+      ),
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: elevatedDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        contentTextStyle: const TextStyle(color: textPrimary),
+      ),
+      cardTheme: CardThemeData(
+        color: cardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: cardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: cardDark,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+        ),
+      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(
+        color: spotifyEmerald,
+        linearTrackColor: elevatedDark,
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: spotifyEmerald,
+          foregroundColor: spotifyBlack,
+          textStyle: const TextStyle(fontWeight: FontWeight.bold),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+        ),
       ),
     );
   }

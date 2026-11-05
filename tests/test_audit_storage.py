@@ -26,7 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class IsolatedStorageTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="audit-storage-", dir=ROOT)
+        (ROOT / "scratch").mkdir(exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="audit-storage-", dir=ROOT / "scratch")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.music = self.root / "music"

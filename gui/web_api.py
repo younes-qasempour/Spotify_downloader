@@ -2042,8 +2042,16 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         else:
             return self._send_json({"ok": False, "error": f"Unknown action: {action}"}, status=400)
 
+        processed_count = len(results)
         self.state.invalidate_library_cache()
-        self._send_json({"ok": True, "action": action, "processed": len(results), "results": results})
+        self._send_json({
+            "ok": True,
+            "action": action,
+            "total": len(file_paths),
+            "processed": processed_count,
+            "failed": max(0, len(file_paths) - processed_count),
+            "results": results,
+        })
 
     # ------------------------------------------------------------------
     # Handlers: Settings & OS Integration

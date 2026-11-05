@@ -163,6 +163,7 @@ class _MobileSyncViewState extends State<MobileSyncView> {
               ),
               onPressed: () async {
                 final data = await Clipboard.getData(Clipboard.kTextPlain);
+                if (!mounted) return;
                 final text = data?.text?.trim() ?? '';
                 if (text.isNotEmpty) {
                   try {
@@ -174,17 +175,20 @@ class _MobileSyncViewState extends State<MobileSyncView> {
                       _portController.text = widget.syncService.port.toString();
                     }
                     _tokenController.text = widget.syncService.token;
-                    Navigator.pop(ctx);
+                    if (ctx.mounted) Navigator.pop(ctx);
                     _checkInitialConnection();
+                    if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Pairing code applied successfully.')),
                     );
                   } catch (e) {
+                    if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('Invalid pairing code: $e')),
                     );
                   }
                 } else {
+                  if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Clipboard is empty.')),
                   );

@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide RepeatMode;
 import '../../models/lyrics_model.dart';
 import '../../services/audio_player_service.dart';
 import '../theme.dart';
@@ -156,7 +156,7 @@ class _PlayerViewState extends State<PlayerView> {
                       decoration: BoxDecoration(
                         color: FlacifyTheme.elevatedDark,
                         borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: FlacifyTheme.spotifyEmerald.withOpacity(0.4)),
+                        border: Border.all(color: FlacifyTheme.spotifyEmerald.withValues(alpha: 0.4)),
                       ),
                       child: Text(
                         track.qualityBadge!,
@@ -314,7 +314,7 @@ class _PlayerViewState extends State<PlayerView> {
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.6),
+                color: Colors.black.withValues(alpha: 0.6),
                 blurRadius: 20,
                 offset: const Offset(0, 10),
               ),
@@ -337,10 +337,10 @@ class _PlayerViewState extends State<PlayerView> {
 
   Widget _buildLyricsView() {
     if (_lyrics == null || _lyrics!.lines.isEmpty) {
-      return Center(
+      return const Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
+          children: [
             Icon(Icons.lyrics_outlined, size: 48, color: FlacifyTheme.textSecondary),
             SizedBox(height: 12),
             Text(
@@ -357,15 +357,9 @@ class _PlayerViewState extends State<PlayerView> {
       builder: (context, posSnap) {
         final currentMs = (posSnap.data ?? Duration.zero).inMilliseconds;
 
-        // Find current lyric line
-        var activeIndex = 0;
-        for (var i = 0; i < _lyrics!.lines.length; i++) {
-          if (currentMs >= _lyrics!.lines[i].timestampMs) {
-            activeIndex = i;
-          } else {
-            break;
-          }
-        }
+        // Find current lyric line using binary search
+        final activeIdx = _lyrics!.activeLineIndexAt(currentMs);
+        final activeIndex = activeIdx >= 0 ? activeIdx : 0;
 
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _scrollToActiveLyric(activeIndex);
@@ -387,7 +381,7 @@ class _PlayerViewState extends State<PlayerView> {
                 style: TextStyle(
                   fontSize: isActive ? 24 : 17,
                   fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-                  color: isActive ? FlacifyTheme.spotifyEmerald : FlacifyTheme.textSecondary.withOpacity(0.5),
+                  color: isActive ? FlacifyTheme.spotifyEmerald : FlacifyTheme.textSecondary.withValues(alpha: 0.5),
                   height: 1.6,
                 ),
                 child: Padding(

@@ -95,6 +95,40 @@ class ReliabilityTests(unittest.TestCase):
         os.replace(self.store.path, moved)
         os.replace(moved, self.store.path)
 
+    def test_queue_order_is_deterministic_and_preserved(self):
+        records = [
+            {"track_id": f"id_{i:02d}", "track": {"id": f"id_{i:02d}", "title": f"Song {i}"}, "status": "Waiting", "preferred_engine": None}
+            for i in range(25)
+        ]
+        with patch("core.reliability_store.time.time", return_value=100000.0):
+            self.store.save_queue(records)
+        loaded = self.store.load_queue()
+        self.assertEqual(len(loaded), 25)
+        self.assertEqual([r["track"]["id"] for r in loaded], [f"id_{i:02d}" for i in range(25)])
+
+        bad_records = [{"track_id": "bad", "track": object(), "status": "Waiting"}]
+        with self.assertRaises(TypeError):
+            self.store.save_queue(bad_records)
+        self.assertEqual(len(self.store.load_queue()), 25)
+
+    def test_source_review_inflections_and_artist_prefix(self):
+        trk = TrackMetadata(id="t1", title="Song (Remaster)", artists=["Artist"], album="Album", duration_ms=180000)
+        resolved = SimpleNamespace(
+            source_type="Provider", quality_badge="Lossless",
+            source_obj=SimpleNamespace(title="Song (Remastered)", artist="Artist", duration_sec=180)
+        )
+        summary = source_review_summary(trk, resolved)
+        self.assertFalse(summary["uncertain"])
+        self.assertEqual(summary["version"], "remaster")
+
+        resolved_prefix = SimpleNamespace(
+            source_type="Provider", quality_badge="Lossless",
+            source_obj=SimpleNamespace(title="Artist - Song", artist="Artist", duration_sec=180)
+        )
+        trk_plain = TrackMetadata(id="t2", title="Song", artists=["Artist"], album="Album", duration_ms=180000)
+        summary_prefix = source_review_summary(trk_plain, resolved_prefix)
+        self.assertFalse(summary_prefix["uncertain"])
+
     def test_source_summary_contains_no_authenticated_url(self):
         resolved = SimpleNamespace(
             source_type="Provider", quality_badge="Lossless",

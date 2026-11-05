@@ -29,18 +29,18 @@ class TrackManifestItem {
 
   factory TrackManifestItem.fromJson(Map<String, dynamic> json) {
     return TrackManifestItem(
-      trackId: json['track_id'] as String,
-      filename: json['filename'] as String,
-      title: json['title'] as String,
-      artist: json['artist'] as String,
-      album: json['album'] as String? ?? 'Synced Library',
-      durationMs: json['duration_ms'] as int? ?? 0,
-      fileSize: json['file_size'] as int,
-      fileHash: json['file_hash'] as String,
-      hasLyrics: json['has_lyrics'] as bool? ?? false,
-      lyricsLrc: json['lyrics_lrc'] as String?,
-      coverHash: json['cover_hash'] as String?,
-      updatedAt: json['updated_at'] as int? ?? 0,
+      trackId: json['track_id']?.toString() ?? '',
+      filename: json['filename']?.toString() ?? '',
+      title: json['title']?.toString() ?? 'Unknown Title',
+      artist: json['artist']?.toString() ?? 'Unknown Artist',
+      album: json['album']?.toString() ?? 'Synced Library',
+      durationMs: (json['duration_ms'] as num?)?.toInt() ?? 0,
+      fileSize: (json['file_size'] as num?)?.toInt() ?? 0,
+      fileHash: json['file_hash']?.toString() ?? '',
+      hasLyrics: json['has_lyrics'] == true,
+      lyricsLrc: json['lyrics_lrc']?.toString(),
+      coverHash: json['cover_hash']?.toString(),
+      updatedAt: (json['updated_at'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -81,13 +81,13 @@ class SyncPlaylistTrack {
 
   factory SyncPlaylistTrack.fromJson(Map<String, dynamic> json) {
     return SyncPlaylistTrack(
-      spotifyId: json['spotify_id'] as String? ?? '',
-      title: json['title'] as String? ?? 'Unknown',
-      artist: json['artist'] as String? ?? 'Unknown',
-      album: json['album'] as String? ?? '',
-      durationMs: json['duration_ms'] as int? ?? 0,
-      trackNumber: json['track_number'] as int? ?? 1,
-      coverUrl: json['cover_url'] as String? ?? '',
+      spotifyId: json['spotify_id']?.toString() ?? '',
+      title: json['title']?.toString() ?? 'Unknown',
+      artist: json['artist']?.toString() ?? 'Unknown',
+      album: json['album']?.toString() ?? '',
+      durationMs: (json['duration_ms'] as num?)?.toInt() ?? 0,
+      trackNumber: (json['track_number'] as num?)?.toInt() ?? 1,
+      coverUrl: json['cover_url']?.toString() ?? '',
     );
   }
 
@@ -124,14 +124,15 @@ class SyncPlaylistItem {
   factory SyncPlaylistItem.fromJson(Map<String, dynamic> json) {
     final rawTracks = json['tracks'] as List<dynamic>? ?? [];
     return SyncPlaylistItem(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      spotifyUrl: json['spotify_url'] as String? ?? '',
-      coverUrl: json['cover_url'] as String? ?? '',
-      totalTracks: json['total_tracks'] as int? ?? rawTracks.length,
-      updatedAt: json['updated_at'] as int? ?? 0,
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? 'Unknown',
+      spotifyUrl: json['spotify_url']?.toString() ?? '',
+      coverUrl: json['cover_url']?.toString() ?? '',
+      totalTracks: (json['total_tracks'] as num?)?.toInt() ?? rawTracks.length,
+      updatedAt: (json['updated_at'] as num?)?.toInt() ?? 0,
       tracks: rawTracks
-          .map((t) => SyncPlaylistTrack.fromJson(t as Map<String, dynamic>))
+          .whereType<Map<String, dynamic>>()
+          .map((t) => SyncPlaylistTrack.fromJson(t))
           .toList(),
     );
   }
@@ -155,4 +156,9 @@ class SyncDeltaResult {
     required this.toDownloadFromPc,
     required this.toUploadToPc,
   });
+
+  int get totalDownloadBytes => toDownloadFromPc.fold(0, (sum, item) => sum + item.fileSize);
+  int get totalUploadBytes => toUploadToPc.fold(0, (sum, item) => sum + item.fileSize);
+  int get totalItems => toDownloadFromPc.length + toUploadToPc.length;
+  bool get isEmpty => toDownloadFromPc.isEmpty && toUploadToPc.isEmpty;
 }

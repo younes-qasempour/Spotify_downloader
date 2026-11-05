@@ -1466,6 +1466,11 @@ class MiniPlayerBar(QFrame):
         """Cycles repeat mode."""
         self._toggle_repeat()
 
+    def closeEvent(self, event):
+        if hasattr(self, "_device_watchdog") and self._device_watchdog.isActive():
+            self._device_watchdog.stop()
+        super().closeEvent(event)
+
     @staticmethod
     def _format_ms(ms: int) -> str:
         secs = max(0, ms // 1000)

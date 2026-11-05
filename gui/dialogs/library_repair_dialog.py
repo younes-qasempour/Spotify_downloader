@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import (
     MessageBoxBase, SubtitleLabel, StrongBodyLabel, CaptionLabel, BodyLabel,
-    PushButton, CardWidget, SmoothScrollArea,
+    PushButton, CardWidget, SmoothScrollArea, SearchLineEdit, ComboBox,
     FluentIcon, InfoBar, InfoBarPosition
 )
 
@@ -47,6 +47,9 @@ class LibraryRepairDialog(MessageBoxBase):
         self.repair_manager = repair_manager or LibraryRepairManager()
         self.on_undone_callback = on_undone_callback
         self._last_undo_thread: Optional[threading.Thread] = None
+        self._undo_in_progress = False
+        self._is_closed = False
+        self._undo_buttons: list[PushButton] = []
 
         self.widget.setMinimumWidth(720)
         self.widget.setMinimumHeight(520)
@@ -60,6 +63,24 @@ class LibraryRepairDialog(MessageBoxBase):
         )
         self.subtitleLabel.setTextColor(TEXT_MUTED, TEXT_MUTED)
         self.viewLayout.addWidget(self.subtitleLabel)
+
+        # Filter bar: Search, State filter, Undo All
+        self.filter_bar = QHBoxLayout()
+        self.filter_bar.setSpacing(8)
+
+        self.search_input = SearchLineEdit(self)
+        self.search_input.setPlaceholderText("Search by file path, action, or hash...")
+        self.search_input.setClearButtonEnabled(True)
+        self.filter_bar.addWidget(self.search_input, 1)
+
+        self.state_filter = ComboBox(self)
+        self.state_filter.addItems(["All States", "Applied", "Undone", "Aborted"])
+        self.filter_bar.addWidget(self.state_filter)
+
+        self.undo_all_btn = PushButton(FluentIcon.HISTORY, "Undo All Applied", self)
+        self.filter_bar.addWidget(self.undo_all_btn)
+
+        self.viewLayout.addLayout(self.filter_bar)
 
         # Scrollable History List
         self.scroll_area = SmoothScrollArea(self)
@@ -86,36 +107,68 @@ class LibraryRepairDialog(MessageBoxBase):
         self.cancelButton.setVisible(False)
 
         self.sig_undo_result.connect(self._on_undo_result)
+        self.search_input.textChanged.connect(self._render_filtered_history)
+        self.state_filter.currentIndexChanged.connect(self._render_filtered_history)
+        self.undo_all_btn.clicked.connect(self._trigger_undo_all)
 
         self.history_entries: list[dict] = []
         self._refresh_history()
 
     def _refresh_history(self):
-        while self.list_lay.count():
-            item = self.list_lay.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-
         try:
             self.history_entries = self.repair_manager.list_history()
         except Exception as e:
             self.history_entries = []
             logger.error("Failed to load repair history: %s", e)
+        self._render_filtered_history()
 
-        if not self.history_entries:
-            empty_lbl = CaptionLabel("No repair history entries found.", self.list_container)
-            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty_lbl.setTextColor(TEXT_MUTED, TEXT_MUTED)
-            self.list_lay.addWidget(empty_lbl)
-            self.list_lay.addStretch(1)
-            return
+    def _render_filtered_history(self):
+        self._undo_buttons = []
+        self.list_container.setUpdatesEnabled(False)
+        try:
+            while self.list_lay.count():
+                item = self.list_lay.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.deleteLater()
 
-        for entry in self.history_entries:
-            card = self._create_history_card(entry)
-            self.list_lay.addWidget(card)
+            query = self.search_input.text().strip().lower()
+            selected_state = self.state_filter.currentText().strip().lower()
 
-        self.list_lay.addStretch(1)
+            filtered = []
+            for entry in self.history_entries:
+                entry_state = str(entry.get("state", "applied")).strip().lower()
+                if selected_state not in ("", "all states") and entry_state != selected_state:
+                    continue
+                if query:
+                    searchable = (
+                        str(entry.get("file_path", "")).lower() + " " +
+                        str(entry.get("action", "")).lower() + " " +
+                        str(entry.get("original_hash", "")).lower() + " " +
+                        str(entry.get("repaired_hash", "")).lower() + " " +
+                        str(entry.get("id", "")).lower()
+                    )
+                    if query not in searchable:
+                        continue
+                filtered.append(entry)
+
+            if not filtered:
+                msg = "No matching repair history entries." if self.history_entries else "No repair history entries found."
+                empty_lbl = CaptionLabel(msg, self.list_container)
+                empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                empty_lbl.setTextColor(TEXT_MUTED, TEXT_MUTED)
+                self.list_lay.addWidget(empty_lbl)
+                self.list_lay.addStretch(1)
+            else:
+                for entry in filtered:
+                    card = self._create_history_card(entry)
+                    self.list_lay.addWidget(card)
+                self.list_lay.addStretch(1)
+
+            has_applied = any(str(e.get("state", "")).lower() == "applied" and e.get("id") for e in self.history_entries)
+            self.undo_all_btn.setEnabled(not self._undo_in_progress and has_applied)
+        finally:
+            self.list_container.setUpdatesEnabled(True)
 
     def _create_history_card(self, entry: Dict[str, Any]) -> CardWidget:
         card = CardWidget(self.list_container)
@@ -153,39 +206,54 @@ class LibraryRepairDialog(MessageBoxBase):
         card_layout.addLayout(header_row)
 
         # Target file path
-        path_label = BodyLabel(entry.get("file_path", ""), card)
+        file_path_str = str(entry.get("file_path", "") or "")
+        path_label = BodyLabel(file_path_str, card)
+        path_label.setToolTip(file_path_str)
         path_label.setWordWrap(True)
         card_layout.addWidget(path_label)
 
         # Hashes and Undo button row
         bottom_row = QHBoxLayout()
-        orig_h = str(entry.get("original_hash", ""))[:8]
-        rep_h = str(entry.get("repaired_hash", ""))[:8]
-        hash_text = (
-            f"SHA-256: {orig_h}... \u2192 {rep_h}..."
-            if orig_h and rep_h
-            else f"SHA-256: {orig_h or rep_h}..."
-        )
+        orig_h = str(entry.get("original_hash", "") or "")[:8]
+        rep_h = str(entry.get("repaired_hash", "") or "")[:8]
+        if orig_h and rep_h:
+            hash_text = f"SHA-256: {orig_h}... \u2192 {rep_h}..."
+        elif orig_h or rep_h:
+            hash_text = f"SHA-256: {orig_h or rep_h}..."
+        else:
+            hash_text = "SHA-256: N/A"
+
         hash_label = CaptionLabel(hash_text, card)
         hash_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
         bottom_row.addWidget(hash_label, 1)
 
         undo_btn = PushButton(FluentIcon.HISTORY, "Undo Repair", card)
         undo_btn.setFixedHeight(30)
+        entry_id = str(entry.get("id") or "")
         is_applied = (state == "applied")
-        undo_btn.setEnabled(is_applied)
-        if is_applied:
-            entry_id = entry.get("id")
+        can_undo = is_applied and bool(entry_id) and not self._undo_in_progress
+        undo_btn.setEnabled(can_undo)
+        if is_applied and bool(entry_id):
             undo_btn.clicked.connect(lambda _, eid=entry_id: self._trigger_undo(eid))
         else:
             undo_btn.setToolTip("Repair already undone or not in applied state")
 
+        self._undo_buttons.append(undo_btn)
         bottom_row.addWidget(undo_btn)
         card_layout.addLayout(bottom_row)
 
         return card
 
     def _trigger_undo(self, entry_id: str):
+        entry_id = str(entry_id or "")
+        if self._undo_in_progress or not entry_id or self._is_closed:
+            return
+        self._undo_in_progress = True
+        for btn in self._undo_buttons:
+            btn.setEnabled(False)
+        if hasattr(self, "undo_all_btn"):
+            self.undo_all_btn.setEnabled(False)
+
         def worker():
             try:
                 self.repair_manager.undo(entry_id)
@@ -198,7 +266,47 @@ class LibraryRepairDialog(MessageBoxBase):
         self._last_undo_thread = t
         t.start()
 
+    def _trigger_undo_all(self):
+        if self._undo_in_progress or self._is_closed:
+            return
+        applied_ids = [
+            str(e.get("id") or "")
+            for e in self.history_entries
+            if str(e.get("state", "")).lower() == "applied" and e.get("id")
+        ]
+        if not applied_ids:
+            return
+        self._undo_in_progress = True
+        for btn in self._undo_buttons:
+            btn.setEnabled(False)
+        if hasattr(self, "undo_all_btn"):
+            self.undo_all_btn.setEnabled(False)
+
+        def worker():
+            success_count = 0
+            errors = []
+            for eid in applied_ids:
+                try:
+                    self.repair_manager.undo(eid)
+                    success_count += 1
+                except Exception as e:
+                    logger.exception("Failed to undo repair %s: %s", eid, e)
+                    errors.append(f"{eid[:8]}: {e}")
+            ok = len(errors) == 0
+            if ok:
+                msg = f"Successfully rolled back {success_count} repair(s)."
+            else:
+                msg = f"Rolled back {success_count} repair(s); {len(errors)} failed: {'; '.join(errors)}"
+            self.sig_undo_result.emit(ok, msg)
+
+        t = threading.Thread(target=worker, daemon=True, name="RepairUndoAllWorker")
+        self._last_undo_thread = t
+        t.start()
+
     def _on_undo_result(self, success: bool, message: str):
+        self._undo_in_progress = False
+        if self._is_closed:
+            return
         if success:
             InfoBar.success(
                 title="Repair Undone",
@@ -226,7 +334,12 @@ class LibraryRepairDialog(MessageBoxBase):
             )
         self._refresh_history()
 
+    def closeEvent(self, event):
+        self._is_closed = True
+        super().closeEvent(event)
+
     def done(self, code):
+        self._is_closed = True
         super().done(code)
         if self._fallback_parent is not None:
             self._fallback_parent.deleteLater()

@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 from pathlib import Path
@@ -742,6 +743,49 @@ class TestStagingRecovery(unittest.TestCase):
         self.assertEqual(item["state"], "incomplete")
         self.assertEqual(item["track_id"], "crashed")
         recovery.discard_staging(directory)
+
+    def test_scan_abandoned_staging_resilient_to_unreadable_directory(self):
+        directory, _ = self.ready(".flacify-valid")
+        unreadable = self.root / "unreadable_dir"
+        unreadable.mkdir()
+
+        orig_iterdir = Path.iterdir
+
+        def mock_iterdir(self_path, *args, **kwargs):
+            if unreadable.name in str(self_path):
+                raise PermissionError("Access denied")
+            return orig_iterdir(self_path, *args, **kwargs)
+
+        with patch.object(Path, "iterdir", mock_iterdir):
+            items = recovery.scan_abandoned_staging(self.root)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["state"], "ready")
+
+    def test_scan_abandoned_staging_recursion_depth_limit(self):
+        curr = self.root
+        for i in range(12):
+            curr = curr / f"level_{i}"
+            curr.mkdir()
+        deep_stage = curr / ".flacify-deep"
+        deep_stage.mkdir()
+        with recovery.staging_lease(deep_stage, "deep"):
+            audio = self.audio(deep_stage)
+            recovery.mark_ready(deep_stage, audio)
+        items = recovery.scan_abandoned_staging(self.root)
+        self.assertEqual(items, [])
+
+    def test_sync_dir_tolerates_expected_fsync_errors(self):
+        with patch("os.name", "posix"), \
+             patch("os.open", return_value=42), \
+             patch("os.close") as mock_close:
+            for code in (errno.EINVAL, errno.EBADF, errno.ENOTSUP, errno.EACCES, errno.EPERM):
+                with patch("os.fsync", side_effect=OSError(code, "ignored")):
+                    recovery._sync_dir(self.root)
+                mock_close.assert_called_with(42)
+
+            with patch("os.fsync", side_effect=OSError(errno.EIO, "io error")):
+                with self.assertRaises(OSError):
+                    recovery._sync_dir(self.root)
 
 
 if __name__ == "__main__":

@@ -37,37 +37,65 @@ class TrackMetadata {
   String get artistStr => artists.isNotEmpty ? artists.join(', ') : 'Unknown Artist';
   double get durationSec => durationMs / 1000.0;
 
+  String get formattedDuration {
+    final totalSec = (durationMs / 1000).floor();
+    final mins = totalSec ~/ 60;
+    final secs = totalSec % 60;
+    return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
+  String get highResCoverUrl {
+    if (coverUrl.isEmpty) return '';
+    return coverUrl
+        .replaceAll('ab67616d00001e02', 'ab67616d0000b273')
+        .replaceAll('ab67616d00004851', 'ab67616d0000b273');
+  }
+
   String get safeFilename {
-    final clean = '$artistStr - $title'
-        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+    var clean = '$artistStr - $title'
+        .replaceAll(RegExp(r'[\x00-\x1f\\/:*?"<>|]'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
-    return clean.length > 100 ? clean.substring(0, 100) : clean;
+    clean = clean.replaceAll(RegExp(r'[.\s]+$'), '');
+    if (clean.isEmpty) {
+      clean = 'track';
+    }
+    return clean.runes.length > 100
+        ? String.fromCharCodes(clean.runes.take(100)).trimRight()
+        : clean;
   }
 
   factory TrackMetadata.fromMap(Map<String, dynamic> map) {
     List<String> artistsList = [];
     if (map['artist'] is String) {
-      artistsList = (map['artist'] as String).split(', ').map((e) => e.trim()).toList();
+      artistsList = (map['artist'] as String)
+          .split(', ')
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
     } else if (map['artists'] is List) {
-      artistsList = (map['artists'] as List).map((e) => e.toString()).toList();
+      artistsList = (map['artists'] as List)
+          .map((e) => e.toString().trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
     }
 
     return TrackMetadata(
-      id: map['spotify_id'] ?? map['id'] ?? '',
-      title: map['title'] ?? 'Unknown Title',
+      id: map['spotify_id']?.toString() ?? map['id']?.toString() ?? '',
+      title: map['title']?.toString() ?? 'Unknown Title',
       artists: artistsList.isNotEmpty ? artistsList : ['Unknown Artist'],
-      album: map['album'] ?? 'Unknown Album',
-      releaseDate: map['release_date'] ?? '',
-      durationMs: map['duration_ms'] ?? 0,
-      trackNumber: map['track_number'] ?? 1,
-      discNumber: map['disc_number'] ?? 1,
-      isrc: map['isrc'] ?? '',
-      coverUrl: map['cover_url'] ?? '',
-      collectionType: map['collection_type'] ?? 'track',
-      collectionName: map['collection_name'] ?? 'Singles',
-      collectionCoverUrl: map['collection_cover_url'] ?? '',
-      localFilePath: map['file_path'],
-      qualityBadge: map['quality_badge'],
+      album: map['album']?.toString() ?? 'Unknown Album',
+      releaseDate: map['release_date']?.toString() ?? '',
+      durationMs: (map['duration_ms'] as num?)?.toInt() ?? 0,
+      trackNumber: (map['track_number'] as num?)?.toInt() ?? 1,
+      discNumber: (map['disc_number'] as num?)?.toInt() ?? 1,
+      isrc: map['isrc']?.toString() ?? '',
+      coverUrl: map['cover_url']?.toString() ?? '',
+      collectionType: map['collection_type']?.toString() ?? 'track',
+      collectionName: map['collection_name']?.toString() ?? 'Singles',
+      collectionCoverUrl: map['collection_cover_url']?.toString() ?? '',
+      localFilePath: map['file_path']?.toString(),
+      qualityBadge: map['quality_badge']?.toString(),
     );
   }
 
@@ -77,6 +105,7 @@ class TrackMetadata {
       'title': title,
       'artist': artistStr,
       'album': album,
+      'release_date': releaseDate,
       'duration_ms': durationMs,
       'track_number': trackNumber,
       'disc_number': discNumber,
@@ -89,5 +118,65 @@ class TrackMetadata {
       'quality_badge': qualityBadge,
     };
   }
+
+  TrackMetadata copyWith({
+    String? id,
+    String? title,
+    List<String>? artists,
+    String? album,
+    String? releaseDate,
+    int? durationMs,
+    int? trackNumber,
+    int? discNumber,
+    String? isrc,
+    String? coverUrl,
+    String? collectionType,
+    String? collectionName,
+    String? collectionCoverUrl,
+    String? localFilePath,
+    String? qualityBadge,
+  }) {
+    return TrackMetadata(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      artists: artists ?? this.artists,
+      album: album ?? this.album,
+      releaseDate: releaseDate ?? this.releaseDate,
+      durationMs: durationMs ?? this.durationMs,
+      trackNumber: trackNumber ?? this.trackNumber,
+      discNumber: discNumber ?? this.discNumber,
+      isrc: isrc ?? this.isrc,
+      coverUrl: coverUrl ?? this.coverUrl,
+      collectionType: collectionType ?? this.collectionType,
+      collectionName: collectionName ?? this.collectionName,
+      collectionCoverUrl: collectionCoverUrl ?? this.collectionCoverUrl,
+      localFilePath: localFilePath ?? this.localFilePath,
+      qualityBadge: qualityBadge ?? this.qualityBadge,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is TrackMetadata &&
+        other.id == id &&
+        other.title == title &&
+        other.artistStr == artistStr &&
+        other.album == album &&
+        other.durationMs == durationMs &&
+        other.localFilePath == localFilePath &&
+        other.qualityBadge == qualityBadge;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+        id,
+        title,
+        artistStr,
+        album,
+        durationMs,
+        localFilePath,
+        qualityBadge,
+      );
 }
 

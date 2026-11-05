@@ -1,7 +1,7 @@
 name: flacify_mobile
 description: "Flacify Mobile - High-Fidelity Music Downloader, Player & Wi-Fi Sync"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.8.0+18
 
 environment:
   sdk: '>=3.2.0 <4.0.0'

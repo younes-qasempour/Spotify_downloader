@@ -4,6 +4,7 @@ Invalid or active directories raise ValueError/OSError for explicit actions and
 are omitted by scans. A publication journal and original payloads survive failed
 publication; recovery never runs automatically.
 """
+import errno
 import hashlib
 import json
 import os
@@ -77,11 +78,17 @@ def _read(path):
 
 def _sync_dir(path):
     if os.name != "nt":
-        fd = os.open(path, os.O_RDONLY)
+        fd = None
         try:
+            fd = os.open(path, os.O_RDONLY)
             os.fsync(fd)
+        except OSError as exc:
+            if exc.errno in (errno.EINVAL, errno.EBADF, errno.ENOTSUP, errno.EACCES, errno.EPERM):
+                return
+            raise
         finally:
-            os.close(fd)
+            if fd is not None:
+                os.close(fd)
 
 
 def _write(path, data):
@@ -342,13 +349,19 @@ def scan_abandoned_staging(root) -> list[dict]:
             raise ValueError("Invalid output root")
     found = []
 
-    def visit(folder):
-        for path in folder.iterdir():
+    def visit(folder, depth=0):
+        if depth > 10:
+            return
+        try:
+            entries = list(folder.iterdir())
+        except OSError:
+            return
+        for path in entries:
             try:
                 if not stat.S_ISDIR(_plain(path).st_mode):
                     continue
                 if not path.name.startswith(".flacify-"):
-                    visit(path)
+                    visit(path, depth + 1)
                     continue
                 path = _directory(path)
                 owner = _owner(path)

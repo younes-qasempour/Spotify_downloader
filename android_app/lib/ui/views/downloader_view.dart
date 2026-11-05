@@ -201,7 +201,7 @@ class _DownloaderViewState extends State<DownloaderView> {
       onSelected: (selected) {
         if (selected) setState(() => _selectedFormat = value);
       },
-      selectedColor: FlacifyTheme.spotifyEmerald.withOpacity(0.2),
+      selectedColor: FlacifyTheme.spotifyEmerald.withValues(alpha: 0.2),
       backgroundColor: FlacifyTheme.elevatedDark,
       labelStyle: TextStyle(
         color: isSelected ? FlacifyTheme.spotifyEmerald : FlacifyTheme.textSecondary,
@@ -282,12 +282,12 @@ class _DownloaderViewState extends State<DownloaderView> {
                 ),
               ),
               // Action Buttons
-              if (item.status == QueueStatus.error)
+              if (item.canRetry)
                 IconButton(
                   icon: const Icon(Icons.refresh, color: FlacifyTheme.spotifyEmerald),
                   onPressed: () => queue.retryItem(item.id),
                 )
-              else if (item.status == QueueStatus.downloading || item.status == QueueStatus.pending)
+              else if (item.canCancel)
                 IconButton(
                   icon: const Icon(Icons.close, color: FlacifyTheme.textSecondary),
                   onPressed: () => queue.cancelItem(item.id),
@@ -299,7 +299,7 @@ class _DownloaderViewState extends State<DownloaderView> {
           if (item.status == QueueStatus.downloading) ...[
             const SizedBox(height: 8),
             LinearProgressIndicator(
-              value: item.progress > 0 ? item.progress : null,
+              value: item.safeProgress > 0 ? item.safeProgress : null,
               backgroundColor: FlacifyTheme.elevatedDark,
               valueColor: const AlwaysStoppedAnimation<Color>(FlacifyTheme.spotifyEmerald),
               minHeight: 4,

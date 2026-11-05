@@ -590,7 +590,7 @@ class _LibraryViewState extends State<LibraryView> {
       onSelected: (selected) {
         if (selected) setState(() => _selectedFilter = value);
       },
-      selectedColor: FlacifyTheme.spotifyEmerald.withOpacity(0.2),
+      selectedColor: FlacifyTheme.spotifyEmerald.withValues(alpha: 0.2),
       backgroundColor: FlacifyTheme.elevatedDark,
       labelStyle: TextStyle(
         color: isSelected ? FlacifyTheme.spotifyEmerald : FlacifyTheme.textSecondary,

@@ -53,6 +53,19 @@ def main():
         stack.enter_context(patch.object(paths, "get_archive_db_path", return_value=sandbox / "archive.db"))
         stack.enter_context(patch.object(paths, "get_default_download_dir", return_value=downloads))
 
+        cache_dir = sandbox / "cache"
+        cache_dir.mkdir(exist_ok=True)
+        covers_dir = cache_dir / "covers"
+        covers_dir.mkdir(exist_ok=True)
+        logs_dir = sandbox / "logs"
+        logs_dir.mkdir(exist_ok=True)
+        user_bin_dir = sandbox / "bin"
+        user_bin_dir.mkdir(exist_ok=True)
+        stack.enter_context(patch.object(paths, "get_cache_dir", return_value=cache_dir))
+        stack.enter_context(patch.object(paths, "get_covers_dir", return_value=covers_dir))
+        stack.enter_context(patch.object(paths, "get_logs_dir", return_value=logs_dir))
+        stack.enter_context(patch.object(paths, "get_user_bin_dir", return_value=user_bin_dir))
+
         original_connect = socket.socket.connect
         original_connect_ex = socket.socket.connect_ex
         original_getaddrinfo = socket.getaddrinfo

@@ -5,6 +5,16 @@ from difflib import SequenceMatcher
 
 
 VERSION_WORDS = {"live", "remix", "acoustic", "instrumental", "cover", "karaoke", "slowed", "sped", "remaster"}
+_INFLECTIONS = {
+    "remastered": "remaster",
+    "remixes": "remix",
+    "covers": "cover",
+}
+
+
+def _extract_versions(normalized_text: str) -> set[str]:
+    tokens = [_INFLECTIONS.get(word, word) for word in str(normalized_text).split()]
+    return VERSION_WORDS.intersection(tokens)
 
 
 def _normalized(text: str) -> str:
@@ -28,13 +38,25 @@ def source_review_summary(track, resolved) -> dict:
         duration = None
     expected_title = _normalized(track.title)
     candidate_title = _normalized(title)
-    expected_versions = VERSION_WORDS.intersection(expected_title.split())
-    candidate_versions = VERSION_WORDS.intersection(candidate_title.split())
+    expected_versions = _extract_versions(expected_title)
+    candidate_versions = _extract_versions(candidate_title)
     reasons = []
     if not title:
         reasons.append("The provider did not supply a candidate title.")
     elif SequenceMatcher(None, expected_title, candidate_title).ratio() < 0.88:
-        reasons.append("Candidate title differs from the requested recording.")
+        matched = False
+        prefixes = [
+            _normalized(getattr(track, "primary_artist", "") or track.artist_str) + " ",
+            _normalized(track.artist_str) + " ",
+        ]
+        for prefix in prefixes:
+            if prefix.strip() and candidate_title.startswith(prefix):
+                stripped = candidate_title[len(prefix):]
+                if SequenceMatcher(None, expected_title, stripped).ratio() >= 0.88:
+                    matched = True
+                    break
+        if not matched:
+            reasons.append("Candidate title differs from the requested recording.")
     if artist and SequenceMatcher(None, _normalized(track.artist_str), _normalized(artist)).ratio() < 0.8:
         reasons.append("Candidate artist differs from the requested artist.")
     if expected_versions != candidate_versions:

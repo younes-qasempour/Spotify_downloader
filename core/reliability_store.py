@@ -25,6 +25,8 @@ class ReliabilityStore:
                 cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL, expires_at REAL NOT NULL,
                 accessed_at REAL NOT NULL
             )""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_metadata_cache_expires ON metadata_cache(expires_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_metadata_cache_accessed ON metadata_cache(accessed_at DESC)")
             conn.commit()
 
     @contextmanager
@@ -38,18 +40,28 @@ class ReliabilityStore:
 
     def save_queue(self, records: List[Dict[str, Any]]) -> None:
         now = time.time()
+        rows = [
+            (
+                r["track_id"],
+                json.dumps(r["track"], ensure_ascii=False),
+                r["status"],
+                r.get("preferred_engine"),
+                now + (idx * 1e-6),
+            )
+            for idx, r in enumerate(records)
+        ]
         with self._lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("DELETE FROM queue_jobs")
             conn.executemany(
                 "INSERT INTO queue_jobs(track_id, track_json, status, preferred_engine, updated_at) VALUES (?, ?, ?, ?, ?)",
-                [(r["track_id"], json.dumps(r["track"], ensure_ascii=False), r["status"], r.get("preferred_engine"), now) for r in records]
+                rows,
             )
             conn.commit()
 
     def load_queue(self) -> List[Dict[str, Any]]:
         with self._lock, self._connect() as conn:
-            rows = conn.execute("SELECT track_id, track_json, status, preferred_engine FROM queue_jobs ORDER BY updated_at").fetchall()
+            rows = conn.execute("SELECT track_id, track_json, status, preferred_engine FROM queue_jobs ORDER BY updated_at ASC, rowid ASC").fetchall()
         records = []
         for track_id, track_json, status, preferred_engine in rows:
             try:

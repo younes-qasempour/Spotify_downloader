@@ -60,7 +60,7 @@ class TestV170SavedPlaylistsFeatures(unittest.TestCase):
 
     def tearDown(self):
         ArchiveManager._instance = None
-        config.set("download.output_dir", self.orig_out_dir)
+        config.data["download"]["output_dir"] = self.orig_out_dir
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _execute_api_action(self, body):
