@@ -625,6 +625,37 @@ class FlacifyWebRequestHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/state":
                 return self._handle_get_state()
+            elif path == "/api/sync_info":
+                import base64
+                import io
+                import socket
+                import qrcode
+                from sync_server import get_lan_info
+                lan = get_lan_info()
+                ip = lan["ip"]
+                adapter = lan.get("adapter", "Wi-Fi")
+                port = 8765
+                token = config.get("sync.token", "flacify-lan-sync")
+                qr_payload = json.dumps({"ip": ip, "port": port, "token": token})
+
+                qr = qrcode.QRCode(box_size=6, border=2)
+                qr.add_data(qr_payload)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+                return self._send_json({
+                    "ip": ip,
+                    "adapter": adapter,
+                    "port": port,
+                    "token": token,
+                    "status": "online",
+                    "hostname": socket.gethostname(),
+                    "qr_data_url": f"data:image/png;base64,{b64}",
+                    "music_dir": config.get("download.output_dir", "downloads")
+                })
             elif path == "/api/library":
                 force = qs.get("refresh", ["0"])[0] == "1"
                 return self._send_json(self.state.build_library_snapshot(force_refresh=force))

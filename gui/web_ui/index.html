@@ -56,6 +56,14 @@
             <span>Audio Lab &amp; Tools</span>
           </button>
 
+          <button class="nav-item" data-view="sync">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Wi-Fi Sync</span>
+            <span class="nav-pill emerald" style="font-size:9px;">PHONE</span>
+          </button>
+
           <button class="nav-item" data-view="settings">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="3"/>
@@ -1040,6 +1048,102 @@
 
             <div class="settings-footer">
               <button class="btn-primary-emerald" id="btn-save-settings">Save All Changes</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- WI-FI SYNC & MOBILE PAIRING VIEW -->
+        <section class="view-page" id="view-sync">
+          <div style="max-width: 900px; margin: 0 auto; padding: 24px 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);">
+              <div>
+                <h2 style="font-size: 24px; font-weight: 800; color: #FFFFFF; margin: 0 0 6px 0;">Local Wi-Fi Sync &amp; Mobile Phone Pairing</h2>
+                <p style="font-size: 13px; color: var(--text-muted); margin: 0;">Sync music, playlists, and synchronized lyrics directly with your Android phone over local Wi-Fi without cloud servers.</p>
+              </div>
+              <div>
+                <span class="chip-sm active" id="web-sync-status-badge" style="background:#12331C; color:#1DB954; font-weight:700; padding:6px 14px; border-radius:16px;">
+                  ● Server Online
+                </span>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 340px 1fr; gap: 24px; align-items: start;">
+              <!-- Left Card: Mobile Pairing & QR Code -->
+              <div style="background: #181818; border: 1px solid #282828; border-radius: 12px; padding: 22px; display: flex; flex-direction: column; align-items: center; text-align: center;">
+                <h3 style="font-size: 15px; font-weight: 700; color: #FFFFFF; margin: 0 0 4px 0;">Android Phone Quick Pairing</h3>
+                <p style="font-size: 12px; color: var(--text-muted); margin: 0 0 16px 0;">
+                  Scan in the Flacify mobile app or use Auto-Discover on Wi-Fi.
+                </p>
+
+                <!-- Centered QR Code Box -->
+                <div style="background: #FFFFFF; padding: 12px; border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: inline-block;">
+                  <img id="web-sync-qr-img" src="" alt="Pairing QR Code" style="width: 180px; height: 180px; display: block; image-rendering: pixelated;" />
+                </div>
+
+                <!-- Connection Details Table (Compact & Aligned, No Huge Spacing) -->
+                <div style="margin-top: 18px; width: 100%; background: #202020; border-radius: 8px; padding: 10px 14px; box-sizing: border-box;">
+                  <table style="width: 100%; font-size: 12px; border-collapse: collapse; text-align: left;">
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+                      <td style="color: var(--text-muted); padding: 6px 0; width: 95px;">Wi-Fi IP:</td>
+                      <td style="color: var(--spotify-bright); font-family: 'Consolas', monospace; font-weight: bold; font-size: 13px;" id="web-sync-ip">Loading...</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+                      <td style="color: var(--text-muted); padding: 6px 0;">Port:</td>
+                      <td style="color: #FFFFFF; font-family: 'Consolas', monospace; font-weight: 600;" id="web-sync-port">8765</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+                      <td style="color: var(--text-muted); padding: 6px 0;">Network:</td>
+                      <td style="color: #A0A0A0; font-family: 'Consolas', monospace; font-size: 11px;" id="web-sync-adapter">Wi-Fi LAN</td>
+                    </tr>
+                    <tr>
+                      <td style="color: var(--text-muted); padding: 6px 0;">Auth Token:</td>
+                      <td style="color: #FFFFFF; font-family: 'Consolas', monospace; font-size: 11px;" id="web-sync-token">flacify-lan-sync</td>
+                    </tr>
+                  </table>
+                </div>
+
+                <div style="display: flex; gap: 10px; width: 100%; margin-top: 14px;">
+                  <button class="btn-primary-emerald" id="btn-web-refresh-sync" style="flex: 1; padding: 9px 0; font-size: 12px;">Refresh</button>
+                  <button class="ghost-pill-btn" id="btn-web-open-folder" style="flex: 1; padding: 9px 0; font-size: 12px;">Music Folder</button>
+                </div>
+              </div>
+
+              <!-- Right Card: Live Device Connection & Status -->
+              <div style="background: #181818; border: 1px solid #282828; border-radius: 12px; padding: 22px; display: flex; flex-direction: column;">
+                <h3 style="font-size: 15px; font-weight: 700; color: #FFFFFF; margin: 0 0 12px 0;">Connected Devices &amp; Live Status</h3>
+                
+                <div id="web-sync-device-status" style="padding: 12px 14px; background: rgba(30,215,96,0.1); border: 1px solid rgba(30,215,96,0.25); border-radius: 8px; color: var(--spotify-bright); font-size: 13px; font-weight: 600; margin-bottom: 16px;">
+                  ● Listening for incoming phone connections on Wi-Fi subnet...
+                </div>
+
+                <div style="margin-bottom: 16px;">
+                  <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px;">
+                    <span style="color: var(--text-muted);" id="web-sync-progress-label">Sync Status: Ready</span>
+                    <span style="color: var(--spotify-bright); font-weight: 700;" id="web-sync-progress-pct">0%</span>
+                  </div>
+                  <div style="width: 100%; height: 6px; background: #222222; border-radius: 3px; overflow: hidden;">
+                    <div id="web-sync-progress-bar" style="width: 0%; height: 100%; background: var(--spotify-bright); transition: width 0.3s ease;"></div>
+                  </div>
+                </div>
+
+                <div style="background: #202020; border-radius: 8px; padding: 14px 16px; margin-bottom: 16px;">
+                  <h4 style="font-size: 12px; font-weight: 700; color: #FFFFFF; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px;">How to Connect Your Phone:</h4>
+                  <ol style="margin: 0; padding-left: 20px; font-size: 12px; color: var(--text-muted); line-height: 1.8;">
+                    <li>Install <strong style="color:#FFF;">Flacify.apk</strong> on your Android phone.</li>
+                    <li>Ensure Phone and Laptop are connected (e.g. phone hotspot or home Wi-Fi).</li>
+                    <li>Open Flacify &rarr; tap <strong style="color:var(--spotify-bright);">Wi-Fi Sync</strong> &rarr; tap <strong style="color:#FFF;">Auto-Discover</strong> or <strong style="color:#FFF;">Enter Code</strong>.</li>
+                    <li>Enter IP <strong style="color:var(--spotify-bright);" id="web-sync-ip-hint">10.162.180.240</strong> if entering manually.</li>
+                    <li>Tap <strong style="color:var(--spotify-bright);">Sync Library Now</strong>!</li>
+                  </ol>
+                </div>
+
+                <h4 style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 8px 0;">
+                  Sync Activity Log
+                </h4>
+                <div id="web-sync-activity-log" style="height: 100px; background: #0D0D0D; border: 1px solid #252525; border-radius: 8px; padding: 10px 14px; font-family: 'Consolas', monospace; font-size: 11px; color: #999; overflow-y: auto; line-height: 1.6;">
+                  <div>[System] Sync server active and listening on port 8765.</div>
+                </div>
+              </div>
             </div>
           </div>
         </section>

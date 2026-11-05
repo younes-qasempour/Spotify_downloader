@@ -39,6 +39,7 @@ from gui.views.playlists_view import PlaylistsView
 from gui.views.completed_view import CompletedView
 from gui.views.settings_view import SettingsView
 from gui.views.reliability_view import ReliabilityView
+from gui.views.sync_view import SyncView
 
 logger = logging.getLogger("gui.main_window")
 
@@ -155,6 +156,8 @@ class MainWindow(FluentWindow):
 
         self.reliability_view = ReliabilityView(self.queue_manager, self.archive_manager, self)
         self.reliability_view.setObjectName("reliability_view")
+        self.sync_view = SyncView(archive_manager=self.archive_manager, parent=self)
+        self.sync_view.setObjectName("sync_view")
 
         # Setup Navigation
         self._init_navigation()
@@ -250,6 +253,7 @@ class MainWindow(FluentWindow):
             "Settings",
             NavigationItemPosition.BOTTOM
         )
+        self.addSubInterface(self.sync_view, FluentIcon.WIFI, "Wi-Fi Sync", NavigationItemPosition.TOP)
         self.addSubInterface(self.reliability_view, FluentIcon.SYNC, "Recovery & Tools", NavigationItemPosition.TOP)
 
     def _show_reliability(self):
@@ -612,6 +616,11 @@ class MainWindow(FluentWindow):
         if hasattr(self, "web_studio_view"):
             try:
                 self.web_studio_view.shutdown()
+            except Exception:
+                pass
+        if hasattr(self, "sync_view"):
+            try:
+                self.sync_view.shutdown()
             except Exception:
                 pass
         if hasattr(self, "player_bar"):

@@ -3209,6 +3209,7 @@ function switchView(viewName) {
   if (viewName === "queue") renderQueueList();
   if (viewName === "saved") loadSavedPlaylists();
   if (viewName === "settings") loadSettings();
+  if (viewName === "sync") loadSyncView();
   if (viewName === "tools") {
     const activeTab = document.querySelector("#tools-tabs .seg-tab.active")?.dataset.tooltab;
     if (activeTab === "batchtag") {
@@ -3293,6 +3294,10 @@ document.addEventListener("DOMContentLoaded", () => {
     switchView("library");
     openCollection(null);
   });
+
+  document.getElementById("btn-web-refresh-sync")?.addEventListener("click", loadSyncView);
+  document.getElementById("btn-web-open-folder")?.addEventListener("click", () => apiPost("/api/open_folder"));
+  loadSyncView();
 
   document.getElementById("btn-rescan-disk").addEventListener("click", async () => {
     showToast("Rescanning downloads folder...");
@@ -4553,3 +4558,28 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(pollBackendState, 1200);
 });
 
+
+// Wi-Fi Sync View Functions
+async function loadSyncView() {
+  try {
+    const res = await apiGet("/api/sync_info");
+    if (res) {
+      const ipElem = document.getElementById("web-sync-ip");
+      const portElem = document.getElementById("web-sync-port");
+      const adapterElem = document.getElementById("web-sync-adapter");
+      const tokenElem = document.getElementById("web-sync-token");
+      const hintElem = document.getElementById("web-sync-ip-hint");
+      const qrImg = document.getElementById("web-sync-qr-img");
+      if (ipElem) ipElem.textContent = res.ip || "127.0.0.1";
+      if (portElem) portElem.textContent = res.port || 8765;
+      if (adapterElem) adapterElem.textContent = res.adapter || "Wi-Fi LAN";
+      if (tokenElem) tokenElem.textContent = res.token || "flacify-lan-sync";
+      if (hintElem) hintElem.textContent = res.ip || "10.162.180.240";
+      if (qrImg && res.qr_data_url) {
+        qrImg.src = res.qr_data_url;
+      }
+    }
+  } catch (err) {
+    console.error("Could not fetch sync info:", err);
+  }
+}

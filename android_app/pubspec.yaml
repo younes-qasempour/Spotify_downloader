@@ -1,0 +1,44 @@
+name: flacify_mobile
+description: "Flacify Mobile - High-Fidelity Music Downloader, Player & Wi-Fi Sync"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Networking & HTTP
+  dio: ^5.7.0
+  http: ^1.2.2
+
+  # Media Playback & Background Services
+  just_audio: ^0.9.40
+  audio_service: ^0.18.15
+  audio_session: ^0.1.21
+
+  # Local Persistence & Storage
+  path_provider: ^2.1.4
+  path: ^1.9.0
+  sqflite: ^2.3.3+1
+  shared_preferences: ^2.3.2
+
+  # State Management & Icons
+  provider: ^6.1.2
+  cupertino_icons: ^1.0.8
+
+  # Cryptography & Hashing
+  crypto: ^3.0.5
+
+  # Formatting & Caching
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

@@ -8,6 +8,7 @@ __pycache__/
 bin/
 *.exe
 *.dll
+*.apk
 
 # Config & Credentials (NEVER commit secrets or session tokens)
 config.json
