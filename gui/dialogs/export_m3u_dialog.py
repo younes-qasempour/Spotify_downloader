@@ -366,7 +366,10 @@ class ExportM3UDialog(MessageBoxBase):
         """Launches default system player (VLC, PotPlayer, KMPlayer, WMP) for the exported playlist."""
         if self.exported_file_path and os.path.isfile(self.exported_file_path):
             try:
-                os.startfile(self.exported_file_path)
+                if os.name == "nt":
+                    os.startfile(self.exported_file_path)
+                else:
+                    subprocess.Popen(["xdg-open", self.exported_file_path])
             except Exception as e:
                 InfoBar.warning("Launch Error", f"Could not launch media player: {e}", parent=self)
 
@@ -379,7 +382,14 @@ class ExportM3UDialog(MessageBoxBase):
             else:
                 subprocess.Popen(["xdg-open", os.path.dirname(self.exported_file_path)], creationflags=flags)
 
+    def done(self, r: int):
+        super().done(r)
+        if self._fallback_parent is not None:
+            self._fallback_parent.deleteLater()
+
     def _on_cancel_clicked(self):
+        if self._fallback_parent is not None:
+            self._fallback_parent.deleteLater()
         if self.pages.currentIndex() == 1:
             self.accept()
         else:

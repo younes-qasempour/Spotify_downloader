@@ -78,18 +78,20 @@ def retag_library(root_dir: str = "", max_workers: int = 12):
 
     # Preload archive db mappings
     conn = archive._get_connection()
-    c = conn.cursor()
-    c.execute("SELECT file_path, artist, title, album, spotify_id, genre FROM downloaded_tracks")
-    db_records = {}
-    for r in c.fetchall():
-        db_records[normalize_path(r["file_path"])] = {
-            "artist": r["artist"],
-            "title": r["title"],
-            "album": r["album"] or "",
-            "spotify_id": r["spotify_id"] or "",
-            "genre": r["genre"] or ""
-        }
-    conn.close()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT file_path, artist, title, album, spotify_id, genre FROM downloaded_tracks")
+        db_records = {}
+        for r in c.fetchall():
+            db_records[normalize_path(r["file_path"])] = {
+                "artist": r["artist"],
+                "title": r["title"],
+                "album": r["album"] or "",
+                "spotify_id": r["spotify_id"] or "",
+                "genre": r["genre"] or ""
+            }
+    finally:
+        conn.close()
     logger.info(f"Loaded {len(db_records)} records from archive.db.")
 
     tasks = []
@@ -145,7 +147,7 @@ def retag_library(root_dir: str = "", max_workers: int = 12):
         if not resolved:
             resolved = genre_resolver.resolve(artist, "", album)
         if not resolved:
-            resolved = ["Pop"]
+            return False, fpath, []
 
         ok = tagger.tag_genre_only(fpath, resolved)
         if ok:

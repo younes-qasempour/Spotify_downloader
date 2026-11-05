@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sync_models.dart';
 import '../models/track_metadata.dart';
 import 'local_database.dart';
@@ -16,20 +17,56 @@ class WifiSyncService {
   ));
 
   String? _baseUrl;
-  String _authToken = 'flacify-lan-sync';
+  String _authToken = '';
+  String? _ip;
+  int? _port;
   String? connectedHost;
 
   bool get isConfigured => _baseUrl != null;
   String? get baseUrl => _baseUrl;
+  String? get ip => _ip;
+  int? get port => _port;
+  String get token => _authToken;
+
+  Future<void> saveConnection() async {
+    if (_ip == null || _port == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('sync_ip', _ip!);
+      await prefs.setInt('sync_port', _port!);
+      await prefs.setString('sync_token', _authToken);
+    } catch (_) {}
+  }
+
+  Future<bool> loadSavedConnection() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedIp = prefs.getString('sync_ip');
+      final savedPort = prefs.getInt('sync_port');
+      final savedToken = prefs.getString('sync_token') ?? '';
+      if (savedIp != null && savedPort != null) {
+        _ip = savedIp;
+        _port = savedPort;
+        _authToken = savedToken;
+        _baseUrl = 'http://$savedIp:$savedPort';
+        _dio.options.headers['x-sync-token'] = _authToken;
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
 
   void configureConnection({
     required String ip,
     required int port,
     required String token,
   }) {
-    _baseUrl = 'http://$ip:$port';
+    _ip = ip;
+    _port = port;
     _authToken = token;
+    _baseUrl = 'http://$ip:$port';
     _dio.options.headers['x-sync-token'] = _authToken;
+    saveConnection();
   }
 
   void configureFromQrCode(String qrJson) {
@@ -37,7 +74,7 @@ class WifiSyncService {
       final data = jsonDecode(qrJson) as Map<String, dynamic>;
       final ip = data['ip'] as String;
       final port = data['port'] as int;
-      final token = data['token'] as String? ?? 'flacify-lan-sync';
+      final token = data['token'] as String? ?? '';
       configureConnection(ip: ip, port: port, token: token);
     } catch (e) {
       throw Exception('Invalid QR code format: $e');
@@ -46,6 +83,11 @@ class WifiSyncService {
 
   /// Attempts to discover the Windows sync server over LAN subnet probing
   Future<String?> autoDiscoverServer({int port = 8765}) async {
+    final testDio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 1),
+      receiveTimeout: const Duration(seconds: 1),
+      headers: _authToken.isNotEmpty ? {'x-sync-token': _authToken} : null,
+    ));
     try {
       final interfaces = await NetworkInterface.list(
         type: InternetAddressType.IPv4,
@@ -64,7 +106,7 @@ class WifiSyncService {
             final end = (start + 31 <= 254) ? start + 31 : 254;
             final futures = <Future<String?>>[];
             for (var i = start; i <= end; i++) {
-              futures.add(_testServerIp('$subnet.$i', port));
+              futures.add(_testServerIp('$subnet.$i', port, testDio));
             }
             final results = await Future.wait(futures);
             for (final found in results) {
@@ -76,18 +118,17 @@ class WifiSyncService {
           }
         }
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      testDio.close(force: true);
+    }
     return null;
   }
 
-  Future<String?> _testServerIp(String ip, int port) async {
+  Future<String?> _testServerIp(String ip, int port, Dio testDio) async {
     try {
       final socket = await Socket.connect(ip, port, timeout: const Duration(milliseconds: 400));
       socket.destroy();
-      final testDio = Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 1),
-        receiveTimeout: const Duration(seconds: 1),
-      ));
       final res = await testDio.get('http://$ip:$port/api/ping');
       if (res.statusCode == 200 && res.data is Map) {
         return ip;
@@ -123,13 +164,12 @@ class WifiSyncService {
     final List<TrackManifestItem> items = [];
     if (!await musicDir.exists()) return items;
 
-    final files = musicDir.listSync(recursive: true);
-    for (final entity in files) {
+    await for (final entity in musicDir.list(recursive: true, followLinks: false)) {
       if (entity is File) {
         final ext = p.extension(entity.path).toLowerCase();
         if ({'.flac', '.mp3', '.m4a', '.opus', '.ogg', '.wav'}.contains(ext)) {
           final stat = await entity.stat();
-          final relName = p.basename(entity.path);
+          final relName = p.relative(entity.path, from: musicDir.path).replaceAll('\\', '/');
           final trackId = relName.toLowerCase().hashCode.toString();
 
           final lrcFile = File(p.setExtension(entity.path, '.lrc'));
@@ -140,7 +180,7 @@ class WifiSyncService {
 
           final stemParts = p.basenameWithoutExtension(entity.path).split(' - ');
           final artist = stemParts.length > 1 ? stemParts[0].trim() : 'Unknown Artist';
-          final title = stemParts.length > 1 ? stemParts[1].trim() : p.basenameWithoutExtension(entity.path);
+          final title = stemParts.length > 1 ? stemParts.sublist(1).join(' - ').trim() : p.basenameWithoutExtension(entity.path);
 
           items.add(TrackManifestItem(
             trackId: trackId,
@@ -179,7 +219,7 @@ class WifiSyncService {
     for (final remote in remoteTracks) {
       final key = remote.filename.toLowerCase();
       final local = localByFilename[key];
-      if (local == null) {
+      if (local == null || local.fileSize != remote.fileSize || (!local.hasLyrics && remote.hasLyrics)) {
         toDownload.add(remote);
       }
     }
@@ -225,15 +265,25 @@ class WifiSyncService {
       final tempPath = '$savePath.part';
 
       // Resumable chunked download
-      await _dio.download(
-        '$_baseUrl/api/tracks/${track.trackId}/download?token=$_authToken',
-        tempPath,
-        options: Options(headers: {'x-sync-token': _authToken}),
-        onReceiveProgress: (received, total) {
-          final progress = total > 0 ? received / total : 0.0;
-          onProgress('Pulling: ${track.title}', completed, totalOperations, progress);
-        },
-      );
+      final encodedTrackId = Uri.encodeComponent(track.trackId);
+      final encodedToken = Uri.encodeQueryComponent(_authToken);
+      try {
+        await _dio.download(
+          '$_baseUrl/api/tracks/$encodedTrackId/download?token=$encodedToken',
+          tempPath,
+          options: Options(headers: {'x-sync-token': _authToken}),
+          onReceiveProgress: (received, total) {
+            final progress = total > 0 ? received / total : 0.0;
+            onProgress('Pulling: ${track.title}', completed, totalOperations, progress);
+          },
+        );
+      } catch (e) {
+        final tempFile = File(tempPath);
+        if (await tempFile.exists()) {
+          await tempFile.delete();
+        }
+        rethrow;
+      }
 
       // Rename temp file once complete
       final tempFile = File(tempPath);

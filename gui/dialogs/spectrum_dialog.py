@@ -137,8 +137,12 @@ class AudioSpectrumDialog(MessageBoxBase):
         return card, v_lbl
 
     def _run_worker(self):
-        res = inspect_audio_spectrum(self.file_path, generate_spectrogram=True)
-        self.sig_analysis_ready.emit(res)
+        try:
+            res = inspect_audio_spectrum(self.file_path, generate_spectrogram=True)
+            self.sig_analysis_ready.emit(res)
+        except Exception as e:
+            logger.error(f"Spectrum analysis failed: {e}")
+            self.sig_analysis_ready.emit(None)
 
     def _on_analysis_ready(self, res: Optional[Dict[str, Any]]):
         if not res:
@@ -192,6 +196,10 @@ class AudioSpectrumDialog(MessageBoxBase):
         spec_path = res.get("spectrogram_path", "")
         if spec_path and os.path.isfile(spec_path):
             pix = QPixmap(spec_path)
+            try:
+                os.remove(spec_path)
+            except OSError:
+                pass
             if not pix.isNull():
                 scaled = pix.scaled(660, 220, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 self.spec_img_lbl.setText("")
@@ -284,10 +292,14 @@ class BatchSpectrumScannerDialog(MessageBoxBase):
         threading.Thread(target=self._worker, daemon=True, name="BatchSpectrumAudit").start()
 
     def _worker(self):
-        results = self.archive.scan_library_spectrum(
-            progress_callback=lambda cur, tot, msg: self.sig_progress.emit(cur, tot, msg)
-        )
-        self.sig_finished.emit(results)
+        try:
+            results = self.archive.scan_library_spectrum(
+                progress_callback=lambda cur, tot, msg: self.sig_progress.emit(cur, tot, msg)
+            )
+            self.sig_finished.emit(results)
+        except Exception as e:
+            logger.error(f"Batch spectrum scan failed: {e}")
+            self.sig_finished.emit([])
 
     def _on_progress(self, cur: int, tot: int, msg: str):
         pct = int(cur / max(1, tot) * 100)
@@ -341,18 +353,18 @@ class BatchSpectrumScannerDialog(MessageBoxBase):
             if not meta and sid:
                 meta = self.archive.find_track(spotify_id=sid)
             if meta:
-                if fp and os.path.exists(fp):
-                    try:
-                        os.remove(fp)
-                    except Exception:
-                        pass
-                self.archive.remove_downloaded_track(meta["spotify_id"])
+                artists = [a.strip() for a in meta.get("artist", "").split(",") if a.strip()] or ["Unknown Artist"]
                 to_queue.append(TrackMetadata(
                     id=meta["spotify_id"],
                     title=meta["title"],
-                    artists=[a.strip() for a in meta["artist"].split(",")],
+                    artists=artists,
                     album=meta.get("album", ""),
+                    release_date=meta.get("release_date", ""),
                     duration_ms=meta.get("duration_ms", 0),
+                    track_number=meta.get("track_number", 1),
+                    disc_number=meta.get("disc_number", 1),
+                    isrc=meta.get("isrc", ""),
+                    cover_url=meta.get("cover_url", ""),
                     collection_name=meta.get("collection_name", ""),
                     collection_type=meta.get("collection_type", "track"),
                 ))

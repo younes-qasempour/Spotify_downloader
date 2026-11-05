@@ -146,11 +146,15 @@ class DuplicateMergerDialog(MessageBoxBase):
         return card, v_lbl
 
     def _scan_worker(self):
-        groups = self.archive.find_library_duplicates(
-            use_acoustic_fingerprint=True,
-            progress_callback=lambda c, t, m: self.sig_progress.emit(c, t, m)
-        )
-        self.sig_scan_done.emit(groups)
+        try:
+            groups = self.archive.find_library_duplicates(
+                use_acoustic_fingerprint=True,
+                progress_callback=lambda c, t, m: self.sig_progress.emit(c, t, m)
+            )
+            self.sig_scan_done.emit(groups)
+        except Exception as e:
+            logger.error(f"Duplicate scan failed: {e}")
+            self.sig_scan_done.emit([])
 
     def _on_progress(self, cur: int, tot: int, msg: str):
         self.prog_bar.setValue(min(95, int(cur / max(1, tot) * 100)))
@@ -243,12 +247,24 @@ class DuplicateMergerDialog(MessageBoxBase):
         self.status_lbl.setText("Consolidating duplicate tracks and updating playlists...")
 
         def worker():
-            stats = self.archive.merge_library_duplicates(self.duplicate_groups, mode=mode)
-            self.sig_merge_done.emit(stats)
+            try:
+                stats = self.archive.merge_library_duplicates(self.duplicate_groups, mode=mode)
+                self.sig_merge_done.emit(stats)
+            except Exception as e:
+                logger.error(f"Duplicate merge failed: {e}")
+                self.sig_merge_done.emit({"error": str(e)})
 
         threading.Thread(target=worker, daemon=True, name="DuplicateMergeWorker").start()
 
     def _on_merge_done(self, stats: Dict[str, Any]):
+        if "error" in stats:
+            has_actionable = bool(self.duplicate_groups) and sum(g.get("reclaimable_bytes", 0) for g in self.duplicate_groups) > 0
+            self.hardlink_btn.setEnabled(has_actionable)
+            self.merge_btn.setEnabled(has_actionable)
+            self.status_lbl.setText("Duplicate merge failed.")
+            InfoBar.error("Merge Failed", str(stats["error"]), duration=5000, parent=self.window() or self)
+            return
+
         reclaimed_mb = stats.get("reclaimed_bytes", 0) / (1024 * 1024)
         merged = stats.get("files_merged", 0)
         hl = stats.get("hardlinked", 0)

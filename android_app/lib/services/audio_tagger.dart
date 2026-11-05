@@ -5,7 +5,10 @@ import '../models/lyrics_model.dart';
 import '../models/track_metadata.dart';
 
 class AudioTagger {
-  final Dio _dio = Dio();
+  final Dio _dio = Dio(BaseOptions(
+    connectTimeout: const Duration(seconds: 10),
+    receiveTimeout: const Duration(seconds: 15),
+  ));
 
   Future<void> tagAudioFile({
     required File audioFile,

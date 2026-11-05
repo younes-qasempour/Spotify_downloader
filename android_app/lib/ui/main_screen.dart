@@ -32,19 +32,15 @@ class _MainScreenState extends State<MainScreen> {
     ];
 
     return Scaffold(
-      body: Stack(
+      body: Column(
         children: [
-          IndexedStack(
-            index: _currentIndex,
-            children: pages,
+          Expanded(
+            child: IndexedStack(
+              index: _currentIndex,
+              children: pages,
+            ),
           ),
-          // Position MiniPlayer above the bottom navigation bar
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: MiniPlayerBar(audioHandler: widget.audioHandler),
-          ),
+          MiniPlayerBar(audioHandler: widget.audioHandler),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(

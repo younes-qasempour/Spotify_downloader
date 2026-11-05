@@ -1,3 +1,4 @@
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import '../../models/track_metadata.dart';
 import '../../services/audio_player_service.dart';
@@ -11,8 +12,8 @@ class MiniPlayerBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<TrackMetadata?>(
-      stream: Stream.periodic(const Duration(milliseconds: 300), (_) => audioHandler.currentTrack),
+    return StreamBuilder<MediaItem?>(
+      stream: audioHandler.mediaItem,
       builder: (context, snapshot) {
         final track = audioHandler.currentTrack;
         if (track == null) return const SizedBox.shrink();

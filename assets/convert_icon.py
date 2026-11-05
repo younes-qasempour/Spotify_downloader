@@ -15,11 +15,8 @@ def convert_image_to_icon(input_image_path: str, output_ico_path: str, output_pn
         raise FileNotFoundError(f"Source image not found: {input_p}")
 
     print(f"Loading source image: {input_p}")
-    img = Image.open(str(input_p))
-
-    # Convert to RGBA for clean transparency/color presentation
-    if img.mode != "RGBA":
-        img = img.convert("RGBA")
+    with Image.open(str(input_p)) as src_img:
+        img = src_img.convert("RGBA") if src_img.mode != "RGBA" else src_img.copy()
 
     out_ico = Path(output_ico_path).resolve()
     out_ico.parent.mkdir(parents=True, exist_ok=True)

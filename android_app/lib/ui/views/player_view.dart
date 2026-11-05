@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/lyrics_model.dart';
 import '../../services/audio_player_service.dart';
@@ -17,11 +18,23 @@ class _PlayerViewState extends State<PlayerView> {
   LyricsData? _lyrics;
   final ScrollController _scrollController = ScrollController();
   int _activeLyricIndex = -1;
+  StreamSubscription? _mediaItemSub;
 
   @override
   void initState() {
     super.initState();
     _loadLyrics();
+    _mediaItemSub = widget.audioHandler.mediaItem.listen((_) {
+      _loadLyrics();
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _mediaItemSub?.cancel();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadLyrics() async {
@@ -210,14 +223,25 @@ class _PlayerViewState extends State<PlayerView> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.shuffle, color: FlacifyTheme.textSecondary, size: 24),
-                    onPressed: () {},
+                  ValueListenableBuilder<bool>(
+                    valueListenable: widget.audioHandler.shuffleNotifier,
+                    builder: (context, shuffleEnabled, _) {
+                      return IconButton(
+                        icon: Icon(
+                          Icons.shuffle,
+                          color: shuffleEnabled ? FlacifyTheme.spotifyEmerald : FlacifyTheme.textSecondary,
+                          size: 24,
+                        ),
+                        onPressed: () {
+                          widget.audioHandler.toggleShuffle();
+                        },
+                      );
+                    },
                   ),
                   IconButton(
                     icon: const Icon(Icons.skip_previous, color: FlacifyTheme.textPrimary, size: 40),
-                    onPressed: () {
-                      widget.audioHandler.skipToPrevious();
+                    onPressed: () async {
+                      await widget.audioHandler.skipToPrevious();
                       _loadLyrics();
                     },
                   ),
@@ -249,14 +273,27 @@ class _PlayerViewState extends State<PlayerView> {
                   ),
                   IconButton(
                     icon: const Icon(Icons.skip_next, color: FlacifyTheme.textPrimary, size: 40),
-                    onPressed: () {
-                      widget.audioHandler.skipToNext();
+                    onPressed: () async {
+                      await widget.audioHandler.skipToNext();
                       _loadLyrics();
                     },
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.repeat, color: FlacifyTheme.textSecondary, size: 24),
-                    onPressed: () {},
+                  ValueListenableBuilder<RepeatMode>(
+                    valueListenable: widget.audioHandler.repeatNotifier,
+                    builder: (context, repeatMode, _) {
+                      final isActive = repeatMode != RepeatMode.off;
+                      final isOne = repeatMode == RepeatMode.one;
+                      return IconButton(
+                        icon: Icon(
+                          isOne ? Icons.repeat_one : Icons.repeat,
+                          color: isActive ? FlacifyTheme.spotifyEmerald : FlacifyTheme.textSecondary,
+                          size: 24,
+                        ),
+                        onPressed: () {
+                          widget.audioHandler.cycleRepeatMode();
+                        },
+                      );
+                    },
                   ),
                 ],
               ),
@@ -330,7 +367,9 @@ class _PlayerViewState extends State<PlayerView> {
           }
         }
 
-        _scrollToActiveLyric(activeIndex);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _scrollToActiveLyric(activeIndex);
+        });
 
         return ListView.builder(
           controller: _scrollController,

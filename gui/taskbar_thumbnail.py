@@ -180,6 +180,8 @@ class TaskbarThumbnailManager:
             )
             if hr == 0 and self.taskbar.value:
                 vtable = ctypes.cast(self.taskbar, POINTER(POINTER(c_void_p))).contents
+                # Index 3: HrInit
+                WINFUNCTYPE(c_int, c_void_p)(vtable[3])(self.taskbar)
                 # Index 15: ThumbBarAddButtons
                 self._thumb_add = WINFUNCTYPE(c_int, c_void_p, wintypes.HWND, wintypes.UINT, POINTER(THUMBBUTTON))(vtable[15])
                 # Index 16: ThumbBarUpdateButtons
@@ -203,13 +205,15 @@ class TaskbarThumbnailManager:
             self._icons[name] = _create_glyph_hicon(glyph)
         return self._icons.get(name, 0)
 
-    def init_buttons(self, hwnd: int) -> bool:
+    def init_buttons(self, hwnd: int, reset: bool = False) -> bool:
         """
         Adds the thumbnail toolbar buttons to the taskbar button preview.
         Can only be called once per window lifecycle.
         """
         if sys.platform != "win32" or not self.taskbar or not self._thumb_add or not hwnd:
             return False
+        if reset:
+            self._buttons_added = False
         if self._buttons_added:
             return True
 
@@ -317,6 +321,12 @@ class TaskbarThumbnailManager:
                     except Exception:
                         pass
             self._icons.clear()
+            if self.taskbar and getattr(self.taskbar, "value", None):
+                try:
+                    vtable = ctypes.cast(self.taskbar, POINTER(POINTER(c_void_p))).contents
+                    WINFUNCTYPE(c_ulong, c_void_p)(vtable[2])(self.taskbar)
+                except Exception:
+                    pass
             self.taskbar = None
             self._thumb_add = None
             self._thumb_update = None

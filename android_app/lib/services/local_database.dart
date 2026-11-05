@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -22,8 +24,14 @@ class LocalDatabase {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createDB,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute("ALTER TABLE downloaded_tracks ADD COLUMN cover_url TEXT DEFAULT '';");
+          await db.execute("ALTER TABLE downloaded_tracks ADD COLUMN release_date TEXT DEFAULT '';");
+        }
+      },
     );
   }
 
@@ -35,9 +43,11 @@ class LocalDatabase {
         title TEXT NOT NULL,
         artist TEXT NOT NULL,
         album TEXT,
+        release_date TEXT DEFAULT '',
         duration_ms INTEGER,
         track_number INTEGER DEFAULT 1,
         disc_number INTEGER DEFAULT 1,
+        cover_url TEXT DEFAULT '',
         file_path TEXT NOT NULL,
         file_size INTEGER DEFAULT 0,
         quality_badge TEXT DEFAULT 'FLAC',
@@ -100,9 +110,11 @@ class LocalDatabase {
         'title': track.title,
         'artist': track.artistStr,
         'album': track.album,
+        'release_date': track.releaseDate,
         'duration_ms': track.durationMs,
         'track_number': track.trackNumber,
         'disc_number': track.discNumber,
+        'cover_url': track.coverUrl,
         'file_path': filePath,
         'file_size': fileSize,
         'quality_badge': qualityBadge,
@@ -135,13 +147,27 @@ class LocalDatabase {
       );
 
       final tracks = trkRows.map((t) => SyncPlaylistTrack.fromJson(t)).toList();
+      final rawUpdated = pl['updated_at'];
+      int updatedAt = 0;
+      if (rawUpdated is int) {
+        updatedAt = rawUpdated;
+      } else if (rawUpdated is String) {
+        final parsedInt = int.tryParse(rawUpdated);
+        if (parsedInt != null) {
+          updatedAt = parsedInt;
+        } else {
+          final parsedDt = DateTime.tryParse(rawUpdated);
+          updatedAt = (parsedDt?.millisecondsSinceEpoch ?? 0) ~/ 1000;
+        }
+      }
+
       playlists.add(SyncPlaylistItem(
         id: pid,
         name: pl['name'] as String,
         spotifyUrl: pl['spotify_url'] as String? ?? '',
         coverUrl: pl['cover_url'] as String? ?? '',
         totalTracks: pl['total_tracks'] as int? ?? tracks.length,
-        updatedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        updatedAt: updatedAt,
         tracks: tracks,
       ));
     }
@@ -159,10 +185,12 @@ class LocalDatabase {
           'spotify_url': playlist.spotifyUrl,
           'cover_url': playlist.coverUrl,
           'total_tracks': playlist.tracks.length,
-          'updated_at': DateTime.now().toIso8601String(),
+          'updated_at': playlist.updatedAt > 0 ? playlist.updatedAt : (DateTime.now().millisecondsSinceEpoch ~/ 1000),
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+
+      await txn.delete('saved_playlist_tracks', where: 'playlist_id = ?', whereArgs: [playlist.id]);
 
       for (final t in playlist.tracks) {
         await txn.insert(
@@ -181,6 +209,43 @@ class LocalDatabase {
         );
       }
     });
+  }
+
+  Future<String> exportM3u8Playlist({
+    required String name,
+    required List<TrackMetadata> tracks,
+    required String targetDirPath,
+  }) async {
+    final dir = Directory(targetDirPath);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+
+    final sanitizedName = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+    final fileName = sanitizedName.isEmpty ? 'playlist.m3u8' : '$sanitizedName.m3u8';
+    final filePath = p.join(targetDirPath, fileName);
+
+    final buffer = StringBuffer();
+    buffer.writeln('#EXTM3U');
+    buffer.writeln('#PLAYLIST:$name');
+
+    for (final t in tracks) {
+      if (t.localFilePath != null && t.localFilePath!.isNotEmpty) {
+        final secs = (t.durationMs / 1000).round();
+        buffer.writeln('#EXTINF:$secs,${t.artistStr} - ${t.title}');
+        String relPath;
+        try {
+          relPath = p.relative(t.localFilePath!, from: targetDirPath).replaceAll('\\', '/');
+        } catch (_) {
+          relPath = p.basename(t.localFilePath!);
+        }
+        buffer.writeln(relPath);
+      }
+    }
+
+    final file = File(filePath);
+    await file.writeAsString(buffer.toString(), encoding: utf8);
+    return filePath;
   }
 
   Future<void> deleteTrack(String spotifyId) async {

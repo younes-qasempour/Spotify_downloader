@@ -117,17 +117,44 @@ class _MetadataTagger:
                     audio.tags.add(frame(encoding=3, text=value))
         elif isinstance(audio, MP4):
             fields = {"\xa9nam": [track.title], "\xa9ART": track.artists,
-                      "\xa9alb": [track.album], "\xa9day": [track.release_date],
-                      "trkn": [(track.track_number, 0)], "disk": [(track.disc_number, 0)],
-                      "----:com.apple.iTunes:ISRC": [track.isrc.encode("utf-8")]}
+                      "\xa9alb": [track.album],
+                      "trkn": [(track.track_number, 0)], "disk": [(track.disc_number, 0)]}
+            if track.release_date:
+                fields["\xa9day"] = [track.release_date]
+            else:
+                try:
+                    del audio.tags["\xa9day"]
+                except KeyError:
+                    pass
+            if track.isrc:
+                fields["----:com.apple.iTunes:ISRC"] = [track.isrc.encode("utf-8")]
+            else:
+                try:
+                    del audio.tags["----:com.apple.iTunes:ISRC"]
+                except KeyError:
+                    pass
             if track.genres:
                 fields["\xa9gen"] = track.genres
             audio.tags.update(fields)
         else:
             fields = {"title": [track.title], "artist": track.artists,
-                      "album": [track.album], "date": [track.release_date],
+                      "album": [track.album],
                       "tracknumber": [str(track.track_number)],
-                      "discnumber": [str(track.disc_number)], "isrc": [track.isrc]}
+                      "discnumber": [str(track.disc_number)]}
+            if track.release_date:
+                fields["date"] = [track.release_date]
+            else:
+                try:
+                    del audio.tags["date"]
+                except KeyError:
+                    pass
+            if track.isrc:
+                fields["isrc"] = [track.isrc]
+            else:
+                try:
+                    del audio.tags["isrc"]
+                except KeyError:
+                    pass
             if track.genres:
                 fields["genre"] = track.genres
             audio.tags.update(fields)
@@ -352,6 +379,8 @@ class LibraryRepairManager:
                 if entry is not None:
                     entry["state"] = "aborted"
                     self._write(entry)
+                elif backup.exists():
+                    backup.unlink()
                 raise
             finally:
                 if stage is not None and stage.exists():

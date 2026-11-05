@@ -43,9 +43,23 @@ def next_output_path(path: str, reserved: Optional[set[str]] = None) -> str:
     reserved = reserved if reserved is not None else set()
     stem, extension = os.path.splitext(path)
     candidate = path
+    cur_stem = stem
     suffix = 2
-    while os.path.lexists(candidate) or os.path.normcase(os.path.abspath(candidate)) in reserved:
-        candidate = f"{stem} ({suffix}){extension}"
+    audio_extensions = (".flac", ".mp3", ".m4a", ".opus", ".ogg", ".wav")
+
+    def _is_collision(p: str, s: str) -> bool:
+        if os.path.lexists(p) or os.path.normcase(os.path.abspath(p)) in reserved:
+            return True
+        if extension == ".<native>":
+            for ext in audio_extensions:
+                cand_path = s + ext
+                if os.path.lexists(cand_path) or os.path.normcase(os.path.abspath(cand_path)) in reserved:
+                    return True
+        return False
+
+    while _is_collision(candidate, cur_stem):
+        cur_stem = f"{stem} ({suffix})"
+        candidate = f"{cur_stem}{extension}"
         suffix += 1
     return candidate
 

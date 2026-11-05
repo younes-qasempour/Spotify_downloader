@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../../services/wifi_sync_service.dart';
@@ -23,7 +24,7 @@ class _MobileSyncViewState extends State<MobileSyncView> {
 
   final TextEditingController _ipController = TextEditingController();
   final TextEditingController _portController = TextEditingController(text: '8765');
-  final TextEditingController _tokenController = TextEditingController(text: 'flacify-lan-sync');
+  final TextEditingController _tokenController = TextEditingController(text: '');
 
   @override
   void initState() {
@@ -31,11 +32,29 @@ class _MobileSyncViewState extends State<MobileSyncView> {
     _checkInitialConnection();
   }
 
+  @override
+  void dispose() {
+    _ipController.dispose();
+    _portController.dispose();
+    _tokenController.dispose();
+    super.dispose();
+  }
+
   Future<void> _checkInitialConnection() async {
+    final loaded = await widget.syncService.loadSavedConnection();
+    if (loaded) {
+      if (widget.syncService.ip != null) {
+        _ipController.text = widget.syncService.ip!;
+      }
+      if (widget.syncService.port != null) {
+        _portController.text = widget.syncService.port.toString();
+      }
+      _tokenController.text = widget.syncService.token;
+    }
     if (widget.syncService.isConfigured) {
       await widget.syncService.pingServer();
-      if (mounted) setState(() {});
     }
+    if (mounted) setState(() {});
   }
 
   Future<void> _autoDiscover() async {
@@ -132,7 +151,47 @@ class _MobileSyncViewState extends State<MobileSyncView> {
         title: const Text('Configure PC Sync Server'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            OutlinedButton.icon(
+              icon: const Icon(Icons.content_paste, size: 16),
+              label: const Text('Paste Pairing Code'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: FlacifyTheme.spotifyEmerald,
+                side: const BorderSide(color: FlacifyTheme.spotifyEmerald),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              onPressed: () async {
+                final data = await Clipboard.getData(Clipboard.kTextPlain);
+                final text = data?.text?.trim() ?? '';
+                if (text.isNotEmpty) {
+                  try {
+                    widget.syncService.configureFromQrCode(text);
+                    if (widget.syncService.ip != null) {
+                      _ipController.text = widget.syncService.ip!;
+                    }
+                    if (widget.syncService.port != null) {
+                      _portController.text = widget.syncService.port.toString();
+                    }
+                    _tokenController.text = widget.syncService.token;
+                    Navigator.pop(ctx);
+                    _checkInitialConnection();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Pairing code applied successfully.')),
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Invalid pairing code: $e')),
+                    );
+                  }
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Clipboard is empty.')),
+                  );
+                }
+              },
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _ipController,
               decoration: const InputDecoration(

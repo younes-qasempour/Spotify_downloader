@@ -565,6 +565,36 @@ manager.apply_retag(sys.argv[1], TrackMetadata('offline', 'After crash', ['Artis
             with self.assertRaises(RepairConflictError):
                 self.manager.preview_retag(target, self.track)
 
+    def test_library_repair_dialog_offscreen(self):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([""])
+
+        target = self.audio()
+        journal_id = self.manager.apply_retag(target, self.track)
+
+        from gui.dialogs.library_repair_dialog import LibraryRepairDialog
+
+        undone_called = []
+        dialog = LibraryRepairDialog(
+            repair_manager=self.manager,
+            on_undone_callback=lambda: undone_called.append(True)
+        )
+
+        self.assertEqual(len(dialog.history_entries), 1)
+        self.assertEqual(dialog.history_entries[0]["id"], journal_id)
+        self.assertEqual(dialog.history_entries[0]["state"], "applied")
+
+        dialog._trigger_undo(journal_id)
+        if dialog._last_undo_thread:
+            dialog._last_undo_thread.join(timeout=5)
+        app.processEvents()
+
+        self.assertTrue(undone_called)
+        self.assertEqual(dialog.history_entries[0]["state"], "undone")
+        dialog.deleteLater()
+        app.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()

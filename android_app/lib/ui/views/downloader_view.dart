@@ -17,6 +17,12 @@ class _DownloaderViewState extends State<DownloaderView> {
   String _selectedFormat = 'flac';
   bool _isLoading = false;
 
+  @override
+  void dispose() {
+    _urlController.dispose();
+    super.dispose();
+  }
+
   Future<void> _handleDownload() async {
     final url = _urlController.text.trim();
     if (url.isEmpty) {

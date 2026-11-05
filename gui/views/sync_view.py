@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
-    QPlainTextEdit
+    QPlainTextEdit, QApplication
 )
 from qfluentwidgets import (
     TitleLabel, SubtitleLabel, BodyLabel, CaptionLabel,
@@ -33,17 +33,29 @@ class SyncView(QWidget):
     """
 
     def __init__(self, archive_manager=None, parent=None):
+        import secrets
         super().__init__(parent)
         self.setObjectName("sync_view")
         self.archive_manager = archive_manager
 
         self.port = 8765
-        self.token = config.get("sync.token", "flacify-lan-sync")
+        token = config.get("sync.token", "")
+        if not token or token == "flacify-lan-sync":
+            token = secrets.token_urlsafe(24)
+            try:
+                config.set("sync.token", token)
+            except Exception:
+                pass
+        self.token = token
+        self.current_ip = get_local_ip()
         self.music_dir = config.get("download.output_dir", "downloads")
         self.sync_thread: Optional[WifiSyncServerThread] = None
 
         self._build_ui()
-        self.start_server()
+        if config.get("sync.auto_start", False):
+            self.start_server()
+        else:
+            self.status_badge.setText("Offline (Ready)")
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
@@ -133,10 +145,13 @@ class SyncView(QWidget):
         btn_row.setSpacing(10)
         self.toggle_btn = PrimaryPushButton(FluentIcon.PLAY, "Start Server", self.qr_card)
         self.toggle_btn.clicked.connect(self._on_toggle_server)
+        self.copy_code_btn = PushButton(FluentIcon.COPY, "Copy Pairing Code", self.qr_card)
+        self.copy_code_btn.clicked.connect(self._copy_pairing_code)
         self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Music Folder", self.qr_card)
         self.open_folder_btn.clicked.connect(self._open_music_folder)
 
         btn_row.addWidget(self.toggle_btn, 1)
+        btn_row.addWidget(self.copy_code_btn, 1)
         btn_row.addWidget(self.open_folder_btn, 1)
         qr_lay.addLayout(btn_row)
 
@@ -172,6 +187,7 @@ class SyncView(QWidget):
         act_lay.addWidget(CaptionLabel("Activity History & Transfer Events:", self.activity_card))
         self.log_view = QPlainTextEdit(self.activity_card)
         self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(1000)
         self.log_view.setStyleSheet(
             "background-color: #181818; color: #BBBBBB; font-family: 'Consolas', 'Courier New', monospace; "
             "font-size: 12px; border-radius: 8px; border: 1px solid #282828; padding: 8px;"
@@ -211,20 +227,21 @@ class SyncView(QWidget):
 
     def _on_toggle_server(self):
         if self.sync_thread and self.sync_thread.isRunning():
-            self.stop_server()
-            self.toggle_btn.setText("Start Server")
-            self.toggle_btn.setIcon(FluentIcon.PLAY)
-            self.status_badge.setText("Server Stopped")
+            self.toggle_btn.setEnabled(False)
+            self.toggle_btn.setText("Stopping...")
+            self.status_badge.setText("Stopping...")
             self.status_badge.setStyleSheet(
                 "background-color: #331A1A; color: #FF6B6B; padding: 4px 10px; "
                 "border-radius: 12px; font-size: 12px; font-weight: bold;"
             )
+            self.sync_thread.stop()
         else:
             self.start_server()
             self.toggle_btn.setText("Stop Server")
             self.toggle_btn.setIcon(FluentIcon.PAUSE)
 
     def _on_server_started(self, ip: str, port: int, token: str):
+        self.current_ip = ip
         self.ip_lbl.setText(f"LAN IP: {ip}")
         self.port_lbl.setText(f"Port: {port}")
         self.status_badge.setText("Online (Broadcasting)")
@@ -232,6 +249,7 @@ class SyncView(QWidget):
             "background-color: #12331C; color: #1DB954; padding: 4px 10px; "
             "border-radius: 12px; font-size: 12px; font-weight: bold;"
         )
+        self.toggle_btn.setEnabled(True)
         self.toggle_btn.setText("Stop Server")
         self.toggle_btn.setIcon(FluentIcon.PAUSE)
 
@@ -246,6 +264,7 @@ class SyncView(QWidget):
             "background-color: #2D2D2D; color: #888888; padding: 4px 10px; "
             "border-radius: 12px; font-size: 12px; font-weight: bold;"
         )
+        self.toggle_btn.setEnabled(True)
         self.toggle_btn.setText("Start Server")
         self.toggle_btn.setIcon(FluentIcon.PLAY)
         self.log_view.appendPlainText("[System] Wi-Fi Sync Server stopped.")
@@ -285,6 +304,20 @@ class SyncView(QWidget):
         except Exception as e:
             logger.error(f"Error rendering QR code: {e}")
             self.qr_label.setText("QR Generation Failed")
+
+    def _copy_pairing_code(self):
+        ip = getattr(self, "current_ip", None) or get_local_ip()
+        pairing_data = json.dumps({"ip": ip, "port": self.port, "token": self.token})
+        QApplication.clipboard().setText(pairing_data)
+        InfoBar.success(
+            title="Pairing Code Copied",
+            content="Mobile pairing configuration copied to clipboard.",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+            parent=self
+        )
 
     def _open_music_folder(self):
         music_path = Path(self.music_dir).resolve()

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'services/audio_player_service.dart';
 import 'services/download_queue_service.dart';
+import 'services/spotify_resolver.dart';
 import 'services/wifi_sync_service.dart';
 import 'ui/main_screen.dart';
 import 'ui/theme.dart';
@@ -67,13 +68,24 @@ class _FlacifyAppState extends State<FlacifyApp> {
   @override
   void initState() {
     super.initState();
+    _intentChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onSharedText') {
+        final text = call.arguments as String?;
+        if (text != null && SpotifyResolver.spotifyUrlPattern.hasMatch(text.trim())) {
+          if (mounted) {
+            final queue = Provider.of<DownloadQueueService>(context, listen: false);
+            await queue.addUrl(text.trim());
+          }
+        }
+      }
+    });
     _handleIncomingShareIntent();
   }
 
   Future<void> _handleIncomingShareIntent() async {
     try {
       final sharedText = await _intentChannel.invokeMethod<String>('getSharedText');
-      if (sharedText != null && sharedText.contains('spotify.com')) {
+      if (sharedText != null && SpotifyResolver.spotifyUrlPattern.hasMatch(sharedText.trim())) {
         if (mounted) {
           final queue = Provider.of<DownloadQueueService>(context, listen: false);
           await queue.addUrl(sharedText.trim());

@@ -76,11 +76,13 @@ class MusilonEngine {
     MusilonSource source,
     String savePath, {
     void Function(double progress)? onProgress,
+    CancelToken? cancelToken,
   }) async {
     final file = File(savePath);
     await _dio.download(
       source.downloadUrl,
       savePath,
+      cancelToken: cancelToken,
       onReceiveProgress: (received, total) {
         if (total > 0 && onProgress != null) {
           onProgress(received / total);
