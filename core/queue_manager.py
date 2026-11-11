@@ -5,9 +5,8 @@ import queue
 import shutil
 import threading
 import logging
-from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Callable, Any
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Optional, Dict, List, Callable
 import requests
 
 from core.spotify_client import TrackMetadata

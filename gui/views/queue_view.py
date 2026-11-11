@@ -1,27 +1,26 @@
 import os
 import subprocess
 import threading
-from typing import Optional, List, Dict, Any
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QModelIndex, QUrl
-from PyQt6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QModelIndex
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QHeaderView,
     QApplication, QMenu, QStackedLayout, QFrame, QLabel
 )
 from qfluentwidgets import (
     TableView, LineEdit, PrimaryPushButton, PushButton, ToolButton,
-    FluentIcon, SubtitleLabel, CaptionLabel, StrongBodyLabel, BodyLabel,
+    FluentIcon, CaptionLabel, StrongBodyLabel,
     CardWidget, InfoBar, InfoBarPosition, ProgressBar, ComboBox, IconWidget
 )
 
-from core.spotify_client import SpotifyClient, TrackMetadata
-from core.queue_manager import DownloadQueueManager, QueueItem
+from core.spotify_client import SpotifyClient
+from core.queue_manager import DownloadQueueManager
 from core.config import config
 from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
-from gui.bridge import EngineSignalBridge, safe_emit, safe_invoke
-from gui.styles import BG_PRIMARY, BG_CARD, SPOTIFY_EMERALD, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED
+from gui.bridge import EngineSignalBridge, safe_emit
+from gui.styles import TEXT_MUTED
 
 
 class MetricCard(CardWidget):

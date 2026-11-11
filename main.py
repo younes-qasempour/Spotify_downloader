@@ -17,7 +17,6 @@ except Exception:
 
 from logging.handlers import RotatingFileHandler
 from core.paths import get_logs_dir, get_asset_path
-from core.utils import resource_path
 
 # Global exception logger
 def exception_hook(exctype, value, tb):

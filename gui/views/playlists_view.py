@@ -6,28 +6,27 @@ from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger("gui.views.playlists")
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QModelIndex, QRectF, QUrl
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QColor, QDesktopServices
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QModelIndex, QUrl
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QHeaderView, QMenu, QApplication,
-    QStackedWidget, QLabel, QFrame, QFileDialog
+    QStackedWidget, QLabel, QFileDialog
 )
 from qfluentwidgets import (
     TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
     FluentIcon, InfoBar, InfoBarPosition, LineEdit, CaptionLabel,
-    StrongBodyLabel, BodyLabel, CardWidget, SmoothScrollArea, IconWidget,
-    SpinBox, CompactSpinBox, ComboBox, ProgressBar, MessageBoxBase
+    StrongBodyLabel, CardWidget, SmoothScrollArea, IconWidget,
+    SpinBox, ComboBox, ProgressBar, MessageBoxBase
 )
 
 from core.archive import ArchiveManager
 from core.spotify_client import SpotifyClient, TrackMetadata
 from core.queue_manager import DownloadQueueManager, QueueItem
 from core.config import config
-from core.utils import format_duration
 from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
 from gui.bridge import EngineSignalBridge, safe_invoke, safe_emit
-from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, BG_CARD, SPOTIFY_EMERALD
+from gui.styles import TEXT_MUTED, TEXT_SECONDARY
 from gui.dialogs.export_dialog import ExportDialog
 from gui.dialogs.export_m3u_dialog import ExportM3UDialog
 

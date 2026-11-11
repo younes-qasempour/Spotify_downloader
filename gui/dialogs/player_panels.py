@@ -1,7 +1,7 @@
 import os
 import threading
 import logging
-from typing import Optional, List, Tuple
+from typing import List, Tuple
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QColor
@@ -10,13 +10,13 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import (
     MessageBoxBase, SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
-    PushButton, PrimaryPushButton, ToolButton, Slider, ComboBox, SwitchButton,
+    PushButton, ToolButton, Slider, ComboBox, SwitchButton,
     SmoothScrollArea, CardWidget, FluentIcon, InfoBar
 )
 
 from core.config import config
 from core.utils import (
-    EQ_FREQUENCIES, EQ_PRESETS, apply_equalizer_to_file, extract_embedded_cover
+    EQ_PRESETS, apply_equalizer_to_file, extract_embedded_cover
 )
 from gui.styles import TEXT_MUTED
 

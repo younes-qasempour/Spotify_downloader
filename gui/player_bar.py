@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, QUrl, QByteArray, QPoint, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath, QIcon, QKeySequence, QShortcut, QColor
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame, QMenu, QPushButton
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame, QMenu
 )
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QAudioDevice
 from qfluentwidgets import (
@@ -20,7 +20,6 @@ from core.spotify_client import TrackMetadata
 from core.archive import resolve_collection_cover
 from core.config import config
 from gui.queue_delegate import extract_embedded_cover, ThumbnailCache
-from gui.styles import TEXT_MUTED
 
 logger = logging.getLogger("gui.player_bar")
 

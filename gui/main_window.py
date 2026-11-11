@@ -1,12 +1,11 @@
 import os
-import sys
 import logging
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QEasingCurve, QPoint
-from PyQt6.QtGui import QIcon, QKeySequence, QShortcut, QColor
+from PyQt6.QtCore import pyqtSignal, QEasingCurve
+from PyQt6.QtGui import QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QVBoxLayout
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, FluentIcon,
-    setTheme, Theme, isDarkTheme
+    setTheme, Theme
 )
 from gui.player_bar import MiniPlayerBar
 from gui.media_keys import MediaControllerManager
@@ -20,7 +19,6 @@ from core.tagger import AudioTagger
 from core.resolver import CascadingAudioEngine
 from core.archive import ArchiveManager
 from core.config import config
-from core.utils import resource_path
 from core.paths import get_asset_path
 
 from gui.bridge import EngineSignalBridge

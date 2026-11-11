@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
 )
 from qfluentwidgets import (
-    MessageBoxBase, SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
-    PushButton, PrimaryPushButton, ProgressBar, CardWidget, SmoothScrollArea,
+    MessageBoxBase, SubtitleLabel, StrongBodyLabel, CaptionLabel,
+    PrimaryPushButton, ProgressBar, CardWidget, SmoothScrollArea,
     FluentIcon, InfoBar
 )
 

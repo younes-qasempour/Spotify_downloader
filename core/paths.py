@@ -3,7 +3,6 @@ import sys
 import shutil
 import logging
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("core.paths")
 

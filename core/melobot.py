@@ -1,6 +1,5 @@
 import os
 import re
-import sys
 import time
 import math
 import asyncio
@@ -11,7 +10,7 @@ from typing import Optional, List, Dict, Any, Callable, Tuple, AsyncGenerator
 from pathlib import Path
 from difflib import SequenceMatcher
 
-from telethon import TelegramClient, utils, events
+from telethon import TelegramClient, events
 from telethon.network import MTProtoSender
 from telethon.tl.alltlobjects import LAYER
 from telethon.tl.functions import InvokeWithLayerRequest
@@ -38,7 +37,7 @@ from core.utils import (
     sanitize_filename, is_valid_audio_file, format_bytes,
     PERSIAN_ARTIST_ALIASES, is_persian_or_arabic, transliterate_persian,
     consonant_skeleton, normalize_special_unicode,
-    has_katakana, romanize_katakana, phonetic_skeleton
+    has_katakana, phonetic_skeleton
 )
 from core.paths import get_cache_dir
 from core.config import config

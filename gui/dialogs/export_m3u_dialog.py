@@ -1,14 +1,14 @@
 import os
 import subprocess
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Any, Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QStackedWidget
 )
 from qfluentwidgets import (
-    MessageBoxBase, SubtitleLabel, CaptionLabel, StrongBodyLabel, BodyLabel,
+    MessageBoxBase, SubtitleLabel, CaptionLabel, StrongBodyLabel,
     LineEdit, PushButton, PrimaryPushButton, ComboBox, FluentIcon, CardWidget,
     InfoBar, InfoBarPosition
 )
@@ -16,7 +16,7 @@ from qfluentwidgets import (
 from core.config import config
 from core.archive import ArchiveManager
 from core.utils import sanitize_filename
-from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, SPOTIFY_EMERALD
+from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY
 
 logger = logging.getLogger("gui.dialogs.export_m3u")
 

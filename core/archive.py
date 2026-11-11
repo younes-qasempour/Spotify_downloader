@@ -5,13 +5,13 @@ import threading
 import logging
 import shutil
 from contextlib import contextmanager, closing
-from typing import Optional, List, Dict, Any, Callable, Tuple, Generator
+from typing import Optional, List, Dict, Any, Callable, Tuple
 from pathlib import Path
 
 from core.config import config
 from core.spotify_client import TrackMetadata
 from core.utils import extract_embedded_cover, is_valid_audio_file, sanitize_filename
-from core.paths import get_archive_db_path, get_cache_dir, get_covers_dir, get_default_download_dir
+from core.paths import get_archive_db_path, get_covers_dir, get_default_download_dir
 
 logger = logging.getLogger("core.archive")
 
@@ -1099,7 +1099,6 @@ class ArchiveManager:
 
         try:
             import mutagen
-            from mutagen.easyid3 import EasyID3
             from mutagen.flac import FLAC
             from mutagen.mp4 import MP4
             from mutagen.oggopus import OggOpus

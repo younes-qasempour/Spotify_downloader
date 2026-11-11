@@ -1,5 +1,4 @@
-from typing import Protocol, TypedDict, Literal, Optional, List, Dict, Any, Callable, runtime_checkable
-from dataclasses import dataclass
+from typing import Protocol, TypedDict, Literal, runtime_checkable
 
 QualityTier = Literal[
     "Musilon FLAC 24",

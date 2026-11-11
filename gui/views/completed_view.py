@@ -10,14 +10,14 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPainterPath
 from qfluentwidgets import (
     TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
-    FluentIcon, InfoBar, InfoBarPosition, LineEdit, CaptionLabel, StrongBodyLabel, BodyLabel,
+    FluentIcon, InfoBar, InfoBarPosition, LineEdit, CaptionLabel, StrongBodyLabel,
     SegmentedWidget, CardWidget, SmoothScrollArea, IconWidget, ComboBox, MessageBoxBase
 )
 
 from gui.queue_model import TrackQueueModel
 from gui.queue_delegate import TrackCardDelegate
-from gui.bridge import EngineSignalBridge, safe_invoke, safe_emit
-from gui.styles import TEXT_MUTED, BG_CARD, SPOTIFY_EMERALD
+from gui.bridge import EngineSignalBridge, safe_invoke
+from gui.styles import TEXT_MUTED
 from core.archive import ArchiveManager
 from core.spotify_client import TrackMetadata
 from core.queue_manager import QueueItem

@@ -1,14 +1,12 @@
-import io
 import os
 import re
-import base64
 import threading
-from typing import Dict, Optional
+from typing import Optional
 import requests
-from PyQt6.QtCore import Qt, QRectF, QSize, QPointF, QModelIndex, QTimer, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF, QSize, QModelIndex, QTimer, QObject, pyqtSignal
 from PyQt6.QtGui import (
     QPainter, QColor, QFont, QFontMetrics, QPen, QBrush, QPixmap, QImage,
-    QPainterPath, QLinearGradient
+    QPainterPath
 )
 from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
 

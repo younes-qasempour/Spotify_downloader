@@ -1,9 +1,8 @@
 import os
-import re
 import json
 import logging
 import threading
-from typing import List, Dict, Tuple, Set, Optional
+from typing import List, Dict, Set, Optional
 import requests
 
 from core.paths import get_cache_dir

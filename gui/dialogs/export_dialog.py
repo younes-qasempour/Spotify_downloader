@@ -4,17 +4,17 @@ import subprocess
 import logging
 from typing import List, Dict, Any, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QStackedWidget
 from qfluentwidgets import (
-    MessageBoxBase, SubtitleLabel, CaptionLabel, StrongBodyLabel, BodyLabel,
+    MessageBoxBase, SubtitleLabel, CaptionLabel, StrongBodyLabel,
     LineEdit, PushButton, PrimaryPushButton, CheckBox, ComboBox, ProgressBar,
     FluentIcon, CardWidget, InfoBar, InfoBarPosition
 )
 
 from core.config import config
 from core.exporter import ExportConfig, ExportResult, PlaylistExporter
-from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, SPOTIFY_EMERALD
+from gui.styles import TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY
 
 logger = logging.getLogger("gui.dialogs.export")
 

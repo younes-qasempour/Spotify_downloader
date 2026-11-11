@@ -1,8 +1,7 @@
 import os
-import subprocess
 import threading
-from typing import Optional, Any, Union
-from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QUrl
+from typing import Optional, Any
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QScrollArea,
@@ -11,7 +10,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
     LineEdit, PrimaryPushButton, PushButton, ToolButton, SwitchButton,
-    CardWidget, InfoBar, InfoBarPosition, FluentIcon, Slider, ComboBox, CompactSpinBox,
+    CardWidget, InfoBar, FluentIcon, ComboBox, CompactSpinBox,
     MessageBoxBase
 )
 
@@ -21,8 +20,7 @@ from core.melobot import MeloBotEngine
 from core.spotify_client import SpotifyClient
 from core.utils import ensure_ffmpeg, download_ffmpeg
 from gui.styles import (
-    BG_CARD, BORDER_SUBTLE, SPOTIFY_EMERALD, TEXT_PRIMARY,
-    TEXT_SECONDARY, TEXT_MUTED, STATUS_COLORS
+    TEXT_SECONDARY, TEXT_MUTED
 )
 from gui.bridge import safe_emit, safe_invoke
 

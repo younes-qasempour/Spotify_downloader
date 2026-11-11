@@ -4,10 +4,8 @@ import logging
 from typing import Optional
 import requests
 from PIL import Image
-import mutagen
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TPOS, TSRC, USLT, APIC, COMM, TCON, TXXX
-from mutagen.mp3 import MP3
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TPOS, TSRC, USLT, APIC, COMM, TCON, TXXX, delete as id3_delete
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
 
@@ -339,9 +337,8 @@ class AudioTagger:
         except Exception:
             pass
 
-        import mutagen.id3
         try:
-            mutagen.id3.delete(file_path)
+            id3_delete(file_path)
         except Exception:
             pass
 
