@@ -820,19 +820,21 @@ class PlaylistsView(QWidget):
                 border-radius: 8px;
             }
         """)
-        banner_layout = QHBoxLayout(self.banner_card)
-        banner_layout.setContentsMargins(10, 6, 12, 6)
+        banner_layout = QVBoxLayout(self.banner_card)
+        banner_layout.setContentsMargins(12, 10, 12, 10)
         banner_layout.setSpacing(10)
 
-        # Integrated Back Navigation Button
-        self.back_btn = PushButton(FluentIcon.LEFT_ARROW, "Back to Playlists", self.banner_card)
-        self.back_btn.setFixedHeight(30)
-        self.back_btn.clicked.connect(self._show_overview)
-        banner_layout.addWidget(self.back_btn)
+        # Row 1: Back Navigation, Artwork & Playlist Info
+        info_row = QHBoxLayout()
+        info_row.setSpacing(12)
 
-        # Compact 40x40 Artwork Thumbnail
+        self.back_btn = PushButton(FluentIcon.LEFT_ARROW, "Back to Playlists", self.banner_card)
+        self.back_btn.setFixedHeight(32)
+        self.back_btn.clicked.connect(self._show_overview)
+        info_row.addWidget(self.back_btn)
+
         self.detail_thumb = QLabel(self.banner_card)
-        self.detail_thumb.setFixedSize(40, 40)
+        self.detail_thumb.setFixedSize(42, 42)
         self.detail_thumb.setStyleSheet("""
             QLabel {
                 background-color: #2c2c2c;
@@ -841,71 +843,78 @@ class PlaylistsView(QWidget):
             }
         """)
         self.detail_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        banner_layout.addWidget(self.detail_thumb)
+        info_row.addWidget(self.detail_thumb)
 
-        # Title & Stats in tight 2-line layout
         detail_info_layout = QVBoxLayout()
-        detail_info_layout.setSpacing(2)
+        detail_info_layout.setSpacing(3)
         detail_info_layout.setContentsMargins(0, 0, 0, 0)
 
         self.detail_title = StrongBodyLabel("Playlist Name", self.banner_card)
-        self.detail_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #FFFFFF;")
+        self.detail_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #FFFFFF;")
 
         info_sub_row = QHBoxLayout()
-        info_sub_row.setSpacing(8)
+        info_sub_row.setSpacing(12)
         self.detail_stats_label = CaptionLabel("0 Total • 0 Downloaded • 0 Pending", self.banner_card)
         self.detail_stats_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
         self.detail_stats_label.setStyleSheet("font-size: 11px;")
         info_sub_row.addWidget(self.detail_stats_label)
 
         self.detail_progress_bar = ProgressBar(self.banner_card)
-        self.detail_progress_bar.setFixedHeight(4)
+        self.detail_progress_bar.setFixedHeight(5)
         self.detail_progress_bar.setRange(0, 100)
-        self.detail_progress_bar.setFixedWidth(110)
+        self.detail_progress_bar.setFixedWidth(130)
         info_sub_row.addWidget(self.detail_progress_bar)
         info_sub_row.addStretch(1)
 
         detail_info_layout.addWidget(self.detail_title)
         detail_info_layout.addLayout(info_sub_row)
-        banner_layout.addLayout(detail_info_layout, 1)
+        info_row.addLayout(detail_info_layout, 1)
 
-        # Playlist-level Action Buttons
+        banner_layout.addLayout(info_row)
+
+        # Row 2: Dedicated Playlist Action Controls Toolbar
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(8)
+
         self.detail_watch_btn = PushButton(FluentIcon.PIN, "Auto-Sync", self.banner_card)
         self.detail_watch_btn.setFixedHeight(30)
         self.detail_watch_btn.setToolTip("Pin this playlist for automatic background delta sync & downloading")
         self.detail_watch_btn.clicked.connect(self._handle_detail_toggle_watch)
+        actions_row.addWidget(self.detail_watch_btn)
 
         self.detail_sync_btn = PushButton(FluentIcon.SYNC, "Sync", self.banner_card)
         self.detail_sync_btn.setFixedHeight(30)
         self.detail_sync_btn.setToolTip("Check for newly added or removed songs from online source")
         self.detail_sync_btn.clicked.connect(self._handle_detail_sync)
+        actions_row.addWidget(self.detail_sync_btn)
 
         self.detail_edit_btn = PushButton(FluentIcon.EDIT, "Edit", self.banner_card)
         self.detail_edit_btn.setFixedHeight(30)
         self.detail_edit_btn.setToolTip("Rename or edit playlist details & artwork")
         self.detail_edit_btn.clicked.connect(self._handle_detail_edit)
+        actions_row.addWidget(self.detail_edit_btn)
 
         self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Open Folder", self.banner_card)
         self.open_folder_btn.setFixedHeight(30)
         self.open_folder_btn.setToolTip("Open playlist folder on disk")
         self.open_folder_btn.clicked.connect(self._open_download_folder)
+        actions_row.addWidget(self.open_folder_btn)
 
         self.export_m3u8_btn = PushButton(FluentIcon.SHARE, "Export M3U8", self.banner_card)
         self.export_m3u8_btn.setFixedHeight(30)
         self.export_m3u8_btn.setToolTip("Export this playlist to a portable UTF-8 .m3u8 playlist file")
         self.export_m3u8_btn.clicked.connect(self._on_export_m3u8_clicked)
+        actions_row.addWidget(self.export_m3u8_btn)
 
         self.export_songs_btn = PushButton(FluentIcon.FOLDER_ADD, "Export Songs", self.banner_card)
         self.export_songs_btn.setFixedHeight(30)
         self.export_songs_btn.setToolTip("Export downloaded songs from this playlist to an external device, USB drive, or folder")
         self.export_songs_btn.clicked.connect(self._on_export_songs_clicked)
+        actions_row.addWidget(self.export_songs_btn)
 
-        banner_layout.addWidget(self.detail_watch_btn)
-        banner_layout.addWidget(self.detail_sync_btn)
-        banner_layout.addWidget(self.detail_edit_btn)
-        banner_layout.addWidget(self.open_folder_btn)
-        banner_layout.addWidget(self.export_m3u8_btn)
-        banner_layout.addWidget(self.export_songs_btn)
+        actions_row.addStretch(1)
+
+        banner_layout.addLayout(actions_row)
         detail_layout.addWidget(self.banner_card)
 
         # 2. Collapsible Batch Download Controls Panel

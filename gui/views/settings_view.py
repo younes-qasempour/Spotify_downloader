@@ -4,14 +4,14 @@ from typing import Optional, Any
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QScrollArea,
+    QWidget, QVBoxLayout, QHBoxLayout, QFileDialog,
     QFrame, QApplication
 )
 from qfluentwidgets import (
     SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
     LineEdit, PrimaryPushButton, PushButton, ToolButton, SwitchButton,
     CardWidget, InfoBar, FluentIcon, ComboBox, CompactSpinBox,
-    MessageBoxBase
+    MessageBoxBase, SmoothScrollArea
 )
 
 from core.config import config
@@ -189,7 +189,7 @@ class TelegramLoginDialog(MessageBoxBase):
 
 
 
-class SettingsView(QScrollArea):
+class SettingsView(SmoothScrollArea):
     """
     Comprehensive, ultra-reliable Fluent Settings view.
     Fixes layout collapse bugs by using robust standard layouts on CardWidgets.
@@ -223,10 +223,13 @@ class SettingsView(QScrollArea):
         self.setObjectName("settings_view")
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setViewportMargins(0, 0, 0, 0)
+        self.setStyleSheet("SmoothScrollArea, QScrollArea { border: none; background-color: transparent; }")
 
         self.container = QWidget(self)
-        self.container.setStyleSheet("background-color: transparent;")
+        self.container.setObjectName("settings_container")
+        self.container.setStyleSheet("QWidget#settings_container { background-color: transparent; }")
         self.setWidget(self.container)
 
         self.musilon_engine = musilon_engine or MusilonEngine(
@@ -253,9 +256,14 @@ class SettingsView(QScrollArea):
 
         self._init_ui()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Always scroll to top when settings view is shown
+        QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(0))
+
     def _init_ui(self):
         main_layout = QVBoxLayout(self.container)
-        main_layout.setContentsMargins(28, 24, 28, 40)
+        main_layout.setContentsMargins(28, 24, 28, 80)
         main_layout.setSpacing(24)
 
         # Page Header
@@ -656,13 +664,7 @@ class SettingsView(QScrollArea):
         s_desc.setWordWrap(True)
         s_layout.addWidget(s_desc)
 
-        s_btn_row = QHBoxLayout()
-        self.open_sp_dash_btn = PushButton(FluentIcon.LINK, "Open Spotify Developer Dashboard", spotify_card)
-        self.open_sp_dash_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://developer.spotify.com/dashboard")))
-        s_btn_row.addWidget(self.open_sp_dash_btn)
-        s_btn_row.addStretch(1)
-        s_layout.addLayout(s_btn_row)
-
+        # Row 1: Credentials Inputs
         s_inputs = QHBoxLayout()
         s_inputs.setSpacing(10)
 
@@ -677,17 +679,28 @@ class SettingsView(QScrollArea):
         self.spotify_secret.setText(config.get("spotify.client_secret", ""))
         self.spotify_secret.textChanged.connect(self._on_sp_sec_changed)
 
+        s_inputs.addWidget(self.spotify_id, 1)
+        s_inputs.addWidget(self.spotify_secret, 1)
+        s_layout.addLayout(s_inputs)
+
+        # Row 2: Action Controls
+        s_btn_row = QHBoxLayout()
+        s_btn_row.setSpacing(10)
+
         self.validate_sp_btn = PushButton(FluentIcon.SEND, "Validate Keys", spotify_card)
         self.validate_sp_btn.clicked.connect(self._validate_spotify)
 
         self.auth_sp_btn = PrimaryPushButton(FluentIcon.PEOPLE, "Authorize Spotify Account", spotify_card)
         self.auth_sp_btn.clicked.connect(self._authorize_spotify)
 
-        s_inputs.addWidget(self.spotify_id, 1)
-        s_inputs.addWidget(self.spotify_secret, 1)
-        s_inputs.addWidget(self.validate_sp_btn)
-        s_inputs.addWidget(self.auth_sp_btn)
-        s_layout.addLayout(s_inputs)
+        self.open_sp_dash_btn = PushButton(FluentIcon.LINK, "Developer Dashboard", spotify_card)
+        self.open_sp_dash_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://developer.spotify.com/dashboard")))
+
+        s_btn_row.addWidget(self.validate_sp_btn)
+        s_btn_row.addWidget(self.auth_sp_btn)
+        s_btn_row.addWidget(self.open_sp_dash_btn)
+        s_btn_row.addStretch(1)
+        s_layout.addLayout(s_btn_row)
 
         main_layout.addWidget(spotify_card)
         self._update_spotify_badge()

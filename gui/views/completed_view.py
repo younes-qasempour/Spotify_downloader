@@ -281,30 +281,59 @@ class CompletedView(QWidget):
         main_layout.setContentsMargins(18, 12, 18, 12)
         main_layout.setSpacing(8)
 
-        # 1. Unified Navigation, Filter & Action Toolbar Row
-        nav_row = QHBoxLayout()
-        nav_row.setSpacing(10)
+        # 1. Navigation & Tools Row
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
 
         self.segmented = SegmentedWidget(self)
         self.segmented.addItem("tracks", "🎵 All Songs", onClick=lambda: self._switch_tab(0))
         self.segmented.addItem("playlists", "📁 Playlists", onClick=lambda: self._switch_tab(1))
         self.segmented.addItem("albums", "💿 Albums", onClick=lambda: self._switch_tab(2))
-        nav_row.addWidget(self.segmented)
+        top_row.addWidget(self.segmented)
 
         self.stats_label = CaptionLabel("Loading library...", self)
         self.stats_label.setTextColor(TEXT_MUTED, TEXT_MUTED)
         self.stats_label.setStyleSheet("font-size: 11px;")
-        nav_row.addWidget(self.stats_label)
+        top_row.addWidget(self.stats_label)
 
-        nav_row.addStretch(1)
+        top_row.addStretch(1)
+
+        self.spectrum_btn = PushButton(FluentIcon.SPEED_HIGH, "Spectrum Audit", self)
+        self.spectrum_btn.setFixedHeight(30)
+        self.spectrum_btn.setToolTip("Scan library for fake bitrates / upscaled transcodes and inspect audio spectrum")
+        self.spectrum_btn.clicked.connect(self._open_spectrum_scanner)
+        top_row.addWidget(self.spectrum_btn)
+
+        self.dedup_btn = PushButton(FluentIcon.LINK, "Deduplicate", self)
+        self.dedup_btn.setFixedHeight(30)
+        self.dedup_btn.setToolTip("Smart Duplicate & Acoustic Fingerprint Merger (Hard-Link or Clean Merge)")
+        self.dedup_btn.clicked.connect(self._open_duplicate_merger)
+        top_row.addWidget(self.dedup_btn)
+
+        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Downloads", self)
+        self.open_folder_btn.setFixedHeight(30)
+        self.open_folder_btn.setToolTip("Open local download directory in Windows Explorer")
+        self.open_folder_btn.clicked.connect(self._open_download_folder)
+        top_row.addWidget(self.open_folder_btn)
+
+        self.rescan_btn = ToolButton(FluentIcon.SYNC, self)
+        self.rescan_btn.setFixedHeight(30)
+        self.rescan_btn.setToolTip("Rescan & Sync Downloads from Disk")
+        self.rescan_btn.clicked.connect(self._on_rescan_clicked)
+        top_row.addWidget(self.rescan_btn)
+
+        main_layout.addLayout(top_row)
+
+        # 2. Search & Filtering Controls Row
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(10)
 
         self.search_input = LineEdit(self)
         self.search_input.setFixedHeight(30)
         self.search_input.setPlaceholderText("Search songs, artists, albums, or playlists...")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setFixedWidth(220)
         self.search_input.textChanged.connect(self._on_search_changed)
-        nav_row.addWidget(self.search_input)
+        filter_row.addWidget(self.search_input, 1)
 
         self.sort_combo = ComboBox(self)
         self.sort_combo.setFixedHeight(30)
@@ -320,40 +349,16 @@ class CompletedView(QWidget):
         self.sort_combo.setCurrentIndex(0)
         self.sort_combo.setFixedWidth(160)
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
-        nav_row.addWidget(self.sort_combo)
+        filter_row.addWidget(self.sort_combo)
 
         self.genre_combo = ComboBox(self)
         self.genre_combo.setFixedHeight(30)
-        self.genre_combo.setFixedWidth(125)
+        self.genre_combo.setFixedWidth(135)
         self.genre_combo.addItems(["All Genres"])
         self.genre_combo.currentIndexChanged.connect(self._on_genre_changed)
-        nav_row.addWidget(self.genre_combo)
+        filter_row.addWidget(self.genre_combo)
 
-        self.spectrum_btn = PushButton(FluentIcon.SPEED_HIGH, "Spectrum Audit", self)
-        self.spectrum_btn.setFixedHeight(30)
-        self.spectrum_btn.setToolTip("Scan library for fake bitrates / upscaled transcodes and inspect audio spectrum")
-        self.spectrum_btn.clicked.connect(self._open_spectrum_scanner)
-        nav_row.addWidget(self.spectrum_btn)
-
-        self.dedup_btn = PushButton(FluentIcon.LINK, "Deduplicate", self)
-        self.dedup_btn.setFixedHeight(30)
-        self.dedup_btn.setToolTip("Smart Duplicate & Acoustic Fingerprint Merger (Hard-Link or Clean Merge)")
-        self.dedup_btn.clicked.connect(self._open_duplicate_merger)
-        nav_row.addWidget(self.dedup_btn)
-
-        self.open_folder_btn = PushButton(FluentIcon.FOLDER, "Downloads", self)
-        self.open_folder_btn.setFixedHeight(30)
-        self.open_folder_btn.setToolTip("Open local download directory in Windows Explorer")
-        self.open_folder_btn.clicked.connect(self._open_download_folder)
-        nav_row.addWidget(self.open_folder_btn)
-
-        self.rescan_btn = ToolButton(FluentIcon.SYNC, self)
-        self.rescan_btn.setFixedHeight(30)
-        self.rescan_btn.setToolTip("Rescan & Sync Downloads from Disk")
-        self.rescan_btn.clicked.connect(self._on_rescan_clicked)
-        nav_row.addWidget(self.rescan_btn)
-
-        main_layout.addLayout(nav_row)
+        main_layout.addLayout(filter_row)
 
         # 2. Stacked Widget (Pages)
         self.stacked = QStackedWidget(self)
