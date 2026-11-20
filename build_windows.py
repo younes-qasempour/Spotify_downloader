@@ -101,7 +101,7 @@ def find_iscc() -> Path | None:
 
 
 def run_inno_setup(repo_root: Path, iscc_path: Path):
-    """Compiles installer.iss into dist/installer/Flacify_Setup_v1.0.0.exe."""
+    """Compiles installer.iss into dist/installer/Flacify_Setup_v1.9.5.exe."""
     log(f"Compiling Inno Setup installer using {iscc_path}...")
     iss_file = repo_root / "installer.iss"
     if not iss_file.exists():
@@ -116,7 +116,7 @@ def run_inno_setup(repo_root: Path, iscc_path: Path):
     if result.returncode != 0:
         raise RuntimeError(f"ISCC compilation failed with exit code {result.returncode}")
 
-    setup_exe = installer_out_dir / "Flacify_Setup_v1.6.2.exe"
+    setup_exe = installer_out_dir / "Flacify_Setup_v1.9.5.exe"
     if not setup_exe.exists():
         # Fallback to any Flacify_Setup_*.exe found in installer_out_dir
         matches = list(installer_out_dir.glob("Flacify_Setup_*.exe"))

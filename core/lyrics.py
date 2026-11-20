@@ -35,7 +35,7 @@ class LyricsEngine:
 
     API_URL = "https://lrclib.net/api/get"
     SEARCH_URL = "https://lrclib.net/api/search"
-    USER_AGENT = "Flacify/1.6.2 (https://github.com/younes-qasempour/Spotify_downloader)"
+    USER_AGENT = "Flacify/1.9.5 (https://github.com/younes-qasempour/Spotify_downloader)"
 
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
