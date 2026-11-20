@@ -61,6 +61,33 @@ class TestGUI(unittest.TestCase):
         self.assertTrue(hasattr(pv, "export_songs_btn"))
         self.assertTrue(hasattr(pv, "batch_spinbox"))
 
+    def test_detail_watch_btn_preserves_icon_padding(self):
+        pv = self.window.playlists_view
+        pv.current_playlist_data = {
+            "id": "pl_test",
+            "name": "Test Playlist",
+            "auto_sync": False,
+        }
+
+        pv._update_detail_watch_btn()
+        self.assertTrue(pv.detail_watch_btn.property("hasIcon"))
+        self.assertEqual(pv.detail_watch_btn.text(), "Auto-Sync: Off")
+        self.assertIn("padding: 5px 12px 6px 36px;", pv.detail_watch_btn.styleSheet())
+        self.assertNotIn("#1DB954", pv.detail_watch_btn.styleSheet())
+
+        pv.current_playlist_data["auto_sync"] = True
+        pv._update_detail_watch_btn()
+        self.assertEqual(pv.detail_watch_btn.text(), "Auto-Sync: ON")
+        self.assertIn("padding: 5px 12px 6px 36px;", pv.detail_watch_btn.styleSheet())
+        self.assertNotIn("padding: 4px 6px", pv.detail_watch_btn.styleSheet())
+        self.assertIn("#1DB954", pv.detail_watch_btn.styleSheet())
+
+        pv.current_playlist_data["auto_sync"] = False
+        pv._update_detail_watch_btn()
+        self.assertEqual(pv.detail_watch_btn.text(), "Auto-Sync: Off")
+        self.assertIn("padding: 5px 12px 6px 36px;", pv.detail_watch_btn.styleSheet())
+        self.assertNotIn("#1DB954", pv.detail_watch_btn.styleSheet())
+
     def test_navigation_switch(self):
         self.window.switchTo(self.window.playlists_view)
         self.assertEqual(self.window.stackedWidget.currentWidget(), self.window.playlists_view)

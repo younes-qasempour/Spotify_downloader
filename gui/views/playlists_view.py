@@ -16,7 +16,7 @@ from qfluentwidgets import (
     TableView, SubtitleLabel, PushButton, PrimaryPushButton, ToolButton,
     FluentIcon, InfoBar, InfoBarPosition, LineEdit, CaptionLabel,
     StrongBodyLabel, CardWidget, SmoothScrollArea, IconWidget,
-    SpinBox, ComboBox, ProgressBar, MessageBoxBase
+    SpinBox, ComboBox, ProgressBar, MessageBoxBase, setCustomStyleSheet
 )
 
 from core.archive import ArchiveManager
@@ -61,6 +61,40 @@ PRESET_ACTIVE_STYLE = """
         background-color: rgba(29, 185, 84, 0.32);
         border: 1.5px solid #1ED760;
         color: #FFFFFF;
+    }
+"""
+
+WATCH_BTN_ACTIVE_STYLE = """
+    PushButton {
+        background-color: rgba(29, 185, 84, 0.22);
+        border: 1.5px solid #1DB954;
+        color: #1ED760;
+        font-weight: 700;
+    }
+    PushButton:hover {
+        background-color: rgba(29, 185, 84, 0.32);
+        border: 1.5px solid #1ED760;
+        color: #FFFFFF;
+    }
+    PushButton:pressed {
+        background-color: rgba(29, 185, 84, 0.18);
+        border: 1.5px solid #1DB954;
+        color: #1ED760;
+    }
+"""
+
+WATCH_TOOL_ACTIVE_STYLE = """
+    ToolButton {
+        background-color: rgba(29, 185, 84, 0.22);
+        border: 1px solid #1ED760;
+    }
+    ToolButton:hover {
+        background-color: rgba(29, 185, 84, 0.32);
+        border: 1px solid #1ED760;
+    }
+    ToolButton:pressed {
+        background-color: rgba(29, 185, 84, 0.18);
+        border: 1px solid #1DB954;
     }
 """
 
@@ -456,7 +490,7 @@ class SavedPlaylistCard(CardWidget):
             if is_watched else "Pin Playlist for Scheduled Auto-Sync ('Watch Playlist')"
         )
         if is_watched:
-            self.watch_btn.setStyleSheet("ToolButton { background-color: rgba(29, 185, 84, 0.22); border: 1px solid #1ED760; border-radius: 5px; }")
+            setCustomStyleSheet(self.watch_btn, WATCH_TOOL_ACTIVE_STYLE, WATCH_TOOL_ACTIVE_STYLE)
         self.watch_btn.clicked.connect(self._handle_toggle_watch)
 
         self.sync_btn = ToolButton(FluentIcon.SYNC, self)
@@ -1564,11 +1598,17 @@ class PlaylistsView(QWidget):
             return
         watched = bool(self.current_playlist_data.get("auto_sync"))
         if watched:
-            self.detail_watch_btn.setText("⚡ Auto-Sync: ON")
-            self.detail_watch_btn.setStyleSheet(PRESET_ACTIVE_STYLE)
+            self.detail_watch_btn.setText("Auto-Sync: ON")
+            self.detail_watch_btn.setToolTip(
+                "Auto-Sync (Watch Playlist): ON — Click to unpin and disable automatic background sync"
+            )
+            setCustomStyleSheet(self.detail_watch_btn, WATCH_BTN_ACTIVE_STYLE, WATCH_BTN_ACTIVE_STYLE)
         else:
             self.detail_watch_btn.setText("Auto-Sync: Off")
-            self.detail_watch_btn.setStyleSheet("")
+            self.detail_watch_btn.setToolTip(
+                "Pin this playlist for automatic background delta sync & downloading"
+            )
+            setCustomStyleSheet(self.detail_watch_btn, "", "")
 
     def _run_watched_playlists_sync(self, is_startup: bool = False):
         """Background scheduled runner that checks all pinned ('Watched') playlists for new delta songs on Spotify."""
