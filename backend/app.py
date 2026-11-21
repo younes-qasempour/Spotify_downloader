@@ -4,22 +4,25 @@ FastAPI application factory with health check, CORS, and WebSocket event stream.
 
 import asyncio
 from contextlib import asynccontextmanager
+import hmac
 import mimetypes
 import os
 from pathlib import Path
 import sys
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
+from backend.mdns import get_device_name, get_or_create_pair_token
 from backend.routes.library import router as library_router
 from backend.routes.lyrics import router as lyrics_router
 from backend.routes.media import router as media_router
 from backend.routes.playlists import router as playlists_router
 from backend.routes.queue import router as queue_router
 from backend.routes.settings import router as settings_router
+from backend.routes.sync import is_loopback_host, router as sync_router
 from backend.routes.tools import router as tools_router
 from backend.state import BackendState
 from core import __version__
@@ -88,11 +91,52 @@ def create_app(
         lifespan=lifespan,
     )
 
+    @app.middleware("http")
+    async def mobile_pair_token_middleware(request: Request, call_next):
+        path = request.url.path
+        if (
+            request.method == "OPTIONS"
+            or not path.startswith("/api/")
+            or path == "/api/health"
+        ):
+            return await call_next(request)
+
+        client_host = request.client.host if request.client else ""
+        if is_loopback_host(client_host):
+            return await call_next(request)
+
+        backend: Optional[BackendState] = getattr(request.app.state, "backend", None)
+        if backend is None:
+            return JSONResponse(status_code=503, content={"detail": "Backend initializing."})
+
+        if not bool(backend.config.get("mobile.lan_enabled", True)):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "LAN / mobile access is disabled on this Flacify PC."},
+            )
+
+        expected = get_or_create_pair_token(backend.config)
+        auth_hdr = request.headers.get("authorization") or ""
+        bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
+        supplied = (
+            bearer
+            or (request.headers.get("x-flacify-token") or "").strip()
+            or (request.query_params.get("token") or "").strip()
+        )
+        if not supplied or not hmac.compare_digest(supplied, expected):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing or invalid Flacify pairing token."},
+            )
+
+        return await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=(
             r"^(https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|"
-            r"10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?|"
+            r"10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|"
+            r"100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+)(:\d+)?|"
             r"tauri://localhost|https?://tauri\.localhost)$"
         ),
         allow_credentials=True,
@@ -107,6 +151,7 @@ def create_app(
     app.include_router(lyrics_router)
     app.include_router(settings_router)
     app.include_router(tools_router)
+    app.include_router(sync_router)
 
     @app.get("/api/health")
     async def health():
@@ -115,6 +160,9 @@ def create_app(
             "status": "ok",
             "version": __version__,
             "api_version": "2.0",
+            "device_name": get_device_name(backend.config),
+            "lan_enabled": bool(backend.config.get("mobile.lan_enabled", True)),
+            "pair_required": True,
             "queue_paused": backend.queue_manager.is_paused(),
             "queue_count": len(backend.queue_manager.get_items()),
             "ws_clients": backend.events.client_count,
@@ -125,6 +173,23 @@ def create_app(
     @app.websocket("/ws/events")
     async def ws_events(websocket: WebSocket):
         backend: BackendState = app.state.backend
+        client_host = websocket.client.host if websocket.client else ""
+        if not is_loopback_host(client_host):
+            if not bool(backend.config.get("mobile.lan_enabled", True)):
+                await websocket.close(code=4403)
+                return
+            expected = get_or_create_pair_token(backend.config)
+            auth_hdr = websocket.headers.get("authorization") or ""
+            bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
+            supplied = (
+                bearer
+                or (websocket.headers.get("x-flacify-token") or "").strip()
+                or (websocket.query_params.get("token") or "").strip()
+            )
+            if not supplied or not hmac.compare_digest(supplied, expected):
+                await websocket.close(code=4401)
+                return
+
         await backend.events.connect(websocket)
         try:
             await backend.events.send_json(

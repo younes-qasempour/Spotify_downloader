@@ -97,7 +97,7 @@ impl BackendManager {
                 for sidecar in sidecar_candidates {
                     if sidecar.is_file() {
                         let mut cmd = Command::new(&sidecar);
-                        cmd.args(["--host", "127.0.0.1", "--port", &port_str])
+                        cmd.args(["--port", &port_str])
                             .stdin(Stdio::null())
                             .stdout(Stdio::null())
                             .stderr(Stdio::null());

@@ -31,6 +31,7 @@ _ALLOWED_KEY_PREFIXES = (
     "playlists.",
     "export.",
     "export_m3u.",
+    "mobile.",
 )
 _QUALITY_PRIORITY_320 = [
     "musilon_mp3_320",
@@ -148,6 +149,7 @@ def _build_settings_response(backend: BackendState) -> Dict[str, Any]:
             "musilon_password": bool(password),
             "spotify_client_secret": bool(sp_secret),
             "telegram_api_hash": bool(tg_hash),
+            "mobile_pair_token": bool(str(cfg.get("mobile.pair_token", "") or "").strip()),
         },
         "derived": {
             "effective_source_engine": eff_engine,
@@ -358,6 +360,16 @@ async def update_settings(request: Request, body: SettingsUpdateRequest):
             updated_keys.append(key)
             continue
 
+        if key == "mobile.lan_enabled":
+            cfg.set(key, bool(raw_val))
+            updated_keys.append(key)
+            continue
+
+        if key == "mobile.device_name":
+            cfg.set(key, str(raw_val or "").strip())
+            updated_keys.append(key)
+            continue
+
         cfg.set(key, raw_val)
         updated_keys.append(key)
 
@@ -394,6 +406,9 @@ async def update_settings(request: Request, body: SettingsUpdateRequest):
 
     if auto_sync_dirty:
         backend.reschedule_auto_sync()
+
+    if any(k.startswith("mobile.") for k in updated_keys) and hasattr(backend, "refresh_mdns"):
+        backend.refresh_mdns()
 
     _save_config(cfg)
     dedup_updated = list(dict.fromkeys(updated_keys))

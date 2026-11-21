@@ -170,6 +170,11 @@ class TestMeloBotIntegration(unittest.TestCase):
         mock_engine.sign_in.assert_called_once_with(
             code="77875", password=None, phone_code_hash="hash_xyz", phone="+989139758747"
         )
+        diag.close()
+        diag.deleteLater()
+        parent.close()
+        parent.deleteLater()
+        app.processEvents()
 
 
     def test_candidate_scoring_perfect_match(self):

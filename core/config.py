@@ -22,6 +22,7 @@ SECRET_KEYS: Set[str] = {
     "arcsjs",
     "arcsjsc",
     "api_hash",
+    "pair_token",
 }
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -96,6 +97,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "auto_sync_on_startup": True,
         "auto_sync_interval_hours": 6,
         "auto_download_synced_tracks": True,
+    },
+    "mobile": {
+        "lan_enabled": True,
+        "pair_token": "",
+        "device_name": "",
     },
 }
 

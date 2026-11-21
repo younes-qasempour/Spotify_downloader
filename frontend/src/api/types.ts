@@ -385,12 +385,17 @@ export interface SettingsResponse {
       auto_sync_interval_hours: number;
       auto_download_synced_tracks: boolean;
     };
+    mobile: {
+      lan_enabled: boolean;
+      device_name: string;
+    };
   };
   secrets_set: {
     musilon_session_cookie: boolean;
     musilon_password: boolean;
     spotify_client_secret: boolean;
     telegram_api_hash: boolean;
+    mobile_pair_token: boolean;
   };
   derived: {
     effective_source_engine: "musilon" | "melobot";
@@ -618,4 +623,20 @@ export interface FfmpegInstallResponse {
   success: boolean;
   path: string;
   message: string;
+}
+
+export interface MobileSyncInfo {
+  lan_enabled: boolean;
+  device_name: string;
+  port: number;
+  server_version: string;
+  ips: string[];
+  urls: string[];
+  primary_url: string;
+  library_stats: LibraryStats;
+  saved_playlists_count: number;
+  paired: boolean;
+  pair_token?: string;
+  pair_uri?: string;
+  qr_svg_url?: string;
 }

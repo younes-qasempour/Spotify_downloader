@@ -1,0 +1,144 @@
+"""
+LAN IP detection, pairing token management, and mDNS service announcement (`_flacify._tcp.local.`).
+"""
+
+import logging
+import secrets
+import socket
+from typing import Any, List, Optional
+
+logger = logging.getLogger("backend.mdns")
+
+_SERVICE_TYPE = "_flacify._tcp.local."
+
+
+def detect_reachable_lan_ips() -> List[str]:
+    """
+    Returns non-loopback, non-link-local IPv4 addresses reachable on LAN or VPN (e.g. Tailscale),
+    ordered with the primary outbound interface IP first.
+    """
+    ordered: List[str] = []
+
+    def _add(ip: str) -> None:
+        clean = (ip or "").strip()
+        if not clean or clean in ordered:
+            return
+        if clean.startswith("127.") or clean.startswith("169.254.") or clean == "0.0.0.0":
+            return
+        ordered.append(clean)
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            _add(sock.getsockname()[0])
+        finally:
+            sock.close()
+    except OSError:
+        pass
+
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            _add(info[4][0])
+    except OSError:
+        pass
+
+    return ordered
+
+
+def get_device_name(cfg: Any) -> str:
+    """Returns configured mobile display name or the OS hostname fallback."""
+    configured = str(cfg.get("mobile.device_name", "") or "").strip()
+    if configured:
+        return configured
+    try:
+        return socket.gethostname() or "Flacify PC"
+    except OSError:
+        return "Flacify PC"
+
+
+def get_or_create_pair_token(cfg: Any) -> str:
+    """Reads `mobile.pair_token` or generates and persists a cryptographically random token."""
+    existing = str(cfg.get("mobile.pair_token", "") or "").strip()
+    if existing:
+        return existing
+
+    token = secrets.token_urlsafe(24)
+    try:
+        cfg.set("mobile.pair_token", token)
+        if hasattr(cfg, "save") and callable(cfg.save):
+            cfg.save()
+    except Exception as exc:
+        logger.debug(f"Could not persist generated mobile pair token: {exc}")
+    return token
+
+
+class FlacifyMdnsBroadcaster:
+    """Broadcasts `_flacify._tcp.local.` over LAN mDNS/Zeroconf so Android finds the PC automatically."""
+
+    def __init__(self) -> None:
+        self._zeroconf: Optional[Any] = None
+        self._info: Optional[Any] = None
+
+    def start(self, port: int, device_name: str, version: str) -> bool:
+        """Registers the Flacify service over Zeroconf; non-fatal if unavailable."""
+        self.stop()
+        try:
+            from zeroconf import ServiceInfo, Zeroconf
+
+            ips = detect_reachable_lan_ips()
+            if not ips:
+                return False
+
+            packed_addrs = [socket.inet_aton(ip) for ip in ips]
+            safe_instance = "".join(
+                ch if (ch.isalnum() or ch in (" ", "-", "_")) else "-"
+                for ch in (device_name or "Flacify PC")
+            ).strip() or "Flacify PC"
+            service_name = f"Flacify ({safe_instance[:40]}).{_SERVICE_TYPE}"
+            host_label = (safe_instance.replace(" ", "-")[:40] or "flacify").lower()
+
+            info = ServiceInfo(
+                type_=_SERVICE_TYPE,
+                name=service_name,
+                addresses=packed_addrs,
+                port=int(port),
+                properties={
+                    b"version": str(version).encode("utf-8"),
+                    b"api": b"2.1",
+                    b"name": str(device_name or "Flacify PC").encode("utf-8"),
+                    b"pair": b"1",
+                },
+                server=f"{host_label}.local.",
+            )
+            zc = Zeroconf()
+            zc.register_service(info, allow_name_change=True)
+            self._zeroconf = zc
+            self._info = info
+            logger.info(
+                f"mDNS advertising {service_name} on {ips[0]}:{port}"
+            )
+            return True
+        except Exception as exc:
+            logger.debug(f"mDNS broadcaster disabled/unavailable: {exc}")
+            self.stop()
+            return False
+
+    def stop(self) -> None:
+        """Unregisters and shuts down Zeroconf cleanly."""
+        zc = self._zeroconf
+        info = self._info
+        self._zeroconf = None
+        self._info = None
+        if zc is None:
+            return
+        try:
+            if info is not None:
+                zc.unregister_service(info)
+        except Exception:
+            pass
+        try:
+            zc.close()
+        except Exception:
+            pass

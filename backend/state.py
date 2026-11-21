@@ -10,6 +10,7 @@ import threading
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
+from backend.mdns import FlacifyMdnsBroadcaster, get_device_name
 from backend.serializers import (
     mask_config_value,
     serialize_queue_item,
@@ -108,6 +109,7 @@ class BackendState:
         self._tools_lock = threading.Lock()
         self._last_duplicate_groups: List[Dict[str, Any]] = []
         self._tool_cancel_events: Dict[str, threading.Event] = {}
+        self._mdns = FlacifyMdnsBroadcaster()
         self._bind_callbacks()
 
     def _bind_callbacks(self) -> None:
@@ -364,8 +366,28 @@ class BackendState:
             ev.set()
             return True
 
+    def refresh_mdns(self) -> None:
+        """Starts or stops mDNS advertising based on `mobile.lan_enabled`."""
+        try:
+            if not self.run_startup_scan:
+                return
+            if bool(self.config.get("mobile.lan_enabled", True)):
+                from core import __version__
+
+                port = int(os.getenv("FLACIFY_PORT", "8765") or "8765")
+                threading.Thread(
+                    target=self._mdns.start,
+                    args=(port, get_device_name(self.config), __version__),
+                    daemon=True,
+                    name="BackendMdnsAdvertiser",
+                ).start()
+            else:
+                self._mdns.stop()
+        except Exception as exc:
+            logger.debug(f"Could not refresh mDNS broadcaster: {exc}")
+
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Binds the running asyncio loop and launches startup scan & Auto-Sync scheduler."""
+        """Binds the running asyncio loop and launches startup scan, mDNS & Auto-Sync scheduler."""
         self._loop = loop
         self.events.set_loop(loop)
         if self.run_startup_scan:
@@ -377,6 +399,7 @@ class BackendState:
                     daemon=True,
                     name="BackendStartupScanner",
                 ).start()
+            self.refresh_mdns()
         if self.run_auto_sync_scheduler:
             self._auto_sync_wakeup = asyncio.Event()
             self._auto_sync_task = loop.create_task(self._auto_sync_loop())
@@ -556,6 +579,11 @@ class BackendState:
                     cb("stop")
                 except Exception:
                     pass
+
+        try:
+            self._mdns.stop()
+        except Exception as exc:
+            logger.debug(f"Error stopping mDNS broadcaster on shutdown: {exc}")
 
         try:
             self.queue_manager.stop()

@@ -52,6 +52,9 @@ hiddenimports = [
     "PIL.JpegImagePlugin",
     "PIL.PngImagePlugin",
     "PIL.WebPImagePlugin",
+    "qrcode",
+    "qrcode.image.svg",
+    "zeroconf",
 ]
 
 for pkg in (
@@ -62,8 +65,12 @@ for pkg in (
     "telethon",
     "uvicorn",
     "websockets",
+    "zeroconf",
 ):
-    hiddenimports += collect_submodules(pkg)
+    try:
+        hiddenimports += collect_submodules(pkg)
+    except Exception:
+        pass
 
 excludes = [
     "PyQt6",

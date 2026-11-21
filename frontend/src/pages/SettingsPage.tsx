@@ -6,6 +6,7 @@ import {
   FolderCog,
   FolderOpen,
   Radio,
+  Smartphone,
   Subtitles,
   Wrench,
   type LucideIcon,
@@ -16,6 +17,7 @@ import type { SettingsResponse } from "@/api/types";
 import { DownloadsFormatsSection } from "@/components/settings/DownloadsFormatsSection";
 import { FfmpegMaintenanceSection } from "@/components/settings/FfmpegMaintenanceSection";
 import { LyricsAudioSection } from "@/components/settings/LyricsAudioSection";
+import { MobileSyncSection } from "@/components/settings/MobileSyncSection";
 import { SourcesSettingsSection } from "@/components/settings/SourcesSettingsSection";
 import { SpotifySettingsSection } from "@/components/settings/SpotifySettingsSection";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +25,13 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
-type SettingsSection = "sources" | "spotify" | "downloads" | "lyrics" | "ffmpeg";
+type SettingsSection =
+  | "sources"
+  | "spotify"
+  | "downloads"
+  | "lyrics"
+  | "ffmpeg"
+  | "mobile";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string; icon: LucideIcon }> =
   [
@@ -32,6 +40,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; icon: LucideIcon }> 
     { id: "downloads", label: "Downloads & Formats", icon: FolderCog },
     { id: "lyrics", label: "Lyrics & Loudness", icon: Subtitles },
     { id: "ffmpeg", label: "FFmpeg & Maintenance", icon: Wrench },
+    { id: "mobile", label: "Android & Mobile Sync", icon: Smartphone },
   ];
 
 function isValidSection(raw: string | null): raw is SettingsSection {
@@ -190,6 +199,13 @@ export function SettingsPage() {
             />
           )}
           {activeSection === "ffmpeg" && <FfmpegMaintenanceSection />}
+          {activeSection === "mobile" && (
+            <MobileSyncSection
+              settings={data}
+              onPatch={handlePatch}
+              patching={patching}
+            />
+          )}
         </>
       )}
     </div>

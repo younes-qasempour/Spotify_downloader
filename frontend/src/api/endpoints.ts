@@ -17,6 +17,7 @@ import type {
   LibraryPlaylistsResponse,
   LibraryStats,
   LibraryTracksResponse,
+  MobileSyncInfo,
   MusilonLoginResponse,
   MusilonPrompt,
   MusilonTestResponse,
@@ -735,5 +736,12 @@ export const api = {
           method: "POST",
         }
       ),
+  },
+  sync: {
+    info: () => apiFetch<MobileSyncInfo>("/api/sync/info"),
+    regenerateToken: () =>
+      apiFetch<MobileSyncInfo>("/api/sync/token/regenerate", {
+        method: "POST",
+      }),
   },
 };

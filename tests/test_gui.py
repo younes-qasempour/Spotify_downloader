@@ -39,7 +39,13 @@ class TestGUI(unittest.TestCase):
         self.window = MainWindow()
 
     def tearDown(self):
+        if getattr(self.window, "tray_icon", None) is not None:
+            self.window.tray_icon.hide()
+            self.window.tray_icon.deleteLater()
         self.window.close()
+        self.window.deleteLater()
+        QApplication.instance().processEvents()
+        QApplication.instance().processEvents()
         for p in reversed(self.patchers):
             p.stop()
 
