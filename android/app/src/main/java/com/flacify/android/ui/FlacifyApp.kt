@@ -27,12 +27,15 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -42,9 +45,12 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.flacify.android.FlacifyApplication
+import com.flacify.android.data.db.TrackEntity
 import com.flacify.android.ui.library.LibraryScreen
 import com.flacify.android.ui.library.LibraryViewModel
 import com.flacify.android.ui.navigation.FlacifyDestination
+import com.flacify.android.ui.player.MiniPlayerBar
+import com.flacify.android.ui.player.NowPlayingSheet
 import com.flacify.android.ui.playlists.PlaylistDetailScreen
 import com.flacify.android.ui.playlists.PlaylistDetailViewModel
 import com.flacify.android.ui.playlists.PlaylistsScreen
@@ -84,6 +90,10 @@ fun FlacifyApp(
     val playlistsViewModel: PlaylistsViewModel = viewModel(factory = PlaylistsViewModel.Factory(app))
     val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory(app))
 
+    val syncState by syncViewModel.uiState.collectAsStateWithLifecycle()
+    val playerState by app.playerController.uiState.collectAsStateWithLifecycle()
+    var showNowPlaying by remember { mutableStateOf(false) }
+
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -102,15 +112,21 @@ fun FlacifyApp(
         }
     }
 
-    fun showTrackMessage(title: String, isOffline: Boolean) {
-        coroutineScope.launch {
-            snackbarHostState.currentSnackbarData?.dismiss()
-            val msg = if (isOffline) {
-                "Offline FLAC ready — Media3 playback arrives in Step 2.5: $title"
-            } else {
-                "'$title' is PC-only — enable its playlist in Sync to download offline FLAC."
+    fun handleTrackSelected(
+        queue: List<TrackEntity>,
+        startIndex: Int,
+        title: String,
+        isOffline: Boolean,
+    ) {
+        if (isOffline && queue.isNotEmpty()) {
+            app.playerController.playQueue(queue, startIndex)
+        } else {
+            coroutineScope.launch {
+                snackbarHostState.currentSnackbarData?.dismiss()
+                snackbarHostState.showSnackbar(
+                    "'$title' is PC-only — enable its playlist in Sync to download offline FLAC."
+                )
             }
-            snackbarHostState.showSnackbar(msg)
         }
     }
 
@@ -120,6 +136,22 @@ fun FlacifyApp(
             syncViewModel.applyPairingUri(incomingPairingUri, autoConnect = true)
             onPairingUriConsumed()
         }
+    }
+
+    if (showNowPlaying && playerState.hasTrack) {
+        NowPlayingSheet(
+            playerState = playerState,
+            activeBaseUrl = syncState.connectionConfig.activeUrl,
+            onDismiss = { showNowPlaying = false },
+            onTogglePlayPause = { app.playerController.togglePlayPause() },
+            onPrevious = { app.playerController.skipPrevious() },
+            onNext = { app.playerController.skipNext() },
+            onSeek = { pos -> app.playerController.seekTo(pos) },
+            onToggleShuffle = { app.playerController.toggleShuffle() },
+            onCycleRepeat = { app.playerController.cycleRepeatMode() },
+            onSkipToQueueIndex = { idx -> app.playerController.skipToQueueIndex(idx) },
+            onRemoveFromQueue = { idx -> app.playerController.removeFromQueue(idx) },
+        )
     }
 
     Scaffold(
@@ -168,6 +200,16 @@ fun FlacifyApp(
         },
         bottomBar = {
             Column {
+                if (playerState.hasTrack) {
+                    MiniPlayerBar(
+                        playerState = playerState,
+                        activeBaseUrl = syncState.connectionConfig.activeUrl,
+                        onExpand = { showNowPlaying = true },
+                        onTogglePlayPause = { app.playerController.togglePlayPause() },
+                        onPrevious = { app.playerController.skipPrevious() },
+                        onNext = { app.playerController.skipNext() },
+                    )
+                }
                 HorizontalDivider(color = FlacifyBorder, thickness = 1.dp)
                 NavigationBar(
                     containerColor = FlacifyCardSurface,
@@ -233,16 +275,16 @@ fun FlacifyApp(
                 PlaylistDetailScreen(
                     viewModel = detailViewModel,
                     onBack = { navController.popBackStack() },
-                    onTrackSelected = { _, _, title, isOffline ->
-                        showTrackMessage(title, isOffline)
+                    onTrackSelected = { queue, idx, title, isOffline ->
+                        handleTrackSelected(queue, idx, title, isOffline)
                     },
                 )
             }
             composable(FlacifyDestination.LIBRARY.route) {
                 LibraryScreen(
                     viewModel = libraryViewModel,
-                    onTrackSelected = { _, _, title, isOffline ->
-                        showTrackMessage(title, isOffline)
+                    onTrackSelected = { queue, idx, title, isOffline ->
+                        handleTrackSelected(queue, idx, title, isOffline)
                     },
                     onOpenSyncTab = { navigateToTab(FlacifyDestination.SYNC) },
                 )

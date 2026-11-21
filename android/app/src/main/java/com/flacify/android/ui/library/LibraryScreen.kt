@@ -16,11 +16,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -238,7 +238,7 @@ fun LibraryScreen(
                     label = { Text("Sort: ${state.sortOption.label}") },
                     leadingIcon = {
                         Icon(
-                            imageVector = Icons.Rounded.Sort,
+                            imageVector = Icons.AutoMirrored.Rounded.Sort,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
                         )
