@@ -73,3 +73,12 @@ frontend/.vite/
 # Desktop (Tauri v2)
 desktop/node_modules/
 desktop/src-tauri/target/
+
+# Android (Kotlin / Jetpack Compose / Gradle)
+android/local.properties
+android/.gradle/
+android/**/build/
+android/.idea/
+android/*.iml
+android/app/release/
+android/captures/

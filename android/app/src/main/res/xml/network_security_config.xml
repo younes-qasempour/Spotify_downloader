@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Allow cleartext HTTP traffic for local LAN Wi-Fi, Tailscale, and Android Emulator (10.0.2.2) sync with the desktop Flacify backend. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
