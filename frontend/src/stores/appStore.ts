@@ -79,7 +79,7 @@ export const useAppStore = create<AppState>((set) => ({
   ambientColor: DEFAULT_AMBIENT_RGB,
 
   wsStatus: "connecting",
-  backendVersion: "2.0.1",
+  backendVersion: "2.1.0",
   queuePaused: false,
   pendingPrompts: [],
   liveProgress: {},

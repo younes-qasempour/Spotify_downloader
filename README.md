@@ -2,8 +2,8 @@
 
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
-  <strong>Flacify v2.0.1 — Tauri v2 Desktop App, Resizable Studio Mini Player, Web PWA & 10-Band EQ</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v2.0.1-brightgreen?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v2.0.1"></a>
+  <strong>Flacify v2.1.0 — Tauri v2 Desktop App, Resizable Studio Mini Player, Wi-Fi Mobile Sync, Android Companion & 10-Band EQ</strong><br><br>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v2.1.0-brightgreen?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v2.1.0"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/Desktop-Tauri%20v2%20%2B%20React%2019-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri v2 + React 19">
   <img src="https://img.shields.io/badge/API-FastAPI%20%2B%20WebSocket-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
@@ -13,11 +13,12 @@
 
 ---
 
-## ✨ Flacify v2.0.1 Architecture & Quick Start
+## ✨ Flacify v2.1.0 Architecture & Quick Start
 
 Flacify v2.0 pairs the proven **pure-Python `core/` engine** with a thin **FastAPI + WebSocket backend (`backend/`)**, a modern **React 19 + TypeScript + Tailwind CSS v4 frontend (`frontend/`)**, and a **Tauri v2 Windows desktop shell (`desktop/`)**:
 
-- **Windows Desktop App (`desktop/`):** Run `Flacify_Setup_v2.0.1.exe` or launch dev mode via `cd desktop && npm run dev` (frameless Windows 11 window, native folder/file dialogs, system tray, automatic backend sidecar lifecycle).
+- **Windows Desktop App (`desktop/`):** Run `Flacify_Setup_v2.1.0.exe` or launch dev mode via `cd desktop && npm run dev` (frameless Windows 11 window, native folder/file dialogs, system tray, automatic backend sidecar lifecycle).
+- **Wi-Fi/LAN Mobile Sync & Native Android Companion App (`android/`):** Pair via QR code or mDNS (`_flacify._tcp.local.`), run resumable lossless FLAC offline playlist sync (`Flacify_Android_v2.1.0.apk`), play offline tracks with Media3 and synced lyrics, and share Spotify links directly to your PC queue.
 - **Resizable Studio Mini Player (`Alt+M`):** Detachable floating PiP / native always-on-top window with 8-direction free resizing across 3 adaptive layouts (**Micro Strip**, **Art Card**, **Studio Deck**), live 60fps FFT spectrum visualizer, synced karaoke lyrics + translation, Up Next queue switching, and Quick EQ.
 - **Production Web Mode & PWA (`python -m backend`):** Serve the full UI locally or over your LAN/phone at any browser:
   ```powershell

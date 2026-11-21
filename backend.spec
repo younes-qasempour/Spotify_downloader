@@ -55,6 +55,7 @@ hiddenimports = [
     "qrcode",
     "qrcode.image.svg",
     "zeroconf",
+    "ifaddr",
 ]
 
 for pkg in (
@@ -67,6 +68,7 @@ for pkg in (
     "websockets",
     "qrcode",
     "zeroconf",
+    "ifaddr",
 ):
     try:
         hiddenimports += collect_submodules(pkg)
