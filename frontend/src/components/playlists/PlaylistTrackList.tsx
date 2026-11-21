@@ -177,18 +177,28 @@ export function PlaylistTrackList({
                     </span>
 
                     {/* Artwork */}
-                    <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-elevated border border-white/[0.07]">
-                      {coverSrc ? (
+                    <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-elevated border border-white/[0.07] flex items-center justify-center text-zinc-500">
+                      <Disc3 className="h-4 w-4" />
+                      {coverSrc && (
                         <img
                           src={coverSrc}
                           alt={tr.title}
                           loading="lazy"
-                          className="h-full w-full object-cover"
+                          className="absolute inset-0 h-full w-full object-cover"
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (
+                              tr.cover_url &&
+                              !img.dataset.fallbackTried &&
+                              img.src !== tr.cover_url
+                            ) {
+                              img.dataset.fallbackTried = "1";
+                              img.src = tr.cover_url;
+                            } else {
+                              img.style.display = "none";
+                            }
+                          }}
                         />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-zinc-500">
-                          <Disc3 className="h-4 w-4" />
-                        </div>
                       )}
                       {isDownloaded && (
                         <button

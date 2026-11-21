@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertCircle,
   Disc3,
@@ -60,6 +60,12 @@ export function PlayerDock() {
       : apiUrl(currentTrack.coverUrl)
     : "";
 
+  const [coverFailed, setCoverFailed] = useState(false);
+
+  useEffect(() => {
+    setCoverFailed(false);
+  }, [coverSrc]);
+
   useEffect(() => {
     let cancelled = false;
     if (!coverSrc) {
@@ -89,10 +95,11 @@ export function PlayerDock() {
         <div className="flex items-center justify-between gap-2.5 min-w-0">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
             <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-elevated border border-white/[0.08]">
-              {coverSrc ? (
+              {coverSrc && !coverFailed ? (
                 <img
                   src={coverSrc}
                   alt={currentTrack?.title || "Album Art"}
+                  onError={() => setCoverFailed(true)}
                   className="h-full w-full object-cover"
                 />
               ) : (
@@ -234,10 +241,11 @@ export function PlayerDock() {
       {/* Left: Now Playing Metadata */}
       <div className="flex items-center gap-3 min-w-0 w-[34%] max-w-[320px]">
         <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-elevated border border-white/[0.08] shadow-lg">
-          {coverSrc ? (
+          {coverSrc && !coverFailed ? (
             <img
               src={coverSrc}
               alt={currentTrack?.title || "Album Art"}
+              onError={() => setCoverFailed(true)}
               className="h-full w-full object-cover"
             />
           ) : (

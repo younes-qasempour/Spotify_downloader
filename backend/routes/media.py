@@ -8,9 +8,10 @@ import re
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 
 from backend.state import BackendState
+from backend.track_lookup import resolve_track_row_and_file
 from core.archive import resolve_collection_cover
 from core.utils import extract_embedded_cover
 
@@ -37,21 +38,8 @@ def _get_backend(request: Request) -> BackendState:
 def _resolve_track_file(
     backend: BackendState, track_id: str
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-    row = backend.archive_manager.find_track(spotify_id=track_id)
-    if row and row.get("file_path") and os.path.isfile(row["file_path"]):
-        return row["file_path"], row
-
-    for it in backend.queue_manager.get_items():
-        if it.track.id == track_id and it.output_path and os.path.isfile(it.output_path):
-            return it.output_path, {
-                "spotify_id": it.track.id,
-                "title": it.track.title,
-                "artist": it.track.artist_str,
-                "album": it.track.album,
-                "collection_name": it.track.collection_name,
-                "file_path": it.output_path,
-            }
-    return None, row
+    file_path, row, _queue_track = resolve_track_row_and_file(backend, track_id)
+    return file_path, row
 
 
 def _audio_media_type(file_path: str) -> str:
@@ -193,36 +181,41 @@ async def stream_audio(request: Request, track_id: str):
 async def get_track_cover(request: Request, track_id: str):
     backend = _get_backend(request)
     file_path, row = _resolve_track_file(backend, track_id)
-    if not file_path or not os.path.isfile(file_path):
-        raise HTTPException(
-            status_code=404, detail=f"Cover art for track '{track_id}' not found."
-        )
 
-    art_bytes = extract_embedded_cover(file_path)
-    if art_bytes:
-        return Response(
-            content=art_bytes,
-            media_type=_detect_image_mime(art_bytes),
+    if file_path and os.path.isfile(file_path):
+        art_bytes = extract_embedded_cover(file_path)
+        if art_bytes:
+            return Response(
+                content=art_bytes,
+                media_type=_detect_image_mime(art_bytes),
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+        coll_name = (row.get("collection_name") if row else "") or os.path.dirname(file_path)
+        cached_cover = resolve_collection_cover(coll_name, file_path)
+        if cached_cover and os.path.isfile(cached_cover):
+            return FileResponse(
+                cached_cover,
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+        folder = os.path.dirname(file_path)
+        if folder and os.path.isdir(folder):
+            for cand in ("cover.jpg", "cover.png", "folder.jpg", "artwork.jpg"):
+                cand_path = os.path.join(folder, cand)
+                if os.path.isfile(cand_path):
+                    return FileResponse(
+                        cand_path,
+                        headers={"Cache-Control": "public, max-age=3600"},
+                    )
+
+    remote_url = ((row.get("cover_url") if row else "") or "").strip()
+    if remote_url.startswith(("http://", "https://")):
+        return RedirectResponse(
+            url=remote_url,
+            status_code=302,
             headers={"Cache-Control": "public, max-age=3600"},
         )
-
-    coll_name = (row.get("collection_name") if row else "") or os.path.dirname(file_path)
-    cached_cover = resolve_collection_cover(coll_name, file_path)
-    if cached_cover and os.path.isfile(cached_cover):
-        return FileResponse(
-            cached_cover,
-            headers={"Cache-Control": "public, max-age=3600"},
-        )
-
-    folder = os.path.dirname(file_path)
-    if folder and os.path.isdir(folder):
-        for cand in ("cover.jpg", "cover.png", "folder.jpg", "artwork.jpg"):
-            cand_path = os.path.join(folder, cand)
-            if os.path.isfile(cand_path):
-                return FileResponse(
-                    cand_path,
-                    headers={"Cache-Control": "public, max-age=3600"},
-                )
 
     raise HTTPException(
         status_code=404, detail=f"Cover art for track '{track_id}' not found."

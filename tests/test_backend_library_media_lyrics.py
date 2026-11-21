@@ -438,6 +438,75 @@ class TestBackendLibraryMediaLyrics(unittest.TestCase):
             self.assertTrue(fdata["lrc_saved"])
             self.mock_tagger.tag_file.assert_called_once()
 
+    def test_deduplicated_saved_playlist_track_resolves_audio_cover_and_lyrics(self):
+        fp = self._create_dummy_audio("Dream On.flac", data=self._valid_flac_bytes())
+        lrc_fp = os.path.splitext(fp)[0] + ".lrc"
+        with open(lrc_fp, "w", encoding="utf-8") as fh:
+            fh.write("[00:10.00] Dream on\n")
+
+        master = TrackMetadata(
+            id="master_id_1",
+            title="Dream On",
+            artists=["Aerosmith"],
+            album="Aerosmith",
+            isrc="USSM10011897",
+            cover_url="https://i.scdn.co/image/master_cover",
+        )
+        self.archive.add_track(master, fp, "16-BIT FLAC", "Musilon")
+
+        alt_track = TrackMetadata(
+            id="alt_playlist_id_1",
+            title="Dream On",
+            artists=["Aerosmith"],
+            album="Aerosmith",
+            isrc="USSM10011897",
+            cover_url="https://i.scdn.co/image/alt_cover",
+        )
+        self.archive.save_playlist(
+            "Rock",
+            "https://open.spotify.com/playlist/plrock",
+            "",
+            [alt_track],
+            playlist_id="plrock",
+        )
+        self.archive.mark_saved_track_downloaded(
+            "alt_playlist_id_1",
+            fp,
+            quality_badge="16-BIT FLAC",
+            source_type="Musilon",
+        )
+
+        with TestClient(self.app) as client:
+            audio_head = client.head("/api/media/audio/alt_playlist_id_1")
+            self.assertEqual(audio_head.status_code, 200)
+
+            audio_get = client.get("/api/media/audio/alt_playlist_id_1")
+            self.assertEqual(audio_get.status_code, 200)
+            self.assertTrue(audio_get.content.startswith(b"fLaC"))
+
+            with patch(
+                "backend.routes.media.extract_embedded_cover",
+                return_value=b"\x89PNG\r\n\x1a\nfake_png",
+            ):
+                cov_emb = client.get("/api/media/cover/track/alt_playlist_id_1")
+                self.assertEqual(cov_emb.status_code, 200)
+                self.assertEqual(cov_emb.headers["content-type"], "image/png")
+
+            with patch("backend.routes.media.extract_embedded_cover", return_value=None), patch(
+                "backend.routes.media.resolve_collection_cover", return_value=""
+            ):
+                cov_redir = client.get(
+                    "/api/media/cover/track/alt_playlist_id_1",
+                    follow_redirects=False,
+                )
+                self.assertEqual(cov_redir.status_code, 302)
+                self.assertEqual(cov_redir.headers["location"], "https://i.scdn.co/image/alt_cover")
+
+            lyr_resp = client.get("/api/lyrics/alt_playlist_id_1")
+            self.assertEqual(lyr_resp.status_code, 200)
+            self.assertTrue(lyr_resp.json()["has_lyrics"])
+            self.assertEqual(lyr_resp.json()["lines"][0]["text"], "Dream on")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -274,6 +274,12 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
       : apiUrl(currentTrack.coverUrl)
     : "";
 
+  const [coverFailed, setCoverFailed] = useState(false);
+
+  useEffect(() => {
+    setCoverFailed(false);
+  }, [coverSrc]);
+
   const effectiveDuration = durationSec || currentTrack?.durationSec || 0;
   const progressPct =
     effectiveDuration > 0
@@ -310,7 +316,7 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
       )}
     >
       {/* Dynamic Ambient Artwork Backdrop */}
-      {coverSrc && (
+      {coverSrc && !coverFailed && (
         <div
           className="pointer-events-none absolute inset-0 opacity-25 blur-3xl scale-125 transition-opacity duration-500"
           style={{
@@ -500,10 +506,11 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
             <div className="flex items-center justify-between gap-2.5 min-w-0 flex-1">
               <div className="flex items-center gap-2.5 min-w-0 flex-1">
                 <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-elevated border border-white/10 shadow-md">
-                  {coverSrc ? (
+                  {coverSrc && !coverFailed ? (
                     <img
                       src={coverSrc}
                       alt={currentTrack?.title || "Cover"}
+                      onError={() => setCoverFailed(true)}
                       className="h-full w-full object-cover"
                     />
                   ) : (
@@ -625,10 +632,11 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
                     tier === "card" ? "h-36 w-36" : "h-20 w-20"
                   )}
                 >
-                  {coverSrc ? (
+                  {coverSrc && !coverFailed ? (
                     <img
                       src={coverSrc}
                       alt={currentTrack?.title || "Album Art"}
+                      onError={() => setCoverFailed(true)}
                       className="h-full w-full object-cover"
                     />
                   ) : (

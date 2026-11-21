@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from backend.state import BackendState
+from backend.track_lookup import resolve_track_row_and_file
 from core.spotify_client import TrackMetadata
 from core.utils import extract_embedded_lyrics
 
@@ -43,17 +44,7 @@ def _get_backend(request: Request) -> BackendState:
 def _resolve_track_and_file(
     backend: BackendState, track_id: str
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]], Optional[TrackMetadata]]:
-    row = backend.archive_manager.find_track(spotify_id=track_id)
-    if row:
-        fp = row.get("file_path") or ""
-        return (fp if fp and os.path.isfile(fp) else None), row, None
-
-    for it in backend.queue_manager.get_items():
-        if it.track.id == track_id:
-            fp = it.output_path or ""
-            return (fp if fp and os.path.isfile(fp) else None), None, it.track
-
-    return None, None, None
+    return resolve_track_row_and_file(backend, track_id)
 
 
 def _load_local_lyrics(file_path: str) -> Tuple[str, str]:

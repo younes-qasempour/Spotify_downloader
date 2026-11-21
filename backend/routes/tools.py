@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.state import BackendState
+from backend.track_lookup import resolve_track_row_and_file
 from core import paths as core_paths
 from core import utils as core_utils
 from core.exporter import ExportConfig, PlaylistExporter
@@ -138,11 +139,10 @@ def _spectrogram_cache_dir() -> str:
 
 
 def _find_track_row(backend: BackendState, track_id: str) -> Optional[Dict[str, Any]]:
-    archive = backend.archive_manager
-    row = archive.find_track(spotify_id=track_id)
+    _fp, row, _qt = resolve_track_row_and_file(backend, track_id)
     if row:
         return row
-    for candidate in archive.get_all_tracks():
+    for candidate in backend.archive_manager.get_all_tracks():
         if candidate.get("spotify_id") == track_id:
             return candidate
     return None
@@ -151,12 +151,11 @@ def _find_track_row(backend: BackendState, track_id: str) -> Optional[Dict[str, 
 def _resolve_track_row_and_path(
     backend: BackendState, track_id: str
 ) -> Tuple[Dict[str, Any], str]:
-    row = _find_track_row(backend, track_id)
+    file_path, row, _qt = resolve_track_row_and_file(backend, track_id)
     if not row:
         raise HTTPException(
             status_code=404, detail=f"Track '{track_id}' not found in library."
         )
-    file_path = row.get("file_path") or ""
     if not file_path or not os.path.isfile(file_path):
         raise HTTPException(
             status_code=404,
