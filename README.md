@@ -1,15 +1,32 @@
-# Flacify — High-Fidelity Audio Scraper & Desktop Suite
+# Flacify — High-Fidelity Audio Studio
 
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
-  <strong>Next-Generation High-Fidelity Spotify Audio Downloader & Library Manager for Windows 11</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v1.9.5-blue?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v1.9.5"></a>
+  <strong>Flacify v2.0 — Tauri v2 Desktop App, Web PWA, 10-Band EQ & Lossless Spotify Studio</strong><br><br>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v2.0.0-brightgreen?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v2.0.0"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/GUI-PyQt6%20Fluent%20Design-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Fluent">
+  <img src="https://img.shields.io/badge/Desktop-Tauri%20v2%20%2B%20React%2019-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri v2 + React 19">
+  <img src="https://img.shields.io/badge/API-FastAPI%20%2B%20WebSocket-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/Audio-24bit%20Hi--Res%20%7C%2016bit%20FLAC-00C853?style=for-the-badge&logo=flac&logoColor=white" alt="Lossless FLAC">
-  <img src="https://img.shields.io/badge/Safety%20Net-YouTube%20Music%20Opus-FF0000?style=for-the-badge&logo=youtubemusic&logoColor=white" alt="YouTube Music">
   <img src="https://img.shields.io/badge/License-MIT-purple?style=for-the-badge" alt="License">
 </p>
+
+---
+
+## ✨ Flacify v2.0 Architecture & Quick Start
+
+Flacify v2.0 pairs the proven **pure-Python `core/` engine** with a thin **FastAPI + WebSocket backend (`backend/`)**, a modern **React 19 + TypeScript + Tailwind CSS v4 frontend (`frontend/`)**, and a **Tauri v2 Windows desktop shell (`desktop/`)**:
+
+- **Windows Desktop App (`desktop/`):** Run `Flacify_Setup_v2.0.0.exe` or launch dev mode via `cd desktop && npm run dev` (frameless Windows 11 window, native folder/file dialogs, system tray, automatic backend sidecar lifecycle).
+- **Production Web Mode & PWA (`python -m backend`):** Serve the full UI locally or over your LAN/phone at any browser:
+  ```powershell
+  python -m backend --host 0.0.0.0 --port 8765 --open
+  ```
+- **Build v2.0 Desktop Bundle + Installer:**
+  ```powershell
+  python build_v2.py
+  ```
+- **Legacy v1.x PyQt6 GUI & Headless CLI:** Preserved in `main.py` (`python main.py` / `python main.py --headless "<spotify_url>"`).
 
 ---
 

@@ -87,6 +87,10 @@ impl BackendManager {
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
                 let sidecar_candidates = [
+                    exe_dir
+                        .join("binaries")
+                        .join("flacify-backend")
+                        .join("flacify-backend.exe"),
                     exe_dir.join("flacify-backend.exe"),
                     exe_dir.join("binaries").join("flacify-backend.exe"),
                 ];
