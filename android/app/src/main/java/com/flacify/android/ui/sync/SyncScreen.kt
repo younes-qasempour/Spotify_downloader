@@ -72,6 +72,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.flacify.android.ui.library.FormatUtils
 import com.flacify.android.ui.theme.FlacifyAmberAccent
 import com.flacify.android.ui.theme.FlacifyBorder
 import com.flacify.android.ui.theme.FlacifyCardSurface
@@ -82,7 +83,6 @@ import com.flacify.android.ui.theme.FlacifyEmeraldBright
 import com.flacify.android.ui.theme.FlacifySkyAccent
 import com.flacify.android.ui.theme.FlacifyTextMuted
 import com.flacify.android.ui.theme.FlacifyTextPrimary
-import java.util.Locale
 
 @Composable
 fun SyncScreen(
@@ -262,7 +262,7 @@ fun SyncScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            text = "${state.syncedTrackCount} offline tracks · ${formatBytes(storage.audioBytes + storage.coverBytes)} used · ${formatBytes(storage.availableBytes)} free",
+                            text = "${state.syncedTrackCount} offline tracks · ${FormatUtils.formatBytes(storage.audioBytes + storage.coverBytes)} used · ${FormatUtils.formatBytes(storage.availableBytes)} free",
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                             color = FlacifyEmeraldBright,
@@ -399,7 +399,7 @@ fun SyncScreen(
                                             overflow = TextOverflow.Ellipsis,
                                         )
                                         Text(
-                                            text = "${summary.syncedOnPhoneCount}/${pl.pcDownloadedTracks} tracks offline · ${formatBytes(summary.totalNeededBytes)}",
+                                            text = "${summary.syncedOnPhoneCount}/${pl.pcDownloadedTracks} tracks offline · ${FormatUtils.formatBytes(summary.totalNeededBytes)}",
                                             style = MaterialTheme.typography.bodySmall,
                                             fontFamily = FontFamily.Monospace,
                                             color = if (summary.syncedOnPhoneCount >= pl.pcDownloadedTracks && pl.pcDownloadedTracks > 0) {
@@ -839,16 +839,6 @@ fun SyncScreen(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-    }
-}
-
-private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0L) return "0 MB"
-    val gb = 1024.0 * 1024.0 * 1024.0
-    val mb = 1024.0 * 1024.0
-    return when {
-        bytes >= gb -> String.format(Locale.US, "%.2f GB", bytes / gb)
-        else -> String.format(Locale.US, "%.1f MB", bytes / mb)
     }
 }
 

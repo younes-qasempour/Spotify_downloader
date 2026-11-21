@@ -12,6 +12,9 @@ interface FlacifyDao {
     @Query("SELECT * FROM playlists ORDER BY name COLLATE NOCASE ASC")
     fun observeAllPlaylists(): Flow<List<PlaylistEntity>>
 
+    @Query("SELECT * FROM playlists WHERE id = :playlistId LIMIT 1")
+    fun observePlaylist(playlistId: String): Flow<PlaylistEntity?>
+
     @Query("SELECT * FROM tracks ORDER BY artist COLLATE NOCASE ASC, title COLLATE NOCASE ASC")
     fun observeAllTracks(): Flow<List<TrackEntity>>
 

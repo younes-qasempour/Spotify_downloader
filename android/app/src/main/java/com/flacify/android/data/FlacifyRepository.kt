@@ -18,8 +18,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+
+data class PlaylistTrackItem(
+    val entry: PlaylistTrackEntity,
+    val track: TrackEntity?,
+) {
+    val isOfflineReady: Boolean
+        get() = track != null &&
+            track.syncStatus == TrackSyncStatus.SYNCED &&
+            !track.localFilePath.isNullOrBlank()
+}
 
 class FlacifyRepository(
     val database: FlacifyDatabase,
@@ -28,6 +37,23 @@ class FlacifyRepository(
     val apiClient: FlacifyApiClient,
 ) {
     private val dao = database.dao()
+
+    fun observePlaylist(playlistId: String): Flow<PlaylistEntity?> =
+        dao.observePlaylist(playlistId)
+
+    fun observePlaylistTrackItems(playlistId: String): Flow<List<PlaylistTrackItem>> =
+        combine(
+            dao.observePlaylistTracks(playlistId),
+            dao.observeAllTracks(),
+        ) { entries, tracks ->
+            val tracksById = tracks.associateBy { it.id }
+            entries.map { entry ->
+                PlaylistTrackItem(
+                    entry = entry,
+                    track = tracksById[entry.canonicalTrackId],
+                )
+            }
+        }
 
     fun observePlaylistSummaries(): Flow<List<PlaylistSyncSummary>> =
         combine(
