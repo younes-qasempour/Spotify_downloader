@@ -3,13 +3,22 @@ LAN IP detection, pairing token management, and mDNS service announcement (`_fla
 """
 
 import logging
+import re
 import secrets
 import socket
+import threading
 from typing import Any, List, Optional
 
 logger = logging.getLogger("backend.mdns")
 
 _SERVICE_TYPE = "_flacify._tcp.local."
+_LOOPBACK_HOSTS = frozenset(
+    {"127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost", "testclient"}
+)
+
+
+def is_loopback_host(host: Optional[str]) -> bool:
+    return (host or "").strip().lower() in _LOOPBACK_HOSTS
 
 
 def detect_reachable_lan_ips() -> List[str]:
@@ -78,59 +87,67 @@ class FlacifyMdnsBroadcaster:
     """Broadcasts `_flacify._tcp.local.` over LAN mDNS/Zeroconf so Android finds the PC automatically."""
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self._zeroconf: Optional[Any] = None
         self._info: Optional[Any] = None
 
+    @staticmethod
+    def _build_dns_host_label(device_name: str) -> str:
+        raw = re.sub(r"[^a-z0-9-]+", "-", (device_name or "").lower()).strip("-")
+        return raw[:40].strip("-") or "flacify"
+
     def start(self, port: int, device_name: str, version: str) -> bool:
         """Registers the Flacify service over Zeroconf; non-fatal if unavailable."""
-        self.stop()
-        try:
-            from zeroconf import ServiceInfo, Zeroconf
-
-            ips = detect_reachable_lan_ips()
-            if not ips:
-                return False
-
-            packed_addrs = [socket.inet_aton(ip) for ip in ips]
-            safe_instance = "".join(
-                ch if (ch.isalnum() or ch in (" ", "-", "_")) else "-"
-                for ch in (device_name or "Flacify PC")
-            ).strip() or "Flacify PC"
-            service_name = f"Flacify ({safe_instance[:40]}).{_SERVICE_TYPE}"
-            host_label = (safe_instance.replace(" ", "-")[:40] or "flacify").lower()
-
-            info = ServiceInfo(
-                type_=_SERVICE_TYPE,
-                name=service_name,
-                addresses=packed_addrs,
-                port=int(port),
-                properties={
-                    b"version": str(version).encode("utf-8"),
-                    b"api": b"2.1",
-                    b"name": str(device_name or "Flacify PC").encode("utf-8"),
-                    b"pair": b"1",
-                },
-                server=f"{host_label}.local.",
-            )
-            zc = Zeroconf()
-            zc.register_service(info, allow_name_change=True)
-            self._zeroconf = zc
-            self._info = info
-            logger.info(
-                f"mDNS advertising {service_name} on {ips[0]}:{port}"
-            )
-            return True
-        except Exception as exc:
-            logger.debug(f"mDNS broadcaster disabled/unavailable: {exc}")
+        with self._lock:
             self.stop()
-            return False
+            try:
+                from zeroconf import ServiceInfo, Zeroconf
+
+                ips = detect_reachable_lan_ips()
+                if not ips:
+                    return False
+
+                packed_addrs = [socket.inet_aton(ip) for ip in ips]
+                safe_instance = "".join(
+                    ch if (ch.isalnum() or ch in (" ", "-", "_")) else "-"
+                    for ch in (device_name or "Flacify PC")
+                ).strip() or "Flacify PC"
+                service_name = f"Flacify ({safe_instance[:40]}).{_SERVICE_TYPE}"
+                host_label = self._build_dns_host_label(device_name)
+
+                info = ServiceInfo(
+                    type_=_SERVICE_TYPE,
+                    name=service_name,
+                    addresses=packed_addrs,
+                    port=int(port),
+                    properties={
+                        b"version": str(version).encode("utf-8"),
+                        b"api": b"2.1",
+                        b"name": str(device_name or "Flacify PC").encode("utf-8"),
+                        b"pair": b"1",
+                    },
+                    server=f"{host_label}.local.",
+                )
+                zc = Zeroconf()
+                zc.register_service(info, allow_name_change=True)
+                self._zeroconf = zc
+                self._info = info
+                logger.info(
+                    f"mDNS advertising {service_name} on {ips[0]}:{port}"
+                )
+                return True
+            except Exception as exc:
+                logger.debug(f"mDNS broadcaster disabled/unavailable: {exc}")
+                self.stop()
+                return False
 
     def stop(self) -> None:
         """Unregisters and shuts down Zeroconf cleanly."""
-        zc = self._zeroconf
-        info = self._info
-        self._zeroconf = None
-        self._info = None
+        with self._lock:
+            zc = self._zeroconf
+            info = self._info
+            self._zeroconf = None
+            self._info = None
         if zc is None:
             return
         try:

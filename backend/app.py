@@ -66,6 +66,7 @@ def create_app(
     state: Optional[BackendState] = None,
     *,
     run_startup_scan: bool = True,
+    run_mdns: Optional[bool] = None,
     run_auto_sync_scheduler: bool = True,
     frontend_dist_dir: Optional[str] = None,
 ) -> FastAPI:
@@ -76,6 +77,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         backend = state or BackendState(
             run_startup_scan=run_startup_scan,
+            run_mdns=run_mdns,
             run_auto_sync_scheduler=run_auto_sync_scheduler,
         )
         app.state.backend = backend

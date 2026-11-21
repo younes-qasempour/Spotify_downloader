@@ -122,7 +122,7 @@ impl BackendManager {
             let mut cmd = Command::new(bin);
             cmd.current_dir(&repo_root)
                 .args(*base_args)
-                .args(["--host", "127.0.0.1", "--port", &port_str])
+                .args(["--port", &port_str])
                 .env("PYTHONUTF8", "1")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())

@@ -65,6 +65,7 @@ for pkg in (
     "telethon",
     "uvicorn",
     "websockets",
+    "qrcode",
     "zeroconf",
 ):
     try:

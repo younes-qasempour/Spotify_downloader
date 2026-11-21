@@ -203,7 +203,25 @@ class TestBackendSyncAndMobile(unittest.TestCase):
                 msg = ws.receive_json()
                 self.assertEqual(msg["type"], "connected")
 
-            # Disabling LAN blocks remote callers with 403
+            # Remote clients cannot mutate mobile.pair_token or mobile.lan_enabled via /api/settings
+            self.assertEqual(
+                lan_client.patch(
+                    "/api/settings",
+                    json={"values": {"mobile.pair_token": "attacker_token"}},
+                    headers={"Authorization": "Bearer test_pair_token_xyz_123"},
+                ).status_code,
+                403,
+            )
+            self.assertEqual(
+                lan_client.patch(
+                    "/api/settings",
+                    json={"values": {"mobile.lan_enabled": False}},
+                    headers={"Authorization": "Bearer test_pair_token_xyz_123"},
+                ).status_code,
+                403,
+            )
+
+            # Disabling LAN blocks remote HTTP & WebSocket callers with 403/4403
             self.fake_config.set("mobile.lan_enabled", False)
             self.assertEqual(
                 lan_client.get(
@@ -212,10 +230,25 @@ class TestBackendSyncAndMobile(unittest.TestCase):
                 ).status_code,
                 403,
             )
+            with self.assertRaises(WebSocketDisconnect):
+                with lan_client.websocket_connect(
+                    "/ws/events?token=test_pair_token_xyz_123"
+                ):
+                    pass
 
-        # Token rotation invalidates old token immediately
+        # Token rotation invalidates old token immediately; PATCH mobile.pair_token blocked locally too
         self.fake_config.set("mobile.lan_enabled", True)
         with TestClient(self.app) as local_client:
+            from backend.routes.sync import is_loopback_host
+
+            self.assertTrue(is_loopback_host("::ffff:127.0.0.1"))
+            self.assertEqual(
+                local_client.patch(
+                    "/api/settings",
+                    json={"values": {"mobile.pair_token": "manual_override"}},
+                ).status_code,
+                403,
+            )
             rot = local_client.post("/api/sync/token/regenerate")
             self.assertEqual(rot.status_code, 200)
             new_tok = rot.json()["pair_token"]
@@ -304,6 +337,17 @@ class TestBackendSyncAndMobile(unittest.TestCase):
             self.assertTrue(pl_entry["tracks"][0]["downloaded"])
             self.assertFalse(pl_entry["tracks"][1]["downloaded"])
 
+            # Manifest with include_tracks=false keeps exact total_unique_tracks and total_bytes
+            m_meta_only = client.get(
+                "/api/sync/manifest",
+                params={"include_tracks": "false"},
+                headers=hdrs,
+            )
+            self.assertEqual(m_meta_only.status_code, 200)
+            self.assertEqual(m_meta_only.json()["total_unique_tracks"], 2)
+            self.assertEqual(m_meta_only.json()["tracks"], [])
+            self.assertGreater(m_meta_only.json()["total_bytes"], len(payload1))
+
             # Playlist-scoped manifest returns only tracks needed for that playlist
             m_pl = client.get(
                 "/api/sync/manifest",
@@ -313,6 +357,17 @@ class TestBackendSyncAndMobile(unittest.TestCase):
             self.assertEqual(m_pl.status_code, 200)
             self.assertEqual(m_pl.json()["total_unique_tracks"], 1)
             self.assertEqual(m_pl.json()["tracks"][0]["id"], "sp_alpha_master")
+            self.assertIn("remote_cover_url", m_pl.json()["playlists"][0])
+
+            m_pl_meta_only = client.get(
+                "/api/sync/manifest",
+                params={"playlist_id": "plroad", "include_tracks": "false"},
+                headers=hdrs,
+            )
+            self.assertEqual(m_pl_meta_only.status_code, 200)
+            self.assertEqual(m_pl_meta_only.json()["total_unique_tracks"], 1)
+            self.assertEqual(m_pl_meta_only.json()["total_bytes"], len(payload1))
+            self.assertEqual(m_pl_meta_only.json()["tracks"], [])
 
             # HEAD & full lossless download + byte-range resume work via both canonical & alias IDs
             head_resp = client.head("/api/sync/tracks/sp_alpha_alt/file", headers=hdrs)
@@ -372,6 +427,15 @@ class TestBackendSyncAndMobile(unittest.TestCase):
             self.assertEqual(sdata["entity_type"], "track")
             self.assertEqual(sdata["queued_count"], 1)
             self.assertIn("shared_sp_1", self.qm._items)
+
+    def test_mdns_dns_label_sanitization(self):
+        from backend.mdns import FlacifyMdnsBroadcaster
+
+        self.assertEqual(
+            FlacifyMdnsBroadcaster._build_dns_host_label("My_PC_Name 01!"),
+            "my-pc-name-01",
+        )
+        self.assertEqual(FlacifyMdnsBroadcaster._build_dns_host_label("___"), "flacify")
 
 
 if __name__ == "__main__":

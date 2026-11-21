@@ -37,7 +37,7 @@ logger = logging.getLogger("backend.routes.sync")
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost", "testclient"})
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 
@@ -286,12 +286,14 @@ async def get_sync_manifest(
                 "total_tracks": len(pl_tracks),
                 "downloaded_tracks": downloaded_count,
                 "cover_url": f"/api/media/cover/collection?playlist_id={quote(pl_id, safe='')}",
+                "remote_cover_url": pl.get("cover_url") or "",
                 "tracks": pl_tracks,
             }
         )
 
     unique_tracks_payload: List[Dict[str, Any]] = []
     total_bytes = 0
+    matched_unique_count = 0
 
     for fp_key, row in fp_to_canonical_row.items():
         canon_id = fp_to_canonical_id[fp_key]
@@ -306,6 +308,7 @@ async def get_sync_manifest(
         except OSError:
             continue
 
+        matched_unique_count += 1
         total_bytes += file_size
         if not include_tracks:
             continue
@@ -344,17 +347,11 @@ async def get_sync_manifest(
             }
         )
 
-    total_unique = (
-        len(referenced_canonical_ids) if playlist_id and not include_tracks else (
-            len(unique_tracks_payload) if include_tracks else len(fp_to_canonical_id)
-        )
-    )
-
     return {
         "server_version": __version__,
         "device_name": get_device_name(backend.config),
         "generated_at": int(time.time() * 1000),
-        "total_unique_tracks": total_unique,
+        "total_unique_tracks": matched_unique_count,
         "total_bytes": total_bytes,
         "playlists": playlists_payload,
         "tracks": unique_tracks_payload,

@@ -230,6 +230,7 @@ async def get_collection_cover(
 ):
     backend = _get_backend(request)
 
+    remote_url = ""
     if playlist_id:
         pl = backend.archive_manager.get_saved_playlist(playlist_id)
         if pl:
@@ -239,6 +240,7 @@ async def get_collection_cover(
                     local_cover,
                     headers={"Cache-Control": "public, max-age=3600"},
                 )
+            remote_url = (pl.get("cover_url") or "").strip()
             if not name:
                 name = pl.get("name") or ""
 
@@ -249,5 +251,12 @@ async def get_collection_cover(
                 cover_path,
                 headers={"Cache-Control": "public, max-age=3600"},
             )
+
+    if remote_url.startswith(("http://", "https://")):
+        return RedirectResponse(
+            url=remote_url,
+            status_code=302,
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
 
     raise HTTPException(status_code=404, detail="Collection cover art not found.")

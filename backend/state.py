@@ -52,11 +52,13 @@ class BackendState:
         config_manager: Optional[ConfigManager] = None,
         event_hub: Optional[EventHub] = None,
         run_startup_scan: bool = True,
+        run_mdns: Optional[bool] = None,
         run_auto_sync_scheduler: bool = True,
     ) -> None:
         self.config = config_manager or config
         self.events = event_hub or EventHub()
         self.run_startup_scan = run_startup_scan
+        self.run_mdns = run_startup_scan if run_mdns is None else bool(run_mdns)
         self.run_auto_sync_scheduler = run_auto_sync_scheduler
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._watched_sync_lock = threading.Lock()
@@ -369,7 +371,7 @@ class BackendState:
     def refresh_mdns(self) -> None:
         """Starts or stops mDNS advertising based on `mobile.lan_enabled`."""
         try:
-            if not self.run_startup_scan:
+            if not self.run_mdns:
                 return
             if bool(self.config.get("mobile.lan_enabled", True)):
                 from core import __version__
@@ -399,6 +401,7 @@ class BackendState:
                     daemon=True,
                     name="BackendStartupScanner",
                 ).start()
+        if self.run_mdns:
             self.refresh_mdns()
         if self.run_auto_sync_scheduler:
             self._auto_sync_wakeup = asyncio.Event()

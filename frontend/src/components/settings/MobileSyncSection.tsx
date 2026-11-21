@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -13,6 +13,7 @@ import {
   Wifi,
 } from "lucide-react";
 import { toast } from "sonner";
+import { apiUrl } from "@/api/client";
 import { api } from "@/api/endpoints";
 import type { SettingsResponse } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +40,11 @@ export function MobileSyncSection({
   const [regenerating, setRegenerating] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [qrVersion, setQrVersion] = useState<number>(() => Date.now());
+  const [qrError, setQrError] = useState(false);
+
+  useEffect(() => {
+    setDeviceName(mobile?.device_name || "");
+  }, [mobile?.device_name]);
 
   const { data: syncInfo, isLoading } = useQuery({
     queryKey: ["sync-info"],
@@ -64,6 +70,7 @@ export function MobileSyncSection({
     try {
       const updated = await api.sync.regenerateToken();
       queryClient.setQueryData(["sync-info"], updated);
+      setQrError(false);
       setQrVersion(Date.now());
       toast.success("Pairing token rotated", {
         description: "Scan the updated QR code on your phone to reconnect.",
@@ -79,6 +86,9 @@ export function MobileSyncSection({
 
   const port = syncInfo?.port || 8765;
   const firewallCmd = `New-NetFirewallRule -DisplayName "Flacify LAN Sync" -Direction Inbound -Protocol TCP -LocalPort ${port} -Action Allow`;
+  const qrSrc = syncInfo?.qr_svg_url
+    ? apiUrl(`${syncInfo.qr_svg_url}?v=${qrVersion}`)
+    : "";
 
   return (
     <div className="space-y-5">
@@ -142,6 +152,7 @@ export function MobileSyncSection({
               { "mobile.device_name": deviceName.trim() },
               "PC device name updated"
             ).then(() => {
+              setQrError(false);
               setQrVersion(Date.now());
               void queryClient.invalidateQueries({ queryKey: ["sync-info"] });
             });
@@ -191,18 +202,34 @@ export function MobileSyncSection({
           )}
         </div>
 
+        {(mobile?.lan_enabled === false || syncInfo?.lan_enabled === false) && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200">
+            Wi-Fi / LAN access is currently disabled — toggle &ldquo;Allow Connections
+            from Phone&rdquo; on above so your Android device can connect.
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6 items-start">
           {/* QR Box */}
           <div className="flex flex-col items-center gap-2.5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-            <div className="h-44 w-44 rounded-xl bg-white p-2.5 flex items-center justify-center overflow-hidden shadow-inner">
-              {syncInfo?.qr_svg_url ? (
+            <div className="h-44 w-44 rounded-xl bg-white p-2.5 flex flex-col items-center justify-center overflow-hidden shadow-inner">
+              {qrSrc && !qrError ? (
                 <img
-                  src={`${syncInfo.qr_svg_url}?v=${qrVersion}`}
+                  src={qrSrc}
                   alt="Flacify Android Pairing QR Code"
+                  onLoad={() => setQrError(false)}
+                  onError={() => setQrError(true)}
                   className="h-full w-full object-contain"
                 />
               ) : (
-                <QrCode className="h-12 w-12 text-zinc-400" />
+                <>
+                  <QrCode className="h-12 w-12 text-zinc-400" />
+                  {qrError && (
+                    <span className="mt-1 text-[10px] text-zinc-500">
+                      QR preview unavailable
+                    </span>
+                  )}
+                </>
               )}
             </div>
             <span className="text-[11px] text-zinc-400 text-center">

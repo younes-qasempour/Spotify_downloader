@@ -118,6 +118,7 @@ def main() -> None:
     else:
         app = create_app(
             run_startup_scan=not args.no_startup_scan,
+            run_mdns=True,
             frontend_dist_dir=args.frontend_dist,
         )
         uvicorn.run(app, host=bind_host, port=args.port)

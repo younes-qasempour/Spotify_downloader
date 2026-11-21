@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from backend.mdns import is_loopback_host
 from backend.serializers import mask_config_value
 from backend.state import BackendState
 from core import utils as core_utils
@@ -360,7 +361,19 @@ async def update_settings(request: Request, body: SettingsUpdateRequest):
             updated_keys.append(key)
             continue
 
+        if key == "mobile.pair_token":
+            raise HTTPException(
+                status_code=403,
+                detail="mobile.pair_token can only be rotated locally via POST /api/sync/token/regenerate.",
+            )
+
         if key == "mobile.lan_enabled":
+            client_host = request.client.host if request.client else ""
+            if not is_loopback_host(client_host):
+                raise HTTPException(
+                    status_code=403,
+                    detail="mobile.lan_enabled can only be changed locally on the host PC.",
+                )
             cfg.set(key, bool(raw_val))
             updated_keys.append(key)
             continue
