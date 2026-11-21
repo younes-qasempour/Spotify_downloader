@@ -51,6 +51,12 @@ class FlacifyApiClient(
         .readTimeout(45, TimeUnit.SECONDS)
         .build()
 
+    val rawHttpClient: OkHttpClient = baseClient.newBuilder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .build()
+
     private val json = Json {
         ignoreUnknownKeys = true
         coerceInputValues = true
@@ -125,6 +131,64 @@ class FlacifyApiClient(
         ) { bodyText ->
             json.decodeFromString<ShareResponse>(bodyText)
         }
+    }
+
+    suspend fun fetchLyrics(
+        candidateUrls: List<String>,
+        token: String,
+        trackId: String,
+    ): ApiCallResult<LyricsResponse> {
+        val encodedId = URLEncoder.encode(trackId, StandardCharsets.UTF_8.name())
+            .replace("+", "%20")
+        return executeWithFailover(
+            client = shortClient,
+            candidateUrls = candidateUrls,
+            token = token,
+            path = "/api/lyrics/$encodedId",
+        ) { bodyText ->
+            json.decodeFromString<LyricsResponse>(bodyText)
+        }
+    }
+
+    suspend fun downloadBytesOrNull(
+        candidateUrls: List<String>,
+        token: String,
+        relativePath: String,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        val cleanPath = if (relativePath.startsWith("/")) relativePath else "/$relativePath"
+        val normalized = candidateUrls.mapNotNull { PairingUriParser.normalizeBaseUrl(it) }.distinct()
+        if (normalized.isEmpty()) return@withContext null
+
+        for (baseUrl in normalized) {
+            val req = Request.Builder()
+                .url("$baseUrl$cleanPath")
+                .header("Authorization", "Bearer ${token.trim()}")
+                .get()
+                .build()
+            try {
+                shortClient.newCall(req).execute().use { resp ->
+                    when {
+                        resp.code == 401 -> throw FlacifyApiException.Unauthorized(
+                            extractErrorDetail(resp.body?.string().orEmpty())
+                        )
+                        resp.code == 403 -> throw FlacifyApiException.LanDisabled(
+                            extractErrorDetail(resp.body?.string().orEmpty())
+                        )
+                        resp.code == 404 -> return@withContext null
+                        !resp.isSuccessful -> return@withContext null
+                        else -> {
+                            val bytes = resp.body?.bytes()
+                            return@withContext if (bytes != null && bytes.isNotEmpty()) bytes else null
+                        }
+                    }
+                }
+            } catch (apiEx: FlacifyApiException) {
+                throw apiEx
+            } catch (_: IOException) {
+                // Fail over to next URL on unreachable host
+            }
+        }
+        null
     }
 
     private suspend fun <T> executeWithFailover(

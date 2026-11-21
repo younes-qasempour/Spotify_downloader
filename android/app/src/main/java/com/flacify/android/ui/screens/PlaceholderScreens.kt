@@ -48,22 +48,24 @@ fun PlaylistsScreen(
     modifier: Modifier = Modifier,
 ) {
     val paired = syncState.connectionConfig.isPaired
-    val pcName = syncState.syncInfo?.deviceName?.ifBlank { syncState.connectionConfig.deviceName }
-        ?: syncState.connectionConfig.deviceName.ifBlank { "Flacify PC" }
-    val plCount = syncState.syncInfo?.savedPlaylistsCount ?: 0
+    val cachedCount = syncState.playlistSummaries.size
+    val enabledCount = syncState.playlistSummaries.count { it.playlist.syncEnabled }
 
     StarterSectionLayout(
         title = "Offline Playlists",
         subtitle = "Keep selected Spotify & PC playlists downloaded on your phone in original bit-perfect FLAC.",
-        badgeText = if (paired) "NEXT: STEP 2.3" else "PAIR FIRST",
+        badgeText = if (cachedCount > 0) "NEXT: STEP 2.4" else if (paired) "REFRESH CATALOG" else "PAIR FIRST",
         icon = Icons.AutoMirrored.Rounded.QueueMusic,
-        detailsTitle = if (paired) "Paired with $pcName" else "Connect to Your PC First",
-        detailsBody = if (paired) {
-            "$plCount playlists available on $pcName. Offline Room database & resumable FLAC sync engine arrive in Step 2.3."
-        } else {
-            "Pair with Flacify Desktop in the Sync tab so we can load your playlists and sync original lossless FLAC tracks."
+        detailsTitle = when {
+            cachedCount > 0 -> "$cachedCount Playlists Cached ($enabledCount Selected for Offline)"
+            paired -> "Ready to Refresh Playlist Catalog"
+            else -> "Connect to Your PC First"
         },
-        showSyncAction = !paired,
+        detailsBody = when {
+            cachedCount > 0 -> "Manage sync toggles and storage in the Sync tab. Full grid, playlist detail views, and instant playback arrive in Steps 2.4–2.5."
+            else -> "Open the Sync tab to pair with your PC and choose which playlists to download as original FLAC."
+        },
+        actionLabel = if (cachedCount > 0) "Manage Offline Sync" else "Open PC Sync & Pair",
         onOpenSyncTab = onOpenSyncTab,
         modifier = modifier,
     )
@@ -76,25 +78,21 @@ fun LibraryScreen(
     modifier: Modifier = Modifier,
 ) {
     val paired = syncState.connectionConfig.isPaired
-    val trackCount = syncState.syncInfo?.libraryStats?.totalTracks ?: 0
-    val sizeStr = syncState.syncInfo?.libraryStats?.sizeStr ?: ""
+    val syncedTracks = syncState.syncedTrackCount
+    val pcTracks = syncState.syncInfo?.libraryStats?.totalTracks ?: 0
 
     StarterSectionLayout(
         title = "Offline Library",
         subtitle = "Browse thousands of lossless tracks by title, artist, album, or genre without touching mobile data.",
         badgeText = "FLAC 16 / 24-BIT",
         icon = Icons.Rounded.LibraryMusic,
-        detailsTitle = if (paired && trackCount > 0) {
-            "$trackCount Lossless Tracks on PC ($sizeStr)"
-        } else {
-            "Media3 Lossless Playback Ready"
+        detailsTitle = when {
+            syncedTracks > 0 -> "$syncedTracks Lossless Tracks Synced to Phone"
+            paired && pcTracks > 0 -> "$pcTracks Lossless Tracks on PC"
+            else -> "Media3 Lossless Playback Ready"
         },
-        detailsBody = if (paired) {
-            "Deduplicated Room storage + instant offline search & Media3 player arrive in Steps 2.3–2.5."
-        } else {
-            "Pair with your PC in the Sync tab to browse and download your lossless library."
-        },
-        showSyncAction = !paired,
+        detailsBody = "Deduplicated Room catalog is active. Full fast offline library browser and Media3 ExoPlayer controls arrive in Steps 2.4–2.5.",
+        actionLabel = "Open Sync & Storage",
         onOpenSyncTab = onOpenSyncTab,
         modifier = modifier,
     )
@@ -108,7 +106,7 @@ private fun StarterSectionLayout(
     icon: ImageVector,
     detailsTitle: String,
     detailsBody: String,
-    showSyncAction: Boolean,
+    actionLabel: String,
     onOpenSyncTab: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -208,16 +206,14 @@ private fun StarterSectionLayout(
                     color = FlacifyTextMuted,
                 )
 
-                if (showSyncAction) {
-                    Button(
-                        onClick = onOpenSyncTab,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = FlacifyEmerald,
-                            contentColor = Color(0xFF032219),
-                        ),
-                    ) {
-                        Text("Open PC Sync & Pair")
-                    }
+                Button(
+                    onClick = onOpenSyncTab,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = FlacifyEmerald,
+                        contentColor = Color(0xFF032219),
+                    ),
+                ) {
+                    Text(actionLabel)
                 }
             }
         }

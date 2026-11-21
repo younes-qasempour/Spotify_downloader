@@ -6,11 +6,16 @@ import androidx.lifecycle.viewModelScope
 import com.flacify.android.FlacifyApplication
 import com.flacify.android.data.ConnectionConfig
 import com.flacify.android.data.ConnectionSettingsStore
+import com.flacify.android.data.FlacifyRepository
+import com.flacify.android.data.storage.StorageSummary
 import com.flacify.android.network.DiscoveredPc
 import com.flacify.android.network.FlacifyApiClient
 import com.flacify.android.network.MdnsDiscoveryManager
 import com.flacify.android.network.PairingUriParser
 import com.flacify.android.network.SyncInfoResponse
+import com.flacify.android.sync.FlacifySyncManager
+import com.flacify.android.sync.PlaylistSyncSummary
+import com.flacify.android.sync.SyncProgressState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,12 +36,19 @@ data class SyncUiState(
     val discoveredPcs: List<DiscoveredPc> = emptyList(),
     val isScanningMdns: Boolean = false,
     val mdnsError: String? = null,
+    val playlistSummaries: List<PlaylistSyncSummary> = emptyList(),
+    val storageSummary: StorageSummary = StorageSummary(),
+    val syncedTrackCount: Int = 0,
+    val isRefreshingCatalog: Boolean = false,
+    val syncProgress: SyncProgressState = SyncProgressState(),
 )
 
 class SyncViewModel(
     private val connectionStore: ConnectionSettingsStore,
     private val apiClient: FlacifyApiClient,
     private val mdnsDiscovery: MdnsDiscoveryManager,
+    private val repository: FlacifyRepository,
+    private val syncManager: FlacifySyncManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SyncUiState())
@@ -62,6 +74,33 @@ class SyncViewModel(
                 if (cfg.isPaired && !initialCheckDone) {
                     initialCheckDone = true
                     testSavedConnection()
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            repository.observePlaylistSummaries().collect { list ->
+                _uiState.update { it.copy(playlistSummaries = list) }
+            }
+        }
+        viewModelScope.launch {
+            repository.observeStorageSummary().collect { summary ->
+                _uiState.update { it.copy(storageSummary = summary) }
+            }
+        }
+        viewModelScope.launch {
+            repository.observeSyncedTrackCount().collect { count ->
+                _uiState.update { it.copy(syncedTrackCount = count) }
+            }
+        }
+        viewModelScope.launch {
+            syncManager.progressFlow.collect { prog ->
+                _uiState.update { cur ->
+                    cur.copy(
+                        syncProgress = prog,
+                        statusMessage = prog.terminalMessage ?: cur.statusMessage,
+                        errorMessage = prog.errorMessage ?: cur.errorMessage,
+                    )
                 }
             }
         }
@@ -243,6 +282,10 @@ class SyncViewModel(
                         statusMessage = "Connected to $resolvedName (${result.resolvedBaseUrl})",
                     )
                 }
+
+                if (_uiState.value.playlistSummaries.isEmpty()) {
+                    refreshCatalog()
+                }
             } catch (ex: Exception) {
                 _uiState.update {
                     it.copy(
@@ -256,8 +299,75 @@ class SyncViewModel(
         }
     }
 
+    fun refreshCatalog() {
+        if (_uiState.value.isRefreshingCatalog) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRefreshingCatalog = true, errorMessage = null) }
+            try {
+                val manifest = repository.refreshManifestFromPc()
+                _uiState.update {
+                    it.copy(
+                        isRefreshingCatalog = false,
+                        statusMessage = "Catalog refreshed: ${manifest.playlists.size} playlists · ${manifest.totalUniqueTracks} unique lossless tracks on PC.",
+                    )
+                }
+            } catch (ex: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isRefreshingCatalog = false,
+                        errorMessage = ex.message ?: "Failed to refresh catalog from PC.",
+                    )
+                }
+            }
+        }
+    }
+
+    fun togglePlaylistSync(playlistId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setPlaylistSyncEnabled(playlistId, enabled)
+        }
+    }
+
+    fun startOfflineSync(syncAllLibrary: Boolean = false) {
+        _uiState.update { it.copy(errorMessage = null, statusMessage = "Starting lossless FLAC sync...") }
+        syncManager.startSync(syncAllLibrary = syncAllLibrary)
+    }
+
+    fun cancelOfflineSync() {
+        syncManager.cancelSync()
+    }
+
+    fun offloadPlaylist(playlistId: String, playlistName: String) {
+        viewModelScope.launch {
+            val removed = repository.offloadPlaylist(playlistId)
+            _uiState.update {
+                it.copy(
+                    errorMessage = null,
+                    statusMessage = "Removed $removed unshared track(s) from '$playlistName' off this phone.",
+                )
+            }
+        }
+    }
+
+    fun cleanOrphanFiles() {
+        viewModelScope.launch {
+            val removed = repository.cleanOrphanFiles()
+            _uiState.update {
+                it.copy(
+                    errorMessage = null,
+                    statusMessage = if (removed > 0) {
+                        "Cleaned $removed unused audio file(s) from phone storage."
+                    } else {
+                        "No unused audio files to clean."
+                    },
+                )
+            }
+        }
+    }
+
     fun disconnect() {
         viewModelScope.launch {
+            syncManager.cancelSync()
             connectionStore.clearConnection()
             formSeededFromStore = true
             _uiState.update {
@@ -268,7 +378,7 @@ class SyncViewModel(
                     manualToken = "",
                     pairingUriInput = "",
                     errorMessage = null,
-                    statusMessage = "Disconnected from PC.",
+                    statusMessage = "Disconnected from PC. Downloaded offline FLAC files remain on phone.",
                 )
             }
         }
@@ -294,6 +404,8 @@ class SyncViewModel(
                 connectionStore = app.connectionStore,
                 apiClient = app.apiClient,
                 mdnsDiscovery = app.mdnsDiscovery,
+                repository = app.repository,
+                syncManager = app.syncManager,
             ) as T
     }
 

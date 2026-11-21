@@ -2,6 +2,7 @@ package com.flacify.android.ui.sync
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -24,10 +25,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.WifiFind
@@ -38,11 +44,14 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -59,6 +68,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -72,6 +82,7 @@ import com.flacify.android.ui.theme.FlacifyEmeraldBright
 import com.flacify.android.ui.theme.FlacifySkyAccent
 import com.flacify.android.ui.theme.FlacifyTextMuted
 import com.flacify.android.ui.theme.FlacifyTextPrimary
+import java.util.Locale
 
 @Composable
 fun SyncScreen(
@@ -91,6 +102,28 @@ fun SyncScreen(
             showQrScanner = true
         } else {
             cameraNotice = "Camera permission denied — paste your Pairing URI below instead."
+        }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) {
+        viewModel.startOfflineSync(syncAllLibrary = false)
+    }
+
+    fun launchSyncWithOptionalNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (granted) {
+                viewModel.startOfflineSync(syncAllLibrary = false)
+            } else {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        } else {
+            viewModel.startOfflineSync(syncAllLibrary = false)
         }
     }
 
@@ -153,7 +186,6 @@ fun SyncScreen(
             )
         }
 
-        // Feedback banners
         state.errorMessage?.let { err ->
             BannerCard(text = err, tint = FlacifyDanger)
         }
@@ -166,7 +198,254 @@ fun SyncScreen(
             }
         }
 
-        // 1. Saved / Live Connection Status Card
+        // 1. Offline FLAC Playlist Sync & Phone Storage Card
+        if (state.connectionConfig.isPaired || state.playlistSummaries.isNotEmpty()) {
+            val enabledCount = state.playlistSummaries.count { it.playlist.syncEnabled }
+            val prog = state.syncProgress
+            val storage = state.storageSummary
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = FlacifyCardSurface),
+                border = BorderStroke(1.dp, FlacifyBorder),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Storage,
+                                contentDescription = null,
+                                tint = FlacifyEmeraldBright,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Text(
+                                text = "Offline FLAC Storage",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = FlacifyTextPrimary,
+                            )
+                        }
+                        if (state.connectionConfig.isPaired) {
+                            TextButton(
+                                onClick = { viewModel.refreshCatalog() },
+                                enabled = !state.isRefreshingCatalog && !prog.isRunning,
+                            ) {
+                                if (state.isRefreshingCatalog) {
+                                    CircularProgressIndicator(
+                                        strokeWidth = 2.dp,
+                                        color = FlacifySkyAccent,
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                }
+                                Text(
+                                    text = if (state.isRefreshingCatalog) "Loading..." else "Refresh Catalog",
+                                    color = FlacifySkyAccent,
+                                )
+                            }
+                        }
+                    }
+
+                    Surface(
+                        color = FlacifyElevatedSurface,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = "${state.syncedTrackCount} offline tracks · ${formatBytes(storage.audioBytes + storage.coverBytes)} used · ${formatBytes(storage.availableBytes)} free",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = FlacifyEmeraldBright,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        )
+                    }
+
+                    if (prog.isRunning) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(FlacifyElevatedSurface, RoundedCornerShape(14.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = prog.currentTitle.ifBlank { "Syncing lossless FLAC..." },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = FlacifyTextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (prog.totalTracks > 0) "${prog.completedTracks}/${prog.totalTracks}" else "...",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = FlacifyEmeraldBright,
+                                )
+                            }
+
+                            if (prog.totalTracks > 0) {
+                                LinearProgressIndicator(
+                                    progress = { prog.fraction },
+                                    color = FlacifyEmeraldBright,
+                                    trackColor = FlacifyBorder,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            } else {
+                                LinearProgressIndicator(
+                                    color = FlacifyEmeraldBright,
+                                    trackColor = FlacifyBorder,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = { viewModel.cancelOfflineSync() },
+                                border = BorderStroke(1.dp, FlacifyAmberAccent.copy(alpha = 0.5f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = FlacifyAmberAccent),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Stop,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Pause Sync (Resumable)")
+                            }
+                        }
+                    } else if (state.connectionConfig.isPaired) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Button(
+                                onClick = { launchSyncWithOptionalNotificationPermission() },
+                                enabled = enabledCount > 0,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = FlacifyEmerald,
+                                    contentColor = Color(0xFF032219),
+                                ),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Download,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (enabledCount > 0) "Sync Selected ($enabledCount)" else "Select Playlists")
+                            }
+
+                            OutlinedButton(
+                                onClick = { viewModel.cleanOrphanFiles() },
+                                border = BorderStroke(1.dp, FlacifyBorder),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.CleaningServices,
+                                    contentDescription = "Clean unused files",
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    if (state.playlistSummaries.isEmpty()) {
+                        Text(
+                            text = "Tap 'Refresh Catalog' above to load your PC playlists and pick which ones to keep on your phone.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = FlacifyTextMuted,
+                        )
+                    } else {
+                        state.playlistSummaries.forEach { summary ->
+                            val pl = summary.playlist
+                            Surface(
+                                color = FlacifyElevatedSurface,
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (pl.syncEnabled) FlacifyEmerald.copy(alpha = 0.35f) else FlacifyBorder,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = pl.name,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = FlacifyTextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = "${summary.syncedOnPhoneCount}/${pl.pcDownloadedTracks} tracks offline · ${formatBytes(summary.totalNeededBytes)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = if (summary.syncedOnPhoneCount >= pl.pcDownloadedTracks && pl.pcDownloadedTracks > 0) {
+                                                FlacifyEmeraldBright
+                                            } else {
+                                                FlacifyTextMuted
+                                            },
+                                        )
+                                    }
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (summary.syncedOnPhoneBytes > 0L) {
+                                            IconButton(
+                                                onClick = { viewModel.offloadPlaylist(pl.id, pl.name) },
+                                                enabled = !prog.isRunning,
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.DeleteOutline,
+                                                    contentDescription = "Remove from phone",
+                                                    tint = FlacifyTextMuted,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            }
+                                        }
+                                        Switch(
+                                            checked = pl.syncEnabled,
+                                            onCheckedChange = { checked ->
+                                                viewModel.togglePlaylistSync(pl.id, checked)
+                                            },
+                                            colors = SwitchDefaults.colors(
+                                                checkedThumbColor = Color(0xFF032219),
+                                                checkedTrackColor = FlacifyEmerald,
+                                                uncheckedThumbColor = FlacifyTextMuted,
+                                                uncheckedTrackColor = FlacifyCardSurface,
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Saved / Live Connection Status Card
         if (state.connectionConfig.isPaired) {
             val cfg = state.connectionConfig
             val info = state.syncInfo
@@ -228,10 +507,10 @@ fun SyncScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
-                                text = "${info.libraryStats.totalTracks} unique tracks · ${info.libraryStats.sizeStr} · ${info.savedPlaylistsCount} playlists",
+                                text = "PC Library: ${info.libraryStats.totalTracks} tracks · ${info.libraryStats.sizeStr} · ${info.savedPlaylistsCount} playlists",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
-                                color = FlacifyEmeraldBright,
+                                color = FlacifyTextMuted,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                             )
                         }
@@ -275,7 +554,7 @@ fun SyncScreen(
             }
         }
 
-        // 2. Quick Pair via QR Code or Pairing URI
+        // 3. Quick Pair via QR Code or Pairing URI
         Card(
             colors = CardDefaults.cardColors(containerColor = FlacifyCardSurface),
             border = BorderStroke(1.dp, FlacifyBorder),
@@ -292,7 +571,7 @@ fun SyncScreen(
                     color = FlacifyTextPrimary,
                 )
                 Text(
-                    text = "Scan the QR code shown in Desktop Settings -> Mobile Sync, or paste the flacify://pair URI (handy on Android Emulator).",
+                    text = "Scan the QR code shown in Desktop Settings -> Mobile Sync, or paste the flacify://pair URI.",
                     style = MaterialTheme.typography.bodySmall,
                     color = FlacifyTextMuted,
                 )
@@ -346,7 +625,7 @@ fun SyncScreen(
             }
         }
 
-        // 3. Auto-Discover PC on Wi-Fi (NSD / _flacify._tcp)
+        // 4. Auto-Discover PC on Wi-Fi (NSD / _flacify._tcp)
         Card(
             colors = CardDefaults.cardColors(containerColor = FlacifyCardSurface),
             border = BorderStroke(1.dp, FlacifyBorder),
@@ -460,7 +739,7 @@ fun SyncScreen(
             }
         }
 
-        // 4. Manual Server & Token
+        // 5. Manual Server & Token
         Card(
             colors = CardDefaults.cardColors(containerColor = FlacifyCardSurface),
             border = BorderStroke(1.dp, FlacifyBorder),
@@ -560,6 +839,16 @@ fun SyncScreen(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0L) return "0 MB"
+    val gb = 1024.0 * 1024.0 * 1024.0
+    val mb = 1024.0 * 1024.0
+    return when {
+        bytes >= gb -> String.format(Locale.US, "%.2f GB", bytes / gb)
+        else -> String.format(Locale.US, "%.1f MB", bytes / mb)
     }
 }
 

@@ -122,6 +122,15 @@ data class ShareResponse(
 )
 
 @Serializable
+data class LyricsResponse(
+    @SerialName("track_id") val trackId: String = "",
+    @SerialName("has_lyrics") val hasLyrics: Boolean = false,
+    @SerialName("is_synced") val isSynced: Boolean = false,
+    val source: String = "none",
+    @SerialName("raw_text") val rawText: String = "",
+)
+
+@Serializable
 internal data class FastApiErrorResponse(
     val detail: String = "",
 )
