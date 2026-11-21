@@ -4,6 +4,7 @@
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
   <strong>Flacify v2.1.0 — Tauri v2 Desktop App, Resizable Studio Mini Player, Wi-Fi Mobile Sync, Android Companion & 10-Band EQ</strong><br><br>
   <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v2.1.0-brightgreen?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v2.1.0"></a>
+  <img src="https://img.shields.io/badge/Android-Kotlin%20%2B%20Jetpack%20Compose-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android Kotlin + Jetpack Compose">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/Desktop-Tauri%20v2%20%2B%20React%2019-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri v2 + React 19">
   <img src="https://img.shields.io/badge/API-FastAPI%20%2B%20WebSocket-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
@@ -15,16 +16,16 @@
 
 ## ✨ Flacify v2.1.0 Architecture & Quick Start
 
-Flacify v2.0 pairs the proven **pure-Python `core/` engine** with a thin **FastAPI + WebSocket backend (`backend/`)**, a modern **React 19 + TypeScript + Tailwind CSS v4 frontend (`frontend/`)**, and a **Tauri v2 Windows desktop shell (`desktop/`)**:
+Flacify v2.1 pairs the proven **pure-Python `core/` engine** with a thin **FastAPI + WebSocket backend (`backend/`)**, a modern **React 19 + TypeScript + Tailwind CSS v4 frontend (`frontend/`)**, a **Tauri v2 Windows desktop shell (`desktop/`)**, and a **native Kotlin + Jetpack Compose Android companion app (`android/`)**:
 
-- **Windows Desktop App (`desktop/`):** Run `Flacify_Setup_v2.1.0.exe` or launch dev mode via `cd desktop && npm run dev` (frameless Windows 11 window, native folder/file dialogs, system tray, automatic backend sidecar lifecycle).
-- **Wi-Fi/LAN Mobile Sync & Native Android Companion App (`android/`):** Pair via QR code or mDNS (`_flacify._tcp.local.`), run resumable lossless FLAC offline playlist sync (`Flacify_Android_v2.1.0.apk`), play offline tracks with Media3 and synced lyrics, and share Spotify links directly to your PC queue.
+- **Windows Desktop App (`desktop/`):** Run `Flacify_Setup_v2.1.0.exe` or launch dev mode via `cd desktop && npm.cmd run dev` (frameless Windows 11 window, native folder/file dialogs, system tray, automatic backend sidecar lifecycle).
+- **Wi-Fi/LAN Mobile Sync & Native Android Companion App (`android/`):** Pair via QR code or mDNS (`_flacify._tcp.local.`), run resumable lossless FLAC offline playlist sync (`Flacify_Android_v2.1.0.apk`), play offline tracks with Media3 and synced lyrics, and share Spotify links directly to your PC queue. See [`android/README.md`](android/README.md) for mobile build and pairing details.
 - **Resizable Studio Mini Player (`Alt+M`):** Detachable floating PiP / native always-on-top window with 8-direction free resizing across 3 adaptive layouts (**Micro Strip**, **Art Card**, **Studio Deck**), live 60fps FFT spectrum visualizer, synced karaoke lyrics + translation, Up Next queue switching, and Quick EQ.
 - **Production Web Mode & PWA (`python -m backend`):** Serve the full UI locally or over your LAN/phone at any browser:
   ```powershell
   python -m backend --host 0.0.0.0 --port 8765 --open
   ```
-- **Build v2.0 Desktop Bundle + Installer:**
+- **Build v2.1.0 Desktop Bundle + Installer:**
   ```powershell
   python build_v2.py
   ```
@@ -34,17 +35,34 @@ Flacify v2.0 pairs the proven **pure-Python `core/` engine** with a thin **FastA
 
 ## 📖 Overview
 
-**Flacify** is a production-grade, distribution-ready Windows 11 desktop application and headless CLI suite engineered to download Spotify tracks, full albums, and massive playlists (1,000+ tracks) at **true studio-master fidelity** without crashes, rate-limit bans, audio transcoding artifacts, or memory leaks.
+**Flacify** is a multi-platform **Windows 11 Desktop Studio, Web PWA, Headless CLI, and Native Android Companion** engineered to archive Spotify tracks, albums, and massive playlists (1,000+ tracks) at **true studio-master fidelity** without crashes, rate-limit bans, audio transcoding artifacts, or duplicate storage bloat.
 
-Unlike conventional downloaders that record compressed, lossy audio or re-encode degraded streams, Flacify combines **direct high-speed lossless CDN retrieval** with **stealth anti-ban pacing**, **exact ISRC matching**, **embedded CRLF synchronized lyrics**, and an **offline SQLite library manager**.
+Unlike conventional downloaders that record compressed, lossy audio or re-encode degraded streams, Flacify combines **direct high-speed lossless CDN retrieval** with **stealth anti-ban pacing**, **exact ISRC matching**, **embedded CRLF synchronized lyrics**, an **offline SQLite library manager**, and **zero-transcode Wi-Fi FLAC sync to Android**.
 
-Built on a completely **decoupled two-layer architecture**:
-- **Headless Multimedia Engine (`core/`)**: High-performance, multi-threaded core with zero GUI dependencies.
-- **Fluent Design Presentation Layer (`gui/`)**: Immersive Windows 11 user experience featuring Mica/Acrylic styling, virtualized table views, and real-time status diagnostics.
+Built on a **decoupled multi-layer architecture**:
+- **Headless Multimedia Engine (`core/`):** Multi-threaded Python core with zero UI dependencies.
+- **FastAPI + WebSocket + LAN Sync Server (`backend/`):** Thin async REST, range-streaming media, WebSocket event bus, mDNS broadcaster, and mobile sync API.
+- **Modern Studio Web UI (`frontend/`):** React 19 + TypeScript + Tailwind CSS v4 frontend with Web Audio 10-band EQ and virtualized views.
+- **Windows Desktop Shell (`desktop/`):** Tauri v2 native window, system tray, and automatic `flacify-backend.exe` sidecar management.
+- **Native Android Companion (`android/`):** Offline-first Kotlin + Jetpack Compose app with Room storage, WorkManager resumable sync, Media3 lossless playback, QR pairing, and Android Share Sheet integration.
+- **Preserved Legacy Fluent GUI (`gui/`):** Original PyQt6 / PyQt6-Fluent-Widgets desktop presentation layer preserved in `main.py`.
 
 ---
 
 ## 🌟 Key Features
+
+### 📱 Wi-Fi/LAN Mobile Sync & Native Android Companion (v2.1.0)
+- **QR Code & Automatic mDNS Discovery (`_flacify._tcp.local.`):** Pair Android phones from **Settings → Mobile Sync** via one-scan CameraX + ZXing QR pairing, local Zeroconf service discovery, or direct URL/token entry (including emulator `10.0.2.2:8765` support).
+- **Resumable Lossless FLAC Transfer:** Dedicated `WorkManager` + `ResumableFileDownloader` streams original bit-perfect `.flac` audio, embedded/LRC synced lyrics, and album cover art over LAN using `ETag` and HTTP `Range` / `If-Range` resume.
+- **Offline Room Library & Media3 Player:** Browse offline playlists and searchable tracks backed by Room SQLite, and play bit-perfect audio completely offline via Media3 (`ExoPlayer` + background `MediaSessionService`) with seekable synced lyrics, queue management, and a persistent mini player bar.
+- **Android Share Sheet to PC (`Send to Flacify PC`):** Share any Spotify track, album, playlist, or `spotify.link` / `spoti.fi` URL from Spotify or a mobile browser directly into your PC download queue, with a local retry queue when off your home network.
+- **Hardened LAN Security & High-Speed Manifest:** Bearer token authentication for LAN clients, loopback-only restrictions for local host controls (`open-folder`, LRC file paths, pairing QR, token regeneration, and API docs), SSRF-safe short-link unwrapping, and gzip-compressed `os.scandir()` manifest generation (~450 ms over 5,500+ tracks).
+
+### 🖥️ Tauri v2 Desktop Studio, Web PWA & Studio Mini Player (v2.0.0 – v2.0.1)
+- **Frameless Tauri v2 Desktop App:** Native Windows 11 window chrome, single-instance focus, tray menu with Mini Player toggle, native folder/file dialogs, and bundled PyInstaller FastAPI sidecar.
+- **Resizable Studio Mini Player (`Alt+M`):** Detachable floating window / web deck across three responsive tiers (**Micro Strip**, **Art Card**, **Studio Deck**) with 60fps FFT spectrum visualizer, synced karaoke lyrics with inline translation, Up Next queue switching, and Quick EQ.
+- **Modern React 19 Studio Workspace:** Real-time WebSocket progress streaming (`QueuePage`), saved playlists & auto-sync (`PlaylistsPage`, `PlaylistDetailPage`), virtualized offline library (`LibraryPage`), 10-band Web Audio EQ, Audio Spectrum Inspector & Duplicate Merger (`ToolsPage`), and Mobile Sync / Source settings (`SettingsPage`).
+- **Single-Folder Library Deduplication:** Enforces clean single-folder storage (`save_in_subfolders` toggle) and deduplicates overlapping remasters across saved playlists while keeping all track mappings intact.
 
 ### 🎛️ High-Density UI & Collapsible Batch Controls (v1.6.1)
 - **High-Density Track Layout:** Optimized table item height to 56px and cover art to 40x40 with crisp typography, fitting 10+ songs on screen without vertical scrolling.
@@ -105,7 +123,7 @@ Every queued track automatically traverses an intelligent cascading resolution l
 - **Watermark Scrubbing:** Automatically strips promotional site watermarks (e.g. `[Musilon]`, `- musilon.com`) from metadata tags and filenames.
 
 ### 📁 Smart Folder Organization & Track Numbering
-- **Playlists:** Saved to `{output_dir}/{playlist_name}/`.
+- **Playlists:** Saved to `{output_dir}/{playlist_name}/` (or directly in `{output_dir}/` when `save_in_subfolders` is disabled).
 - **Albums:** Saved to `{output_dir}/{album_name}/` with album track numbering (`01. Artist - Title.flac`), preserving genuine track and disc order.
 - **Singles:** Standalone tracks are neatly routed to `{output_dir}/Singles/`.
 - **Isolated App Cache:** Album covers and marker files are stored in `%LOCALAPPDATA%\Flacify\cache`, leaving your music folders 100% clean.
@@ -167,27 +185,32 @@ Every queued track automatically traverses an intelligent cascading resolution l
 
 ```mermaid
 flowchart TD
-    A[Spotify URL / URI] --> B[Spotify Metadata Resolver]
-    B --> C{SQLite Archive Check}
-    C -- "Already Downloaded" --> D[Instant Local Copy & Retag (~2ms)]
-    C -- "New Track" --> E[Cascading Audio Ladder]
-    
-    subgraph Engine [Multi-Tier Audio Ladder]
-        E --> F{Musilon VIP Engine}
-        F -- "Catalog Match" --> G[Lossless FLAC 24/16-bit or 320k]
-        F -- "409 / Unavailable" --> H[Step-Down Quality Fallback]
+    A["Spotify URL / URI or Android Share Sheet"] --> API["FastAPI + WebSocket Backend (backend/)"]
+    API --> B["Spotify Metadata Resolver (core/)"]
+    B --> C{"SQLite Archive Check (archive.db)"}
+    C -- "Already Downloaded" --> D["Instant Local Copy & Retag (~2ms)"]
+    C -- "New Track" --> E["Cascading Audio Ladder"]
+
+    subgraph Engine["Multi-Tier Audio Ladder"]
+        E --> F{"Musilon VIP / MeloBot Engine"}
+        F -- "Catalog Match" --> G["Lossless FLAC 24/16-bit or 320k"]
+        F -- "409 / Unavailable" --> H["Step-Down Quality Fallback"]
         H --> G
-        F -- "No Match / Rate Limit" --> I[YouTube Music Safety Net]
-        I --> J[Native Opus/AAC Stream via yt-dlp]
+        F -- "No Match / Rate Limit" --> I["YouTube Music Safety Net"]
+        I --> J["Native Opus/AAC Stream via yt-dlp"]
     end
 
-    G --> K[Chunked Stream & Magic Byte Validation]
+    G --> K["Chunked Stream & Magic Byte Validation"]
     J --> K
-    K --> L[LRCLIB Synced CRLF Lyrics Fetch]
-    L --> M[Mutagen Tagging & 640x640 Artwork Injection]
-    M --> N[Smart Folder Organization & File Output]
-    N --> O[SQLite Archive Indexing (archive.db)]
+    K --> L["LRCLIB Synced CRLF Lyrics Fetch"]
+    L --> M["Mutagen Tagging & 640x640 Artwork Injection"]
+    M --> N["Smart Folder Organization & File Output"]
+    N --> O["SQLite Archive Indexing (archive.db)"]
     D --> O
+
+    O --> UI["Tauri v2 Desktop Studio & React 19 Web PWA (desktop/ + frontend/)"]
+    O --> SYNC["LAN Sync API + mDNS + QR Pairing (/api/sync/*)"]
+    SYNC --> AND["Native Android Companion App (android/: Room, WorkManager, Media3)"]
 ```
 
 ---
@@ -196,49 +219,87 @@ flowchart TD
 
 ```
 Flacify/
-├── app.spec                  # PyInstaller configuration for standalone release
-├── build_windows.py          # Automated pipeline orchestrator (PyInstaller + Inno Setup)
-├── installer.iss             # Inno Setup 6 per-user Windows installer configuration
+├── backend.spec              # PyInstaller configuration for v2.x FastAPI backend sidecar
+├── build_v2.py               # Automated v2.x Windows Desktop + Installer build pipeline
+├── installer_v2.iss          # Inno Setup 6 installer script (Flacify_Setup_v2.1.0.exe)
+├── app.spec                  # Legacy v1.x PyInstaller configuration
+├── build_windows.py          # Legacy v1.x Windows build orchestrator
+├── installer.iss             # Legacy v1.x Inno Setup script
 ├── version_info.txt          # Embedded Windows PE version resource metadata
-├── config.example.json       # Clean template for configuration settings
-├── requirements.txt          # Production Python dependencies
-├── main.py                   # Unified entrypoint (GUI default or --headless CLI)
+├── config.example.json       # Clean template matching core/config.py DEFAULT_CONFIG
+├── requirements.txt          # Python dependencies (Core + FastAPI + Mobile Sync)
+├── main.py                   # Legacy PyQt6 GUI & Headless CLI entrypoint
+├── PROJECT_STATE.md          # Detailed developer notes & architectural changelog
 │
-├── assets/                   # APPLICATION BRANDING & ICONS
-│   ├── icon.ico              # Multi-resolution icon (16x16 to 256x256)
-│   ├── icon.png              # High-res 256x256 application logo
-│   └── convert_icon.py       # Reusable icon generation utility
+├── backend/                  # FASTAPI + WEBSOCKET + MOBILE SYNC SERVER
+│   ├── __main__.py           # CLI launcher (`python -m backend`)
+│   ├── app.py                # FastAPI factory, auth middleware, SPA serving, WS route
+│   ├── entry.py              # Frozen PyInstaller sidecar entrypoint
+│   ├── mdns.py               # LAN IP detection, pairing tokens, Zeroconf mDNS broadcaster
+│   ├── state.py              # Shared BackendState orchestrating core managers & schedulers
+│   ├── serializers.py        # Pydantic/JSON serializers for tracks, playlists & tools
+│   ├── track_lookup.py       # Deduplicated track/file lookup helpers
+│   ├── ws.py                 # WebSocket live event broadcaster
+│   └── routes/               # queue, library, media, lyrics, playlists, settings, tools, sync
 │
-├── core/                     # HEADLESS MULTIMEDIA ENGINE (Zero GUI Dependencies)
+├── frontend/                 # REACT 19 + TYPESCRIPT + TAILWIND CSS v4 STUDIO UI
+│   ├── package.json          # Vite + React frontend scripts
+│   └── src/
+│       ├── api/              # Typed REST client & endpoints
+│       ├── components/       # Layout, library, player (EQ/lyrics/mini player), queue, settings, tools
+│       ├── hooks/            # WebSocket event hook & virtual list hook
+│       ├── lib/              # Web Audio engine, color extractor, Tauri bridge helpers
+│       ├── pages/            # QueuePage, PlaylistsPage, PlaylistDetailPage, LibraryPage, ToolsPage, SettingsPage
+│       └── stores/           # Zustand appStore & playerStore
+│
+├── desktop/                  # TAURI v2 WINDOWS DESKTOP SHELL
+│   ├── package.json          # Tauri CLI scripts (`dev`, `build`, `build:exe`, `check`)
+│   └── src-tauri/
+│       ├── Cargo.toml        # Rust crate manifest
+│       ├── tauri.conf.json   # Window geometry, bundling & icon config
+│       └── src/
+│           ├── lib.rs        # Mini player window commands, system tray & app lifecycle
+│           └── backend_manager.rs # Sidecar / Python backend lifecycle manager
+│
+├── android/                  # NATIVE ANDROID COMPANION APP (Kotlin + Jetpack Compose)
+│   ├── README.md             # Android companion setup, Gradle commands & pairing guide
+│   ├── gradle/libs.versions.toml # Version catalog (AGP 9.0.1, Room 2.7.2, Media3 1.6.1, WorkManager 2.10.1)
+│   └── app/src/
+│       ├── main/java/com/flacify/android/
+│       │   ├── data/         # Room entities/DAO/DB, ConnectionSettingsStore, LocalMediaStorage, Repository
+│       │   ├── network/      # OkHttp API client, NsdManager mDNS discovery, PairingUriParser
+│       │   ├── player/       # Media3 ExoPlayer + PlaybackService, FLAC/LRC synced lyrics parser
+│       │   ├── share/        # ShareReceiverActivity, PendingShareWorker, ShareToPcManager
+│       │   ├── sync/         # FlacifySyncManager, WorkManager FlacifySyncWorker, ResumableFileDownloader
+│       │   └── ui/           # Compose screens (Sync/QR, Playlists, Library, MiniPlayerBar, NowPlayingSheet)
+│       └── test/java/com/flacify/android/ # 9 JUnit test suites (25 unit tests)
+│
+├── core/                     # HEADLESS MULTIMEDIA ENGINE (Zero UI Dependencies)
+│   ├── __init__.py           # Package version (`2.1.0`)
 │   ├── paths.py              # Centralized path manager (%LOCALAPPDATA%\Flacify)
 │   ├── config.py             # Thread-safe persistent JSON config manager
 │   ├── archive.py            # SQLite music library archive, deduplication & repair
 │   ├── spotify_client.py     # Spotify Web API client + guest scraper fallback
 │   ├── musilon.py            # Musilon VIP engine (NextAuth, REST catalog, ISRC matcher)
+│   ├── melobot.py            # Telegram MeloBot MTProto integration
 │   ├── ytdlp_engine.py       # YouTube Music fallback engine (±5s duration validation)
 │   ├── lyrics.py             # LRCLIB lyrics client (synchronized .lrc + plain lyrics)
 │   ├── tagger.py             # Mutagen metadata tagger & cover art embedder
-│   ├── resolver.py           # Cascading ladder engine (Musilon -> YTM safety net)
-│   ├── queue_manager.py      # Producer-consumer thread queue with callback hooks
+│   ├── resolver.py           # Cascading ladder engine (Musilon / MeloBot -> YTM)
+│   ├── exporter.py           # Portable song & M3U8 playlist exporter
+│   ├── transcoder.py         # FFmpeg transcoder, ReplayGain / EBU R128 loudness normalizer
+│   ├── genre.py              # Genre resolution helpers
+│   ├── queue_manager.py      # Producer-consumer queue with callback hooks
+│   ├── types.py              # Shared dataclasses & typed structures
+│   ├── exceptions.py         # Domain exception hierarchy
 │   └── utils.py              # Filename sanitizer, FFmpeg detector/downloader
 │
-├── gui/                      # WINDOWS 11 FLUENT PRESENTATION LAYER
-│   ├── styles.py             # Dark theme palette and styling tokens
-│   ├── bridge.py             # Qt Signal Bridge between background threads & event loop
-│   ├── queue_model.py        # Virtualized TrackQueueModel (QAbstractTableModel)
-│   ├── queue_delegate.py     # TrackCardDelegate (74px high custom card painter)
-│   ├── main_window.py        # FluentWindow with navigation sidebar
-│   └── views/
-│       ├── queue_view.py     # Queue management, URL inputs, metric cards
-│       ├── playlists_view.py # Saved Playlists manager & batch download controls
-│       ├── completed_view.py # Completed downloads library with direct file launcher
-│       └── settings_view.py  # VIP credentials, quota diagnostics, auto-repair
-│
-└── tests/                    # AUTOMATED TEST SUITE
-    ├── test_utils.py         # Utilities, sanitization, and duration formatting tests
-    ├── test_spotify_client.py# Metadata resolving and entity parsing tests
-    ├── test_archive.py       # SQLite archive and deduplication tests
-    └── test_gui.py           # PyQt6 GUI model and signal bridge tests
+├── gui/                      # LEGACY v1.x PYQT6 FLUENT PRESENTATION LAYER (Preserved)
+├── scripts/                  # Release automation & library maintenance scripts
+│   ├── publish_release.py    # GitHub Release v2.1.0 creator & multi-asset uploader
+│   └── retag_library_genres.py # Library genre enrichment helper
+├── assets/                   # Application icons (`icon.ico`, `icon.png`)
+└── tests/                    # Automated Python test suite (22 test modules, 140 unit tests)
 ```
 
 ---
@@ -246,31 +307,44 @@ Flacify/
 ## 💾 Installation
 
 ### Option 1: Standalone Windows Installer (Recommended)
-1. Download **`Flacify_Setup_v1.0.1.exe`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases).
-2. Run the installer wizard (installs per-user into `%LOCALAPPDATA%\Programs\Flacify` without requiring Administrator privileges).
-3. Launch **Flacify** from your Start Menu or Desktop shortcut.
+1. Download **`Flacify_Setup_v2.1.0.exe`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases).
+2. Close any running Flacify window or `python -m backend` process, then run the installer wizard (installs per-user into `%LOCALAPPDATA%\Programs\Flacify` without Administrator privileges while preserving your `%LOCALAPPDATA%\Flacify` database and settings).
+3. Launch **Flacify** from your Start Menu or Desktop shortcut (or launch **Flacify Web Server (LAN)** from the Start Menu for headless LAN serving).
 
-### Option 2: Running from Source
+### Option 2: Native Android Companion App (API 26+)
+1. Download **`Flacify_Android_v2.1.0.apk`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases) onto your Android phone (or install over USB/emulator via `adb install -r Flacify_Android_v2.1.0.apk`).
+2. Ensure your PC desktop app (or `python -m backend`) is running on the same Wi-Fi/LAN network with **Mobile Sync** enabled.
+3. Open **Flacify** on Android → **Sync** tab → scan the QR code shown in **Settings → Mobile Sync** on your PC (or tap the discovered mDNS host / emulator preset `10.0.2.2:8765`), enter your pairing token if configuring manually, and tap **Connect & Verify**.
+
+### Option 3: Running from Source
 
 #### Prerequisites
 - **Python 3.10+** (tested on Python 3.10 through 3.14 on Windows 10/11)
-- **Node.js** (required for dynamic ArvanCloud challenge bypass)
-- **FFmpeg** (bundled automatically in the installer; auto-downloadable via Settings in source mode)
+- **Node.js** & **Rust toolchain** (required only for building/running the `frontend/` UI or `desktop/` Tauri shell)
+- **FFmpeg** (auto-downloadable via Settings in source mode)
+- **Android Studio / JDK 17+** (required only for compiling the `android/` companion APK)
 
-#### Step-by-Step Setup
+#### Setup & Launch
 ```powershell
 # 1. Clone the repository
 git clone https://github.com/younes-qasempour/Spotify_downloader.git
 cd Spotify_downloader
 
-# 2. Create and activate a virtual environment
+# 2. Install Python dependencies
 python -m venv venv
 .\venv\Scripts\activate
-
-# 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Launch the application
+# 3. Build frontend SPA (optional, enables Web UI served by backend)
+cd frontend && npm.cmd install && npm.cmd run build && cd ..
+
+# 4a. Run Flacify v2.1 Web + LAN Sync Server
+python -m backend --open
+
+# 4b. Or run the Tauri v2 Desktop shell in dev mode
+cd desktop && npm.cmd install && npm.cmd run dev
+
+# 4c. Or run legacy v1.x PyQt6 GUI / Headless CLI
 python main.py
 ```
 
@@ -278,14 +352,11 @@ python main.py
 
 ## 💻 Usage Guide
 
-### 1. Graphical Interface (GUI)
-```powershell
-python main.py
-```
-- **Paste Spotify Link:** Copy any track, album, or playlist URL from Spotify and press `Ctrl+V` or paste into the top search bar.
-- **Analyze & Enqueue:** Resolves metadata instantly and populates the virtualized queue.
-- **Batch Download:** In the **Playlists** tab, save full playlists offline and download them in manageable batches (25, 50, 100 songs).
-- **Controls:** Start, Pause, Resume, or Retry Failed tracks at any time with live progress indicators.
+### 1. Desktop Studio, Web UI & Android Companion (v2.1.0)
+- **Paste or Share Spotify Links:** Paste any track, album, or playlist URL into Queue, or share a link directly from Android via **Send to Flacify PC**.
+- **Saved Playlists & Batch Controls:** Import huge playlists offline, enable Auto-Sync watches, and download in controlled batches.
+- **Studio Mini Player & Equalizer:** Press `Alt+M` to pop into the resizable floating Studio Mini Player with FFT visualizer, Karaoke lyrics, and 10-band EQ.
+- **Sync Lossless FLACs to Phone:** In Flacify Android's **Playlists** or **Sync** tab, toggle playlists for **Keep Offline** and run **Sync Selected** to stream original FLAC tracks, artwork, and lyrics over Wi-Fi.
 
 ### 2. Headless CLI Mode
 For servers, scheduled tasks, or scripting environments:
@@ -301,59 +372,92 @@ python main.py --headless "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYB
 
 ## ⚙️ Configuration & Settings
 
-All settings are configured via the in-app **Settings** view or stored in `%LOCALAPPDATA%\Flacify\config.json`:
+All settings are configured via the in-app **Settings** view or persisted in `%LOCALAPPDATA%\Flacify\config.json` (see [`config.example.json`](config.example.json)):
 
 | Setting Key | Default | Description |
 |-------------|---------|-------------|
 | `source_engine` | `"musilon"` | Primary audio source engine (`"musilon"`, `"melobot"`, `"ytdlp"`) |
-| `melobot.enabled` | `false` | Enables direct MTProto Telegram lossless & 320k downloading via `@melobot` |
-| `melobot.api_id` | `""` | Telegram API ID from my.telegram.org |
-| `melobot.api_hash` | `""` | Telegram API Hash from my.telegram.org |
-| `melobot.preferred_quality` | `"lossless"` | Preferred MeloBot quality (`"lossless"`, `"320"`, `"128"`) |
-| `melobot.allow_128k` | `false` | Allows falling back to 128 kbps if 320k or FLAC are unavailable |
+| `telegram.enabled` | `false` | Enables direct MTProto Telegram lossless & 320k downloading via `@melobot` |
+| `telegram.bot_username` | `"melobot"` | Target Telegram bot username |
+| `telegram.api_id` | `""` | Telegram API ID from my.telegram.org |
+| `telegram.api_hash` | `""` | Telegram API Hash from my.telegram.org |
+| `telegram.phone` | `""` | Telegram phone number for interactive auth |
+| `telegram.preferred_quality` | `"320"` | Preferred Telegram quality tier (`"flac"`, `"320"`, `"128"`) |
 | `musilon.enabled` | `true` | Enables high-speed lossless Musilon CDN downloads |
 | `musilon.username` | `""` | Registered Musilon email address |
 | `musilon.password` | `""` | Musilon account password |
 | `musilon.safe_mode` | `true` | Enforces human jitter & cooldown pacing to prevent rate limits |
 | `musilon.cooldown_min_sec` | `15` | Minimum cooldown seconds between consecutive Musilon downloads |
 | `musilon.cooldown_max_sec` | `35` | Maximum cooldown seconds between consecutive Musilon downloads |
-| `download.allow_fallback` | `true` | Automatically falls back to YouTube Music if lossless engines lack the track |
-| `download.output_dir` | `~/Music` | Base root directory for all music downloads |
+| `download.output_dir` | `~/Music/Flacify` | Base root directory for all music downloads |
+| `download.save_in_subfolders` | `false` | Saves tracks in per-playlist/album subfolders when `true`, or unified root folder when `false` |
 | `download.naming_template` | `{artist} - {title}` | File naming pattern for singles and playlists |
 | `download.album_naming_template` | `{track_num}. {artist} - {title}` | File naming pattern for album tracks |
-| `download.preferred_quality` | `lossless` | Preferred quality tier (`lossless`, `hires`, `high`, `standard`) |
-| `download.lyrics_mode` | `embedded_only` | Lyrics embedding mode (`embedded_only`, `both`, `disabled`) |
+| `download.preferred_quality` | `"320"` | Preferred quality tier (`"320"`, `"flac"`, `"hires"`, etc.) |
+| `download.allow_fallback` | `true` | Automatically falls back to YouTube Music if lossless engines lack the track |
+| `download.lyrics_mode` | `"embedded_only"` | Lyrics storage mode (`"embedded_only"`, `"lrc_only"`, `"both"`, `"disabled"`) |
+| `download.normalize_volume` | `true` | Enables loudness normalization target |
+| `download.target_lufs` | `-9.0` | Target loudness in LUFS |
+| `ui.eq_enabled` | `false` | Enables 10-band Web Audio equalizer (`ui.eq_preset`, `ui.eq_preamp`, `ui.eq_bass_boost`, `ui.eq_bands`) |
+| `playlists.auto_sync_on_startup` | `true` | Watches pinned playlists on startup (`auto_sync_interval_hours`, `auto_download_synced_tracks`) |
+| `mobile.lan_enabled` | `true` | Binds backend to LAN (`0.0.0.0`) and enables mDNS + mobile sync API |
+| `mobile.device_name` | `""` | Custom PC display name for QR/mDNS pairing (defaults to OS hostname) |
+| `mobile.pair_token` | `""` | Auto-generated secret bearer token required for LAN phone requests |
 
 ---
 
-## 📦 Compiling Standalone Executable & Installer
+## 📦 Compiling Standalone Executable, Installer & Android APK
 
-To build the standalone production executable and Inno Setup installer:
+### Windows Desktop Bundle & Installer (`v2.1.0`)
+Ensure Rust (`cargo` on `PATH`) and Inno Setup 6 (`ISCC.exe`) are installed, then run:
+```powershell
+python build_v2.py
+```
+This pipeline:
+1. Typechecks and builds the React + TypeScript frontend (`frontend/dist/`).
+2. Compiles the Tauri v2 desktop binary (`Flacify.exe`).
+3. Freezes the FastAPI + Core Python sidecar (`flacify-backend.exe`) using `backend.spec`.
+4. Bundles everything into `dist/Flacify-v2/` and compiles `dist/installer/Flacify_Setup_v2.1.0.exe` via `installer_v2.iss`.
+
+### Native Android Companion APK (`v2.1.0`)
+```powershell
+cd android
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+.\gradlew.bat assembleDebug
+```
+Outputs `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+### Legacy v1.x PyQt6 Build (Preserved)
 ```powershell
 python build_windows.py
 ```
-
-This automated pipeline:
-1. Validates and generates multi-resolution Windows icons (`assets/icon.ico`).
-2. Invokes **PyInstaller** using `app.spec` to create a slim, windowed `dist/Flacify` application bundle.
-3. Invokes **Inno Setup 6** (`ISCC.exe`) to generate `dist/installer/Flacify_Setup_v1.9.5.exe` with a complete uninstaller and mutex process guard.
 
 ---
 
 ## 🧪 Testing
 
-Run the automated test suite covering core utilities, Spotify resolving, archive deduplication, and GUI components:
 ```powershell
+# 1. Python Core + Backend + LAN Sync + Legacy GUI test suite (140 unit tests across 22 files)
 python -m unittest discover -s tests -p "test_*.py"
+
+# 2. Frontend TypeScript typecheck & production build
+cd frontend && npm.cmd run typecheck && npm.cmd run build && cd ..
+
+# 3. Tauri Rust check
+cd desktop && npm.cmd run check && cd ..
+
+# 4. Android unit tests & lint (25 unit tests across 9 suites)
+cd android && .\gradlew.bat testDebugUnitTest lintDebug && cd ..
 ```
 
 ---
 
 ## 🛡️ Security & Privacy
 
-- **Protected Secrets:** Account credentials, session cookies, and local database records are stored strictly in your local `%LOCALAPPDATA%\Flacify` directory.
+- **Protected Secrets:** Account credentials, pairing tokens, session cookies, and local database records are stored strictly in your local `%LOCALAPPDATA%\Flacify` directory.
+- **LAN & Loopback Isolation:** Remote Android clients must authenticate via `Authorization: Bearer <pair_token>` (or `X-Flacify-Token`), while host-sensitive endpoints (`/api/sync/pairing-qr`, `/api/sync/token/regenerate`, `/api/settings/open-folder`, LRC filesystem export, and OpenAPI docs) reject non-loopback callers.
 - **Git Shield:** `.gitignore` ensures that personal credentials, configuration overrides, local music files, and cache records are never committed to version control.
-- **Non-Admin Installation:** Installs per-user into the local app folder without requiring elevation or modifying system-level directories.
+- **Non-Admin Installation:** Installs per-user into `%LOCALAPPDATA%\Programs\Flacify` without requiring elevation or modifying system-level directories.
 
 ---
 

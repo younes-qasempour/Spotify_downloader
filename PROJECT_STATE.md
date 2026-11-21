@@ -2,6 +2,8 @@
 
 > **Note for Future AI Agents & Developers:**
 > Read this document first to avoid starting from scratch. It contains the exact architecture, solved edge cases, gotchas, verified test cases, and component layout.
+>
+> **v2.0–v2.1.0 Update (November 2026):** Flacify has expanded with a FastAPI/WebSocket backend (`backend/`), React 19 + TypeScript Web/PWA Studio (`frontend/`), Tauri v2 Windows desktop shell (`desktop/`), Wi-Fi/LAN sync API, and native Android companion app (`android/`). See **Section 39** at the bottom of this document for the current v2 architecture, endpoints, and build/test commands (Sections 1–38 document the underlying `core/` engine and legacy v1.x PyQt6 GUI history).
 
 ---
 
@@ -898,24 +900,61 @@ d:\Spotify-Downloader\
   4. **Verified via Unit Tests ([tests/test_queue_manager.py](file:///d:/Spotify-Downloader/tests/test_queue_manager.py)):**
      - Added `test_melobot_mode_suppresses_musilon_limit_prompt`, verifying that `on_musilon_limit_reached` is never invoked and downloads proceed to YouTube Music fallback without UI disruption. All 87 unit tests passing.
 
-### Run the GUI Application:
+### 39. Flacify v2.0–v2.1.0 Architecture, Desktop Studio, Wi-Fi Sync & Android Companion App (November 2026)
+
+- **v2.0 Desktop Studio & Web Architecture (`81f9ea8`, `791a433`, `88ece9c`, `68906f6`):**
+  - **Backend (`backend/`):** Added a thin FastAPI + WebSocket server wrapping headless `core/` managers without modifying `core/` CLI/legacy GUI contracts (`main.py` and `gui/` remain preserved). `backend/state.py` manages shared `ConfigManager`, `ArchiveManager`, `QueueManager`, `SpotifyClient`, background startup scanning, auto-sync scheduler, and WebSocket event dispatch (`backend/ws.py`). Routes live under `backend/routes/` (`queue.py`, `library.py`, `media.py`, `lyrics.py`, `playlists.py`, `settings.py`, `tools.py`, `sync.py`).
+  - **Frontend (`frontend/`):** React 19 + TypeScript + Tailwind CSS v4 SPA using Zustand (`appStore.ts`, `playerStore.ts`) and TanStack Query across 6 primary pages (`QueuePage`, `PlaylistsPage`, `PlaylistDetailPage`, `LibraryPage`, `ToolsPage`, `SettingsPage`), Web Audio 10-band EQ + spectrum analyzer (`lib/audioEngine.ts`), and production PWA serving via `backend/app.py`.
+  - **Tauri v2 Windows Desktop Shell (`desktop/`):** Frameless desktop window (`tauri.conf.json`), single-instance focus, tray menu controls (`src/lib.rs`), and automatic PyInstaller sidecar (`flacify-backend.exe`) / Python module fallback lifecycle (`src/backend_manager.rs`). Unified packaging orchestrated by `build_v2.py` + `backend.spec` + `installer_v2.iss`.
+
+- **v2.0.1 Studio Mini Player & Single-Folder Library Consolidation (`6a519f3`, `bbc116b`, `4018c26`):**
+  - **Resizable Studio Mini Player (`Alt+M`):** Implemented frameless always-on-top Tauri window commands (`enter_mini_player`, `exit_mini_player`, `resize_mini_player`, `set_mini_always_on_top`) with 3 responsive UI layouts (Micro Strip, Art Card, Studio Deck), live 60fps FFT visualizer, karaoke lyrics, queue switcher, and Quick EQ.
+  - **Single-Folder Deduplication:** Added unified `backend/track_lookup.py` ID/path resolution across `/api/media`, `/api/library`, and `/api/tools`, and updated defaults (`download.save_in_subfolders = False`) + DB consolidation to prevent duplicate cross-playlist track files.
+
+- **v2.1.0 Phase 1 — PC Wi-Fi/LAN Sync Server, QR/mDNS Pairing & Security Hardening (`5ff8909`, `1e24a46`, `61bd690`):**
+  - **LAN & Discovery (`backend/mdns.py`, `backend/__main__.py`):** Automatically binds `0.0.0.0:8765` when `mobile.lan_enabled` is `True`, manages persistent secret `mobile.pair_token`, detects reachable LAN/VPN IPs, and broadcasts `_flacify._tcp.local.` via `zeroconf` (race-safe monotonic `_generation` counter + `allow_name_change=True`).
+  - **Mobile Sync REST API (`backend/routes/sync.py`):**
+    - `GET /api/sync/info` & `GET /api/sync/pairing-qr` & `POST /api/sync/token/regenerate` (loopback-only secret exposure & QR/token regeneration; non-loopback clients must use `Authorization: Bearer <pair_token>` or `X-Flacify-Token`).
+    - `GET /api/sync/manifest`: High-speed gzip-compressed catalog/playlist/track manifest using single-pass `os.scandir()` file metadata caching.
+    - `HEAD`/`GET /api/sync/tracks/{track_id}/file` (supports `ETag`, HTTP `Range` / `If-Range` resumable lossless streaming), alongside `/api/media/cover/track/{track_id}` and `/api/lyrics/{track_id}`.
+    - `POST /api/sync/share`: Enqueues Spotify track/album/playlist links (including SSRF-safe `spotify.link` / `spoti.fi` unwrapping and regional `intl-xx/` URLs) sent from Android directly into the PC queue.
+  - **Security Hardening:** Auth middleware (`backend/app.py`) enforces bearer/token auth on `/api/*`, `/ws`, and `/docs`/`/openapi.json` for non-loopback requests (`GET /api/health` intentionally keeps `"api_version": "2.0"` while reporting current `"version"`).
+
+- **v2.1.0 Phase 2 — Native Android Companion App (`android/`, `4582aee`–`f789d0c`):**
+  - **Architecture:** Kotlin + Jetpack Compose + Material 3 + Navigation Compose (`FlacifyApp.kt`), Room v2 (`Entities.kt`, `FlacifyDao.kt`, `FlacifyDatabase.kt`), DataStore (`ConnectionSettingsStore.kt`), WorkManager (`FlacifySyncWorker.kt`, `PendingShareWorker.kt`), OkHttp (`FlacifyApiClient.kt`, `ResumableFileDownloader.kt`), CameraX + ZXing (`QrScannerDialog.kt`), Android `NsdManager` (`MdnsDiscoveryManager.kt`), Coil (`2.7.0`), and Media3 ExoPlayer (`FlacifyPlaybackService.kt`, `FlacifyPlayerController.kt`, `FlacifyLyricsExtractor.kt`, `LrcParser.kt`).
+  - **Offline Sync & UI:** Supports QR scanning, mDNS auto-discovery, emulator preset (`10.0.2.2:8765`), playlist offline toggles, resumable FLAC + artwork + lyrics download into app-private storage (`LocalMediaStorage.kt`), searchable/filterable offline Library (`LibraryScreen.kt`), Playlist views, persistent `MiniPlayerBar.kt` + `NowPlayingSheet.kt` (seekable synced lyrics + queue), and Android Share Sheet `ShareReceiverActivity.kt` with offline retry queue.
+  - **PyInstaller Freezing Note (`backend.spec`):** Includes `"ifaddr"` alongside `"zeroconf"` and `"qrcode"` so mDNS interface enumeration works inside frozen Windows `flacify-backend.exe`.
+
+### Run v2.1 Backend & Web UI (Development / LAN Server):
+```powershell
+python -m backend --open
+```
+
+### Run Tauri v2 Desktop App (Dev Mode):
+```powershell
+cd desktop && npm.cmd run dev
+```
+
+### Build v2.1.0 Desktop Bundle & Windows Installer:
+```powershell
+$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+python build_v2.py
+```
+
+### Build & Test Native Android Companion APK (`android/`):
+```powershell
+cd android
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug
+```
+
+### Run Full Python Test Suite (140 Tests):
+```powershell
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+### Run Legacy v1.x PyQt6 GUI / Headless CLI (Preserved):
 ```powershell
 python main.py
-```
-
-### Build the Standalone Windows Executable & Installer:
-```powershell
-python build_windows.py
-```
-
-### Run Headless CLI Download:
-```powershell
 python main.py --headless "https://open.spotify.com/track/<track_id>"
 ```
-
-### Validate Core Modules Without GUI:
-```powershell
-python -c "from core.spotify_client import SpotifyClient; c = SpotifyClient(); print(c.resolve('https://open.spotify.com/track/3AJwUDP919kvQ9QcozQPxg'))"
-```
-
-

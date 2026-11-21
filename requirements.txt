@@ -14,3 +14,7 @@ fastapi>=0.115.0
 uvicorn>=0.30.0
 websockets>=12.0
 httpx>=0.27.0
+
+# v2.1 Mobile Sync & Discovery Dependencies
+qrcode>=7.4.2
+zeroconf>=0.132.0
