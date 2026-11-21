@@ -126,7 +126,7 @@ def run_tests():
     # 5d. Test rename collection with physical directory on disk and DB sync
     temp_dir = tempfile.mkdtemp()
     orig_out_dir = config.get("download.output_dir", "")
-    config.set("download.output_dir", temp_dir)
+    config.set("download.output_dir", temp_dir, auto_save=False)
     try:
         old_folder_name = sanitize_filename("Renamed Chill Playlist", max_length=50)
         old_dir_path = os.path.join(temp_dir, old_folder_name)
@@ -173,7 +173,7 @@ def run_tests():
 
         print("Step 8d: Collection renamed successfully with physical disk directory move and database path sync verified.", flush=True)
     finally:
-        config.set("download.output_dir", orig_out_dir)
+        config.set("download.output_dir", orig_out_dir, auto_save=False)
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     # 6. Test delete playlist

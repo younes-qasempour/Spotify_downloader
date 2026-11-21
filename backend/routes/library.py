@@ -337,6 +337,8 @@ async def delete_library_track(
             logger.warning(f"Failed to delete file {file_path}: {exc}")
 
     backend.archive_manager.remove_downloaded_track(track_id)
+    if file_removed or (delete_file and file_path and not os.path.exists(file_path)):
+        backend.archive_manager.remove_downloaded_tracks_by_path(file_path)
     backend.events.emit_threadsafe("library_updated", {})
     backend.events.emit_threadsafe("playlists_updated", {})
     return {

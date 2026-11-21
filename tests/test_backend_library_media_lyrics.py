@@ -507,6 +507,213 @@ class TestBackendLibraryMediaLyrics(unittest.TestCase):
             self.assertTrue(lyr_resp.json()["has_lyrics"])
             self.assertEqual(lyr_resp.json()["lines"][0]["text"], "Dream on")
 
+    def test_duplicate_file_path_rows_deduplicated_in_library_and_stats(self):
+        fp = self._create_dummy_audio("Arctic Monkeys - 505.flac")
+        disk_size = os.path.getsize(fp)
+
+        # Row 1: Musilon in Creep Radio (generic album)
+        t1 = TrackMetadata(
+            id="58ge6dfP91o9oXMzq3XkIS",
+            title="505",
+            artists=["Arctic Monkeys"],
+            album="Spotify Playlist",
+            duration_ms=253586,
+            collection_type="playlist",
+            collection_name="Creep Radio",
+            genres=["Alternative Rock"],
+        )
+        # Row 2: Local Archive in another playlist collection with specific album
+        t2 = TrackMetadata(
+            id="0BxE4FqsDD1Ot4YuBXwAPp",
+            title="505",
+            artists=["Arctic Monkeys"],
+            album="505",
+            duration_ms=253586,
+            collection_type="playlist",
+            collection_name="Calm Relaxing Night",
+            genres=["Alternative Rock"],
+        )
+        # Row 3: Synthetic local_* scan row with empty genre & 0 duration in same Creep Radio collection
+        t3 = TrackMetadata(
+            id="local_69a213511a74eba5",
+            title="505",
+            artists=["Arctic Monkeys"],
+            album="505",
+            duration_ms=0,
+            collection_type="playlist",
+            collection_name="Creep Radio",
+            genres=[],
+        )
+
+        # Insert synthetic first to simulate rescan before or alongside real rows, and verify dedup
+        self.archive.add_track(t3, fp, "FLAC 16", "Local File")
+        self.archive.add_track(t2, fp, "Musilon FLAC 16", "Local Archive", genre="Alternative Rock")
+        self.archive.add_track(t1, fp, "Musilon FLAC 16", "Musilon", genre="Alternative Rock")
+
+        with TestClient(self.app) as client:
+            # All Songs must collapse sibling rows sharing fp to 1 track with richest metadata
+            tracks_resp = client.get("/api/library/tracks", params={"search": "505"})
+            self.assertEqual(tracks_resp.status_code, 200)
+            tracks = tracks_resp.json()["tracks"]
+            self.assertEqual(len(tracks), 1)
+            self.assertEqual(tracks[0]["spotify_id"], "58ge6dfP91o9oXMzq3XkIS")
+            self.assertEqual(tracks[0]["duration_ms"], 253586)
+            self.assertEqual(tracks[0]["album"], "505")
+            self.assertEqual(tracks[0]["quality_badge"], "Musilon FLAC 16")
+
+            # Library stats must count unique physical file size once, not 2x/3x
+            stats_resp = client.get("/api/library/stats")
+            self.assertEqual(stats_resp.status_code, 200)
+            self.assertEqual(stats_resp.json()["total_tracks"], 1)
+            self.assertEqual(stats_resp.json()["total_bytes"], disk_size)
+
+            # Virtual playlists remain intact with deduplicated counts
+            pl_resp = client.get("/api/library/playlists")
+            self.assertEqual(pl_resp.status_code, 200)
+            pl_names = {p["name"]: p["track_count"] for p in pl_resp.json()["playlists"]}
+            self.assertEqual(pl_names.get("Creep Radio"), 1)
+            self.assertEqual(pl_names.get("Calm Relaxing Night"), 1)
+
+            # Deleting with delete_file=true must clean all sibling rows referencing that file
+            del_resp = client.delete(
+                "/api/library/tracks/58ge6dfP91o9oXMzq3XkIS",
+                params={"delete_file": "true"},
+            )
+            self.assertEqual(del_resp.status_code, 200)
+            self.assertTrue(del_resp.json()["file_removed"])
+            self.assertEqual(client.get("/api/library/stats").json()["total_tracks"], 0)
+
+    def test_consolidate_and_organize_library_moves_stray_files_and_cleans_db(self):
+        # 1. File in a subfolder inside output_dir
+        sub_fp = self._create_dummy_audio(os.path.join("SubPlaylist", "Sub Track.flac"))
+        # 2. File in an external stray temp directory outside output_dir
+        stray_dir = tempfile.mkdtemp(prefix="flacify_stray_src_")
+        try:
+            stray_fp = os.path.join(stray_dir, "Stray Song.flac")
+            with open(stray_fp, "wb") as fh:
+                fh.write(self._valid_flac_bytes())
+            # 3. File already in root output_dir with duplicate rows (real + local_ + same collection)
+            root_fp = self._create_dummy_audio("Root Song.flac")
+
+            t_sub = TrackMetadata(
+                id="sub_id_1",
+                title="Sub Track",
+                artists=["Sub Artist"],
+                album="Sub Alb",
+                duration_ms=190000,
+                collection_type="playlist",
+                collection_name="SubPlaylist",
+            )
+            t_stray = TrackMetadata(
+                id="stray_id_1",
+                title="Stray Song",
+                artists=["Stray Artist"],
+                album="Stray Alb",
+                duration_ms=210000,
+                collection_type="playlist",
+                collection_name="Mixed",
+            )
+            t_root_main = TrackMetadata(
+                id="root_id_1",
+                title="Root Song",
+                artists=["Root Artist"],
+                album="Spotify Playlist",
+                duration_ms=225000,
+                collection_type="playlist",
+                collection_name="Mixed",
+                genres=["Indie"],
+            )
+            t_root_dup = TrackMetadata(
+                id="root_id_dup",
+                title="Root Song",
+                artists=["Root Artist"],
+                album="Real Album",
+                duration_ms=225000,
+                collection_type="playlist",
+                collection_name="Mixed",
+            )
+            t_missing = TrackMetadata(
+                id="missing_id_1",
+                title="Gone Track",
+                artists=["Ghost"],
+                album="Ghost Alb",
+            )
+
+            self.archive.add_track(t_sub, sub_fp, "FLAC 16", "Musilon")
+            self.archive.add_track(t_stray, stray_fp, "FLAC 16", "Musilon")
+            self.archive.add_track(t_root_main, root_fp, "FLAC 16", "Musilon", genre="Indie")
+            # Insert duplicate same-collection row directly via SQL to simulate legacy DB state
+            with self.archive.connection() as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT INTO downloaded_tracks
+                        (spotify_id, title, artist, album, duration_ms, file_path, file_size, quality_badge, source_type, collection_name, collection_type, genre)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        ("root_id_dup", "Root Song", "Root Artist", "Real Album", 225000, root_fp, 163840, "FLAC 16", "Local Archive", "Mixed", "playlist", ""),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO downloaded_tracks
+                        (spotify_id, title, artist, album, duration_ms, file_path, file_size, quality_badge, source_type, collection_name, collection_type, genre)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        ("local_dead_1", "Do Me Good", "Amy Winehouse", "", 0, os.path.join(self.tmp_dir, "Amy Winehouse - Do Me Good.opus.norm_tmp.opus"), 1024, "YTM Opus", "Local File", "downloads", "track", ""),
+                    )
+
+            self.archive.save_playlist(
+                "Mixed",
+                "https://open.spotify.com/playlist/plmix",
+                "",
+                [t_stray, t_missing],
+                playlist_id="plmix",
+            )
+            self.archive.mark_saved_track_downloaded("stray_id_1", stray_fp, "FLAC 16", "Musilon")
+            self.archive.mark_saved_track_downloaded("missing_id_1", os.path.join(stray_dir, "missing.flac"), "FLAC 16", "Musilon")
+
+            self.fake_config.set("download.save_in_subfolders", True)
+            with TestClient(self.app) as client:
+                resp = client.post("/api/tools/maintenance/organize", json={"enforce_single_folder": True})
+                self.assertEqual(resp.status_code, 200)
+                data = resp.json()
+                self.assertEqual(data["files_moved"], 2)
+                self.assertEqual(data["missing_db_rows_removed"], 1)
+                self.assertGreaterEqual(data["duplicate_db_rows_removed"], 1)
+                self.assertEqual(data["saved_tracks_reset"], 1)
+                self.assertFalse(self.fake_config.get("download.save_in_subfolders"))
+
+                # Every surviving downloaded_tracks file_path is directly inside self.tmp_dir
+                with self.archive.connection() as conn:
+                    dt_rows = conn.execute("SELECT spotify_id, file_path, album, genre FROM downloaded_tracks").fetchall()
+                    self.assertEqual(len(dt_rows), 3)
+                    for r in dt_rows:
+                        self.assertEqual(
+                            os.path.normcase(os.path.dirname(r["file_path"])),
+                            os.path.normcase(os.path.normpath(self.tmp_dir)),
+                        )
+                        self.assertTrue(os.path.isfile(r["file_path"]))
+                        if os.path.basename(r["file_path"]) == "Root Song.flac":
+                            self.assertEqual(r["album"], "Real Album")
+                            self.assertEqual(r["genre"], "Indie")
+
+                    sp_stray = conn.execute(
+                        "SELECT status, file_path FROM saved_playlist_tracks WHERE spotify_id = 'stray_id_1'"
+                    ).fetchone()
+                    self.assertEqual(sp_stray["status"], "downloaded")
+                    self.assertEqual(
+                        os.path.normcase(sp_stray["file_path"]),
+                        os.path.normcase(os.path.normpath(os.path.join(self.tmp_dir, "Stray Song.flac"))),
+                    )
+
+                    sp_miss = conn.execute(
+                        "SELECT status, file_path FROM saved_playlist_tracks WHERE spotify_id = 'missing_id_1'"
+                    ).fetchone()
+                    self.assertEqual(sp_miss["status"], "pending")
+                    self.assertEqual(sp_miss["file_path"], "")
+        finally:
+            shutil.rmtree(stray_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

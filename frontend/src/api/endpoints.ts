@@ -21,6 +21,7 @@ import type {
   MusilonPrompt,
   MusilonTestResponse,
   NormalizeLibraryResponse,
+  OrganizeLibraryResponse,
   PlaylistDetailResponse,
   PlaylistsListResponse,
   QueueItem,
@@ -686,6 +687,16 @@ export const api = {
       apiFetch<RetagGenresResponse>("/api/tools/maintenance/retag-genres", {
         method: "POST",
         body: JSON.stringify(payload),
+      }),
+    organizeLibrary: (
+      payload: { root_dir?: string; enforce_single_folder?: boolean } = {}
+    ) =>
+      apiFetch<OrganizeLibraryResponse>("/api/tools/maintenance/organize", {
+        method: "POST",
+        body: JSON.stringify({
+          enforce_single_folder: true,
+          ...payload,
+        }),
       }),
     exportSongs: (payload: {
       destination_dir: string;

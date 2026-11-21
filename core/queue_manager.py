@@ -480,7 +480,35 @@ class DownloadQueueManager:
                 target_dest = os.path.normpath(os.path.join(output_dir, f"{base_name}{file_ext}"))
 
                 save_in_subfolders = config.get("download.save_in_subfolders", False)
+                same_dir = (
+                    os.path.normcase(os.path.dirname(os.path.abspath(src_file)))
+                    == os.path.normcase(os.path.abspath(output_dir))
+                )
                 if not save_in_subfolders or os.path.abspath(src_file) == os.path.abspath(target_dest):
+                    # If single-folder mode is active and the reusable file sits outside output_dir,
+                    # relocate it into output_dir so all downloaded tracks converge into one folder.
+                    if not save_in_subfolders and not same_dir:
+                        try:
+                            os.makedirs(output_dir, exist_ok=True)
+                            flat_dest = os.path.normpath(os.path.join(output_dir, os.path.basename(src_file)))
+                            if os.path.isfile(flat_dest):
+                                flat_dest = target_dest
+                            if not os.path.isfile(flat_dest):
+                                shutil.move(src_file, flat_dest)
+                                old_norm = src_file
+                                src_file = flat_dest
+                                with self.archive.connection() as conn:
+                                    with conn:
+                                        conn.execute(
+                                            "UPDATE downloaded_tracks SET file_path = ? WHERE file_path = ? COLLATE NOCASE",
+                                            (flat_dest, old_norm),
+                                        )
+                                        conn.execute(
+                                            "UPDATE saved_playlist_tracks SET file_path = ? WHERE file_path = ? COLLATE NOCASE",
+                                            (flat_dest, old_norm),
+                                        )
+                        except Exception as move_err:
+                            logger.debug(f"Could not relocate reused archive file into single folder: {move_err}")
                     # Same exact file in the destination folder
                     item.output_path = src_file
                     item.quality_badge = archived.get("quality_badge") or self.archive.infer_badge_from_file(src_file)[0] or "FLAC 16"

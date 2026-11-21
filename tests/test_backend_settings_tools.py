@@ -534,10 +534,12 @@ class TestBackendSettingsAndTools(unittest.TestCase):
                 patch.object(self.archive, "purge_corrupt_and_cleanup_library", return_value={"purged_corrupt_files": 0, "relocated_covers": 0, "reorganized_lyrics": 0}),
                 patch.object(self.archive, "repair_library", return_value={"scanned": 1, "healed_covers": 1, "healed_lyrics": 0}),
                 patch.object(self.archive, "retag_all_library_genres", return_value={"scanned": 1, "retagged": 1, "already_tagged": 0, "errors": 0}),
+                patch.object(self.archive, "consolidate_and_organize_library", return_value={"target_dir": self.tmp_dir, "files_moved": 0, "duplicate_files_removed": 0, "duplicate_db_rows_removed": 0, "missing_db_rows_removed": 0, "paths_normalized": 0, "metadata_enriched": 0, "saved_tracks_repaired": 0, "saved_tracks_reset": 0, "empty_dirs_removed": 0, "errors": 0}),
             ):
                 self.assertEqual(client.post("/api/tools/maintenance/clean").status_code, 200)
                 self.assertEqual(client.post("/api/tools/maintenance/repair").json()["healed_covers"], 1)
                 self.assertEqual(client.post("/api/tools/maintenance/retag-genres").json()["retagged"], 1)
+                self.assertEqual(client.post("/api/tools/maintenance/organize").json()["target_dir"], self.tmp_dir)
 
             # 6. Export Songs & Export M3U8 (real file copy + M3U8 generation)
             export_dest = os.path.join(self.tmp_dir, "exported")

@@ -519,6 +519,20 @@ export interface CleanLibraryResponse {
   reorganized_lyrics: number;
 }
 
+export interface OrganizeLibraryResponse {
+  target_dir: string;
+  files_moved: number;
+  duplicate_files_removed: number;
+  duplicate_db_rows_removed: number;
+  missing_db_rows_removed: number;
+  paths_normalized: number;
+  metadata_enriched: number;
+  saved_tracks_repaired: number;
+  saved_tracks_reset: number;
+  empty_dirs_removed: number;
+  errors: number;
+}
+
 export interface RepairLibraryResponse {
   scanned: number;
   missing_covers_found: number;

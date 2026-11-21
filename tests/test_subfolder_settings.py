@@ -14,13 +14,13 @@ class TestSubfolderSettings(unittest.TestCase):
         self.test_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.test_dir, "test_archive.db")
         self.archive = ArchiveManager(db_path=self.db_path)
-        config.set("download.output_dir", self.test_dir)
-        config.set("download.save_in_subfolders", False)
+        config.set("download.output_dir", self.test_dir, auto_save=False)
+        config.set("download.save_in_subfolders", False, auto_save=False)
 
     def tearDown(self):
         if self.original_output_dir:
-            config.set("download.output_dir", self.original_output_dir)
-        config.set("download.save_in_subfolders", self.original_subfolders)
+            config.set("download.output_dir", self.original_output_dir, auto_save=False)
+        config.set("download.save_in_subfolders", self.original_subfolders, auto_save=False)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_save_in_subfolders_toggle(self):
@@ -40,7 +40,7 @@ class TestSubfolderSettings(unittest.TestCase):
         base_output_dir = r"D:\Spotify-Downloader\downloads"
 
         # When save_in_subfolders is False
-        config.set("download.save_in_subfolders", False)
+        config.set("download.save_in_subfolders", False, auto_save=False)
         save_in_subfolders = config.get("download.save_in_subfolders", False)
         subfolder = getattr(track, "target_folder", "") if save_in_subfolders else ""
         self.assertEqual(subfolder, "")
@@ -48,7 +48,7 @@ class TestSubfolderSettings(unittest.TestCase):
         self.assertEqual(output_dir, base_output_dir)
 
         # When save_in_subfolders is True
-        config.set("download.save_in_subfolders", True)
+        config.set("download.save_in_subfolders", True, auto_save=False)
         save_in_subfolders = config.get("download.save_in_subfolders", False)
         subfolder = getattr(track, "target_folder", "") if save_in_subfolders else ""
         self.assertEqual(subfolder, "My Playlist")
@@ -56,7 +56,7 @@ class TestSubfolderSettings(unittest.TestCase):
         self.assertEqual(output_dir, os.path.join(base_output_dir, "My Playlist"))
 
         # Restore default
-        config.set("download.save_in_subfolders", False)
+        config.set("download.save_in_subfolders", False, auto_save=False)
 
     def test_m3u8_central_playlists_folder(self):
         # Create audio files in central download folder

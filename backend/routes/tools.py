@@ -70,6 +70,11 @@ class LibraryToolRequest(BaseModel):
     root_dir: Optional[str] = None
 
 
+class OrganizeLibraryRequest(BaseModel):
+    root_dir: Optional[str] = None
+    enforce_single_folder: bool = True
+
+
 class EqualizerConfigRequest(BaseModel):
     enabled: Optional[bool] = None
     preset: Optional[str] = None
@@ -736,6 +741,27 @@ async def retag_library_genres(
         progress_callback=_cb,
     )
     backend.events.emit_threadsafe("library_updated", {})
+    return stats
+
+
+@router.post("/maintenance/organize")
+async def organize_library(
+    request: Request, body: Optional[OrganizeLibraryRequest] = None
+):
+    backend = _get_backend(request)
+    req = body or OrganizeLibraryRequest()
+    root_dir = _get_root_dir(backend, req.root_dir)
+    if req.enforce_single_folder:
+        backend.config.set("download.save_in_subfolders", False)
+        if hasattr(backend.config, "save") and callable(backend.config.save):
+            backend.config.save()
+
+    stats = await asyncio.to_thread(
+        backend.archive_manager.consolidate_and_organize_library,
+        target_dir=root_dir,
+    )
+    backend.events.emit_threadsafe("library_updated", {})
+    backend.events.emit_threadsafe("playlists_updated", {})
     return stats
 
 

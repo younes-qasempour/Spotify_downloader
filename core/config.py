@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -310,10 +311,20 @@ class ConfigManager:
         current_version = self.data.get("version", 1)
         self.data["version"] = max(current_version, DEFAULT_CONFIG.get("version", 1))
 
-        # Ensure output_dir is never empty or relative (e.g. 'downloads')
+        # Ensure output_dir is never empty, relative, or pointing inside OS temp dir
         download_cfg = self.data.setdefault("download", {})
         out_dir = str(download_cfg.get("output_dir", "")).strip()
-        if not out_dir or out_dir.lower() == "downloads" or not os.path.isabs(out_dir):
+        is_temp_dir = False
+        if out_dir and os.path.isabs(out_dir):
+            try:
+                norm_out = os.path.normcase(os.path.abspath(out_dir))
+                norm_tmp = os.path.normcase(os.path.abspath(tempfile.gettempdir()))
+                is_temp_dir = os.path.commonpath([norm_out, norm_tmp]) == norm_tmp
+            except ValueError:
+                is_temp_dir = False
+        if not out_dir or out_dir.lower() == "downloads" or not os.path.isabs(out_dir) or is_temp_dir:
+            if is_temp_dir:
+                logger.warning(f"Detected temporary output_dir '{out_dir}'; restoring default download directory.")
             download_cfg["output_dir"] = os.path.normpath(str(get_default_download_dir()))
 
     def _deep_merge(self, base: dict, override: dict) -> dict:

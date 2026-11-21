@@ -169,15 +169,20 @@ export function DownloadsFormatsSection({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-          <label className="flex items-center justify-between rounded-xl border border-white/[0.07] bg-white/[0.02] px-3.5 py-2.5 text-xs text-zinc-200 cursor-pointer">
-            <span>Organize Playlists & Albums into Subfolders</span>
+          <label className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] px-3.5 py-2.5 text-xs text-zinc-200 cursor-pointer">
+            <div>
+              <div>Organize Playlists & Albums into Subfolders</div>
+              <div className="text-[11px] text-zinc-400">
+                Off = all downloads saved into one single folder
+              </div>
+            </div>
             <input
               type="checkbox"
               checked={dl.save_in_subfolders}
               onChange={(e) =>
                 void onPatch({ "download.save_in_subfolders": e.target.checked })
               }
-              className="h-4 w-4 accent-emerald-500"
+              className="h-4 w-4 shrink-0 accent-emerald-500"
             />
           </label>
 

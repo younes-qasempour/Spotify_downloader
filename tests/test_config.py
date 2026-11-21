@@ -118,6 +118,14 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["ui.theme"], "Light")
         self.assertTrue("ui.theme" in cfg)
 
+    def test_migrate_rejects_temp_output_dir(self):
+        with open(self.tmp.name, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "download": {"output_dir": os.path.join(tempfile.gettempdir(), "tmp_leak_123")}}, f)
+        ConfigManager._instance = None
+        cfg = ConfigManager(config_path=self.tmp.name)
+        out_dir = cfg.get("download.output_dir", "")
+        self.assertNotIn("tmp_leak_123", out_dir)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -155,6 +155,100 @@ class ArchiveManager:
         self._db_lock = threading.RLock()
         self._init_db()
 
+    _GENERIC_ALBUMS = frozenset({"", "spotify playlist", "singles", "unknown album", "downloads"})
+
+    @staticmethod
+    def _is_generic_album(album: Any) -> bool:
+        return str(album or "").strip().lower() in ArchiveManager._GENERIC_ALBUMS
+
+    @staticmethod
+    def _norm_path_key(file_path: Any, fallback_id: Any = "") -> str:
+        fp = str(file_path or "").strip()
+        if not fp:
+            return f"__id__{fallback_id or ''}"
+        return os.path.normcase(os.path.normpath(fp))
+
+    @classmethod
+    def _row_richness_key(cls, row: Dict[str, Any]) -> Tuple[int, int, int, int, int, int, int, str]:
+        sid = str(row.get("spotify_id") or "")
+        src = str(row.get("source_type") or "").strip()
+        badge = str(row.get("quality_badge") or "").upper()
+        dur = int(row.get("duration_ms") or 0)
+        genre = str(row.get("genre") or "").strip()
+        album = str(row.get("album") or "")
+        ext = os.path.splitext(str(row.get("file_path") or ""))[1].lower()
+        if "24" in badge:
+            q_tier = 6
+        elif ext == ".flac" or "FLAC" in badge:
+            q_tier = 5
+        elif ext == ".wav" or "WAV" in badge:
+            q_tier = 4
+        elif "320" in badge or ext == ".mp3":
+            q_tier = 3
+        elif ext in (".opus", ".m4a") or "OPUS" in badge or "M4A" in badge:
+            q_tier = 2
+        elif badge:
+            q_tier = 1
+        else:
+            q_tier = 0
+        return (
+            1 if (sid and not sid.startswith("local_")) else 0,
+            1 if src not in ("", "Local File", "Local Archive") else 0,
+            1 if src != "Local File" else 0,
+            1 if dur > 0 else 0,
+            1 if bool(genre) else 0,
+            0 if cls._is_generic_album(album) else 1,
+            q_tier,
+            str(row.get("downloaded_at") or ""),
+        )
+
+    @classmethod
+    def _dedupe_track_rows(cls, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Collapses rows sharing the same physical file_path into one canonical row,
+        selecting the richest metadata record and merging missing fields from siblings.
+        """
+        if len(rows) <= 1:
+            return rows
+
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        order: List[str] = []
+        for row in rows:
+            key = cls._norm_path_key(row.get("file_path"), row.get("spotify_id"))
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(row)
+
+        deduped: List[Dict[str, Any]] = []
+        for key in order:
+            siblings = groups[key]
+            if len(siblings) == 1:
+                deduped.append(siblings[0])
+                continue
+            winner = dict(max(siblings, key=cls._row_richness_key))
+            for sib in siblings:
+                if (winner.get("duration_ms") or 0) <= 0 and (sib.get("duration_ms") or 0) > 0:
+                    winner["duration_ms"] = sib["duration_ms"]
+                if not (winner.get("genre") or "").strip() and (sib.get("genre") or "").strip():
+                    winner["genre"] = sib["genre"]
+                if cls._is_generic_album(winner.get("album")) and not cls._is_generic_album(sib.get("album")):
+                    winner["album"] = sib["album"]
+                if not (winner.get("isrc") or "").strip() and (sib.get("isrc") or "").strip():
+                    winner["isrc"] = sib["isrc"]
+                if (winner.get("track_number") or 0) <= 0 and (sib.get("track_number") or 0) > 0:
+                    winner["track_number"] = sib["track_number"]
+                if (sib.get("file_size") or 0) > (winner.get("file_size") or 0):
+                    winner["file_size"] = sib["file_size"]
+                if (winner.get("artist") or "") in ("", "Unknown Artist") and (sib.get("artist") or "") not in ("", "Unknown Artist"):
+                    winner["artist"] = sib["artist"]
+                if (winner.get("source_type") or "") in ("", "Local File") and (sib.get("source_type") or "") not in ("", "Local File", "Local Archive"):
+                    winner["source_type"] = sib["source_type"]
+                    if sib.get("quality_badge"):
+                        winner["quality_badge"] = sib["quality_badge"]
+            deduped.append(winner)
+        return deduped
+
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
@@ -431,9 +525,43 @@ class ArchiveManager:
                 file_size = 0
 
         genre_val = genre or getattr(track, "genre_str", "") or ""
+        title_val = track.title
+        artist_val = track.artist_str
+        album_val = track.album or ""
+        dur_val = int(getattr(track, "duration_ms", 0) or 0)
+        isrc_val = track.isrc or ""
+        coll_name = getattr(track, "collection_name", "") or ""
+        coll_type = getattr(track, "collection_type", "track") or "track"
+        track_num_val = getattr(track, "track_number", 1) or 1
+        disc_num_val = getattr(track, "disc_number", 1) or 1
+        is_local_id = str(track.id or "").startswith("local_")
+
         try:
             with self.connection() as conn:
                 with conn:
+                    existing_same_fp = conn.execute(
+                        "SELECT * FROM downloaded_tracks WHERE file_path = ? COLLATE NOCASE",
+                        (norm_path,),
+                    ).fetchall()
+                    if is_local_id and any(not str(r["spotify_id"] or "").startswith("local_") for r in existing_same_fp):
+                        # A real Spotify track record already owns this physical file; avoid adding a duplicate local_ row.
+                        if genre_val:
+                            conn.execute(
+                                "UPDATE downloaded_tracks SET genre = ? WHERE file_path = ? COLLATE NOCASE AND (genre IS NULL OR TRIM(genre) = '')",
+                                (genre_val, norm_path),
+                            )
+                        return True
+
+                    for r in existing_same_fp:
+                        if dur_val <= 0 and (r["duration_ms"] or 0) > 0:
+                            dur_val = int(r["duration_ms"])
+                        if not genre_val and (r["genre"] or "").strip():
+                            genre_val = r["genre"].strip()
+                        if self._is_generic_album(album_val) and not self._is_generic_album(r["album"]):
+                            album_val = r["album"]
+                        if not isrc_val and (r["isrc"] or "").strip():
+                            isrc_val = r["isrc"].strip()
+
                     conn.execute("""
                         INSERT OR REPLACE INTO downloaded_tracks (
                             spotify_id, isrc, title, artist, album, duration_ms,
@@ -443,22 +571,39 @@ class ArchiveManager:
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     """, (
                         track.id,
-                        track.isrc or "",
-                        track.title,
-                        track.artist_str,
-                        track.album or "",
-                        track.duration_ms,
-                        getattr(track, "track_number", 1) or 1,
-                        getattr(track, "disc_number", 1) or 1,
+                        isrc_val,
+                        title_val,
+                        artist_val,
+                        album_val,
+                        dur_val,
+                        track_num_val,
+                        disc_num_val,
                         norm_path,
                         file_size,
                         quality_badge,
                         source_type,
-                        getattr(track, "collection_name", ""),
-                        getattr(track, "collection_type", "track"),
+                        coll_name,
+                        coll_type,
                         genre_val
                     ))
-                logger.debug(f"Archived track '{track.title}' (track #{getattr(track, 'track_number', 1)}) -> {norm_path} [genre: {genre_val}]")
+                    if not is_local_id:
+                        # Remove stale local_* synthetic rows pointing to this exact file
+                        conn.execute(
+                            "DELETE FROM downloaded_tracks WHERE spotify_id LIKE 'local_%' AND file_path = ? COLLATE NOCASE",
+                            (norm_path,),
+                        )
+                        # Remove redundant rows in the exact same collection pointing to the same physical file
+                        conn.execute(
+                            """
+                            DELETE FROM downloaded_tracks
+                            WHERE spotify_id != ?
+                              AND file_path = ? COLLATE NOCASE
+                              AND LOWER(COALESCE(collection_name, '')) = LOWER(?)
+                              AND COALESCE(collection_type, '') = ?
+                            """,
+                            (track.id, norm_path, coll_name, coll_type),
+                        )
+                logger.debug(f"Archived track '{track.title}' (track #{track_num_val}) -> {norm_path} [genre: {genre_val}]")
                 return True
         except Exception as e:
             logger.error(f"Failed to record track in archive: {e}")
@@ -648,16 +793,18 @@ class ArchiveManager:
                 sql += " ORDER BY downloaded_at DESC"
 
                 cur = conn.execute(sql, tuple(params))
-                return [dict(row) for row in cur.fetchall()]
+                return self._dedupe_track_rows([dict(row) for row in cur.fetchall()])
         except Exception as e:
             logger.error(f"Failed to fetch archive tracks: {e}")
             return []
 
     def get_track_count(self) -> int:
-        """Returns total valid tracks stored in archive."""
+        """Returns total unique valid tracks stored in archive."""
         try:
             with self.connection() as conn:
-                cur = conn.execute("SELECT COUNT(*) FROM downloaded_tracks")
+                cur = conn.execute(
+                    "SELECT COUNT(DISTINCT COALESCE(NULLIF(LOWER(file_path), ''), spotify_id)) FROM downloaded_tracks"
+                )
                 return cur.fetchone()[0]
         except Exception:
             return 0
@@ -668,7 +815,13 @@ class ArchiveManager:
             with self.connection() as conn:
                 cur = conn.execute("""
                     SELECT 
-                        COUNT(*) as total_tracks,
+                        (
+                            SELECT COUNT(*) FROM (
+                                SELECT COALESCE(NULLIF(LOWER(file_path), ''), spotify_id) as fp_key
+                                FROM downloaded_tracks
+                                GROUP BY fp_key
+                            )
+                        ) as total_tracks,
                         COUNT(DISTINCT CASE WHEN (collection_type = 'playlist' OR (collection_name IS NOT NULL AND collection_name != ''))
                                              AND (collection_type IS NULL OR collection_type != 'album')
                                              AND LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles')) NOT IN (
@@ -682,7 +835,13 @@ class ArchiveManager:
                                                  'spotify playlist', 'singles', 'unknown album', 'downloads'
                                              )
                                         THEN LOWER(COALESCE(NULLIF(album, ''), collection_name)) END) as total_albums,
-                        COALESCE(SUM(file_size), 0) as total_bytes
+                        (
+                            SELECT COALESCE(SUM(max_size), 0) FROM (
+                                SELECT MAX(COALESCE(file_size, 0)) as max_size
+                                FROM downloaded_tracks
+                                GROUP BY COALESCE(NULLIF(LOWER(file_path), ''), spotify_id)
+                            )
+                        ) as total_bytes
                     FROM downloaded_tracks
                 """)
                 row = cur.fetchone()
@@ -713,21 +872,33 @@ class ArchiveManager:
             with self.connection() as conn:
                 cur = conn.execute("""
                     SELECT 
-                        COALESCE(NULLIF(collection_name, ''), 'Singles') as name,
-                        collection_type,
+                        col_name as name,
+                        COALESCE(MAX(CASE WHEN collection_type = 'playlist' THEN 'playlist' END), MAX(collection_type)) as collection_type,
                         COUNT(*) as track_count,
                         COALESCE(SUM(file_size), 0) as total_size,
                         MIN(file_path) as sample_file,
                         MAX(downloaded_at) as latest_download,
                         GROUP_CONCAT(DISTINCT genre) as all_genres
-                    FROM downloaded_tracks
-                    WHERE (collection_type IS NULL OR collection_type != 'album')
-                      AND LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles')) NOT IN (
-                          SELECT DISTINCT LOWER(COALESCE(NULLIF(album, ''), collection_name))
-                          FROM downloaded_tracks
-                          WHERE collection_type = 'album'
-                      )
-                    GROUP BY LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles'))
+                    FROM (
+                        SELECT
+                            COALESCE(NULLIF(collection_name, ''), 'Singles') as col_name,
+                            LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles')) as col_key,
+                            COALESCE(NULLIF(LOWER(file_path), ''), spotify_id) as fp_key,
+                            MAX(collection_type) as collection_type,
+                            MAX(COALESCE(file_size, 0)) as file_size,
+                            MIN(file_path) as file_path,
+                            MAX(downloaded_at) as downloaded_at,
+                            GROUP_CONCAT(DISTINCT NULLIF(genre, '')) as genre
+                        FROM downloaded_tracks
+                        WHERE (collection_type IS NULL OR collection_type != 'album')
+                          AND LOWER(COALESCE(NULLIF(collection_name, ''), 'Singles')) NOT IN (
+                              SELECT DISTINCT LOWER(COALESCE(NULLIF(album, ''), collection_name))
+                              FROM downloaded_tracks
+                              WHERE collection_type = 'album'
+                          )
+                        GROUP BY col_key, fp_key
+                    )
+                    GROUP BY col_key
                     ORDER BY latest_download DESC
                 """)
                 rows = cur.fetchall()
@@ -796,7 +967,7 @@ class ArchiveManager:
             with self.connection() as conn:
                 cur = conn.execute("""
                     SELECT 
-                        COALESCE(NULLIF(album, ''), collection_name) as name,
+                        alb_name as name,
                         COUNT(*) as track_count,
                         COALESCE(SUM(file_size), 0) as total_size,
                         MIN(file_path) as sample_file,
@@ -805,17 +976,28 @@ class ArchiveManager:
                         (
                             SELECT t2.artist 
                             FROM downloaded_tracks t2 
-                            WHERE LOWER(COALESCE(NULLIF(t2.album, ''), t2.collection_name)) = LOWER(COALESCE(NULLIF(t1.album, ''), t1.collection_name))
+                            WHERE LOWER(COALESCE(NULLIF(t2.album, ''), t2.collection_name)) = sub.alb_key
                             GROUP BY t2.artist 
                             ORDER BY COUNT(*) DESC, MIN(t2.track_number) ASC 
                             LIMIT 1
                         ) as primary_artist
-                    FROM downloaded_tracks t1
-                    WHERE collection_type = 'album'
-                      AND LOWER(COALESCE(NULLIF(album, ''), collection_name)) NOT IN (
-                          'spotify playlist', 'singles', 'unknown album', 'downloads'
-                      )
-                    GROUP BY LOWER(COALESCE(NULLIF(album, ''), collection_name))
+                    FROM (
+                        SELECT
+                            COALESCE(NULLIF(album, ''), collection_name) as alb_name,
+                            LOWER(COALESCE(NULLIF(album, ''), collection_name)) as alb_key,
+                            COALESCE(NULLIF(LOWER(file_path), ''), spotify_id) as fp_key,
+                            MAX(COALESCE(file_size, 0)) as file_size,
+                            MIN(file_path) as file_path,
+                            MAX(downloaded_at) as downloaded_at,
+                            GROUP_CONCAT(DISTINCT NULLIF(genre, '')) as genre
+                        FROM downloaded_tracks
+                        WHERE collection_type = 'album'
+                          AND LOWER(COALESCE(NULLIF(album, ''), collection_name)) NOT IN (
+                              'spotify playlist', 'singles', 'unknown album', 'downloads'
+                          )
+                        GROUP BY alb_key, fp_key
+                    ) sub
+                    GROUP BY alb_key
                     ORDER BY track_count DESC, latest_download DESC
                 """)
                 rows = cur.fetchall()
@@ -898,7 +1080,7 @@ class ArchiveManager:
                     if gf and gf not in (item.get("genre") or "").lower():
                         continue
                     results.append(item)
-                return results
+                return self._dedupe_track_rows(results)
         except Exception as e:
             logger.error(f"Failed to fetch collection tracks for '{collection_name}': {e}")
             return []
@@ -943,6 +1125,34 @@ class ArchiveManager:
         except Exception as e:
             logger.error(f"Failed to remove downloaded track {spotify_id}: {e}")
             return False
+
+    def remove_downloaded_tracks_by_path(self, file_path: str) -> int:
+        """
+        Removes all downloaded_tracks rows referencing file_path and resets matching
+        saved_playlist_tracks rows to pending. Used when a shared file is deleted from disk.
+        """
+        if not file_path:
+            return 0
+        norm_fp = normalize_path(file_path)
+        try:
+            with self.connection() as conn:
+                with conn:
+                    cur = conn.execute(
+                        "DELETE FROM downloaded_tracks WHERE file_path = ? COLLATE NOCASE",
+                        (norm_fp,),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE saved_playlist_tracks
+                        SET status = 'pending', file_path = '', quality_badge = '', source_type = ''
+                        WHERE file_path = ? COLLATE NOCASE
+                        """,
+                        (norm_fp,),
+                    )
+                    return cur.rowcount or 0
+        except Exception as e:
+            logger.debug(f"Failed to remove tracks by path '{file_path}': {e}")
+            return 0
 
     def delete_track(self, spotify_id: str) -> bool:
         """Deletes a track from the archive record and resets any associated playlist tracks."""
@@ -1115,10 +1325,10 @@ class ArchiveManager:
         playlist_collections = set()
         try:
             with self.connection() as conn:
-                cur = conn.execute("SELECT LOWER(file_path), LOWER(title), LOWER(artist), LOWER(COALESCE(collection_name, '')), LOWER(COALESCE(album, '')) FROM downloaded_tracks")
+                cur = conn.execute("SELECT file_path, LOWER(title), LOWER(artist), LOWER(COALESCE(collection_name, '')), LOWER(COALESCE(album, '')) FROM downloaded_tracks")
                 for r_path, r_title, r_artist, r_col, r_alb in cur.fetchall():
                     if r_path:
-                        existing_paths.add(r_path)
+                        existing_paths.add(os.path.normcase(normalize_path(r_path)))
                     if r_title and r_artist:
                         if r_col:
                             existing_meta.add((r_title, r_artist, r_col))
@@ -1141,20 +1351,24 @@ class ArchiveManager:
         except Exception as e:
             logger.warning(f"Failed to prefetch existing tracks for scan: {e}")
 
-        for dirpath, _, filenames in os.walk(root_dir):
+        skip_dir_names = {"lyrics", "cache", "logs", "bin", "eq_preview", "spectrograms"}
+        for dirpath, dirs, filenames in os.walk(root_dir):
+            dirs[:] = [d for d in dirs if d.lower() not in skip_dir_names]
             folder_name = os.path.basename(dirpath)
             for fname in filenames:
+                fname_lower = fname.lower()
+                if fname_lower.endswith(".part") or ".norm_tmp" in fname_lower:
+                    continue
                 ext = os.path.splitext(fname)[1].lower()
                 if ext not in audio_exts:
                     continue
 
                 full_path = normalize_path(os.path.join(dirpath, fname))
-                is_valid, _ = is_valid_audio_file(full_path)
-                if not is_valid:
+                if os.path.normcase(full_path) in existing_paths:
                     continue
 
-                # Check if already indexed by path (in-memory set check)
-                if full_path.lower() in existing_paths:
+                is_valid, _ = is_valid_audio_file(full_path)
+                if not is_valid:
                     continue
 
                 # Extract basic tags
@@ -1164,6 +1378,8 @@ class ArchiveManager:
                 isrc = ""
                 track_num = 0
                 disc_num = 1
+                duration_ms = 0
+                genre_str = ""
                 quality = "FLAC 16" if ext == ".flac" else ("320k" if ext == ".mp3" else "Opus")
 
                 if " - " in title:
@@ -1180,6 +1396,9 @@ class ArchiveManager:
                     try:
                         audio = mutagen.File(full_path)
                         if audio:
+                            if getattr(audio, "info", None) and getattr(audio.info, "length", 0):
+                                duration_ms = int(float(audio.info.length) * 1000)
+
                             tr_val = audio.get("tracknumber") or audio.get("TRACKNUMBER") or audio.get("trkn") or audio.get("TRCK")
                             if tr_val:
                                 raw_t = tr_val[0] if isinstance(tr_val, list) else str(tr_val)
@@ -1203,6 +1422,18 @@ class ArchiveManager:
                                         disc_num = d_parsed
                                 except Exception:
                                     pass
+
+                            g_raw = audio.get("genre") or audio.get("GENRE") or audio.get("\xa9gen")
+                            if not g_raw and hasattr(audio, "keys"):
+                                for gk in audio.keys():
+                                    if str(gk).startswith("TCON"):
+                                        g_raw = getattr(audio[gk], "text", None)
+                                        break
+                            if g_raw:
+                                if isinstance(g_raw, (list, tuple)):
+                                    genre_str = "; ".join(str(x).strip() for x in g_raw if str(x).strip())
+                                else:
+                                    genre_str = str(g_raw).strip()
 
                             if ext == ".flac":
                                 artist = audio.get("artist", [artist])[0]
@@ -1251,23 +1482,25 @@ class ArchiveManager:
                 # Deterministic synthetic ID derived from path hash
                 path_hash = hashlib.sha256(full_path.lower().encode("utf-8")).hexdigest()[:16]
                 synth_id = f"local_{path_hash}"
+                genres_list = [g.strip() for g in genre_str.split(";") if g.strip()]
                 fake_track = TrackMetadata(
                     id=synth_id,
                     title=title,
                     artists=[artist],
                     album=album,
                     release_date="",
-                    duration_ms=0,
+                    duration_ms=duration_ms,
                     track_number=track_num,
                     disc_number=disc_num,
                     isrc=isrc,
                     collection_name=folder_name,
-                    collection_type=c_type
+                    collection_type=c_type,
+                    genres=genres_list,
                 )
 
-                if self.add_track(fake_track, full_path, quality, "Local File"):
+                if self.add_track(fake_track, full_path, quality, "Local File", genre=genre_str):
                     indexed_count += 1
-                    existing_paths.add(full_path.lower())
+                    existing_paths.add(os.path.normcase(full_path))
                     existing_meta.add((title.lower(), artist.lower(), f_name_lower))
                     if is_album:
                         album_collections.add(f_name_lower)
@@ -1389,6 +1622,457 @@ class ArchiveManager:
             logger.error(f"Error cleaning database records: {e}")
 
         logger.info(f"Cleanup finished: {stats}")
+        return stats
+
+    def consolidate_and_organize_library(self, target_dir: str = "") -> Dict[str, Any]:
+        """
+        Consolidates all downloaded audio files into a single flat music folder (`target_dir`),
+        removes empty stray source directories, purges missing/temp ghost DB rows,
+        eliminates redundant duplicate rows (such as stale `local_*` or same-collection duplicates),
+        enriches surviving rows with best available metadata, repairs/resets `saved_playlist_tracks`,
+        regenerates portable `.m3u8` playlists, and compacts/vacuums the SQLite archive.
+        """
+        raw_target = (
+            (target_dir or "").strip()
+            or config.get("download.output_dir", "")
+            or str(get_default_download_dir())
+        )
+        resolved_target = normalize_path(raw_target)
+        os.makedirs(resolved_target, exist_ok=True)
+        target_dir_key = os.path.normcase(os.path.normpath(resolved_target))
+
+        stats: Dict[str, Any] = {
+            "target_dir": resolved_target,
+            "files_moved": 0,
+            "duplicate_files_removed": 0,
+            "duplicate_db_rows_removed": 0,
+            "missing_db_rows_removed": 0,
+            "paths_normalized": 0,
+            "metadata_enriched": 0,
+            "saved_tracks_repaired": 0,
+            "saved_tracks_reset": 0,
+            "empty_dirs_removed": 0,
+            "errors": 0,
+        }
+
+        audio_exts = {".flac", ".mp3", ".opus", ".m4a", ".ogg", ".wav"}
+        skip_subdir_names = {"playlists", "lyrics", "cache", "logs", "bin", "eq_preview", "spectrograms"}
+
+        # 1. Gather all stray audio files from DB records (any dir != target_dir) and subdirs of target_dir
+        candidate_files: List[str] = []
+        try:
+            with self.connection() as conn:
+                for sql in (
+                    "SELECT DISTINCT file_path FROM downloaded_tracks WHERE file_path IS NOT NULL AND file_path != ''",
+                    "SELECT DISTINCT file_path FROM saved_playlist_tracks WHERE file_path IS NOT NULL AND file_path != ''",
+                ):
+                    for (raw_fp,) in conn.execute(sql).fetchall():
+                        candidate_files.append(raw_fp)
+        except Exception as exc:
+            logger.warning(f"Could not query paths during organize scan: {exc}")
+
+        for dirpath, dirs, filenames in os.walk(resolved_target):
+            dirs[:] = [
+                d for d in dirs
+                if d.lower() not in skip_subdir_names and not d.startswith(".flacify-")
+            ]
+            if os.path.normcase(os.path.normpath(dirpath)) == target_dir_key:
+                # Clean any stale .norm_tmp remnants sitting in root
+                for fn in filenames:
+                    if ".norm_tmp" in fn.lower():
+                        try:
+                            os.remove(os.path.join(dirpath, fn))
+                        except OSError:
+                            pass
+                continue
+            for fn in filenames:
+                fp_sub = os.path.join(dirpath, fn)
+                if ".norm_tmp" in fn.lower():
+                    try:
+                        os.remove(fp_sub)
+                    except OSError:
+                        pass
+                    continue
+                if os.path.splitext(fn)[1].lower() in audio_exts and not fn.lower().endswith(".part"):
+                    candidate_files.append(fp_sub)
+
+        seen_src_keys = set()
+        stray_sources: List[str] = []
+        for raw_fp in candidate_files:
+            fp_norm = normalize_path(raw_fp)
+            if not fp_norm or ".norm_tmp" in fp_norm.lower() or fp_norm.lower().endswith(".part"):
+                continue
+            if not os.path.isfile(fp_norm):
+                continue
+            parent_key = os.path.normcase(os.path.normpath(os.path.dirname(fp_norm)))
+            if parent_key == target_dir_key:
+                continue
+            fp_key = os.path.normcase(fp_norm)
+            if fp_key not in seen_src_keys:
+                seen_src_keys.add(fp_key)
+                stray_sources.append(fp_norm)
+
+        path_remaps: Dict[str, str] = {}
+        old_dirs = set()
+        for src in stray_sources:
+            old_dirs.add(os.path.dirname(src))
+            bname = os.path.basename(src)
+            stem, ext = os.path.splitext(bname)
+            dest = normalize_path(os.path.join(resolved_target, bname))
+            try:
+                if os.path.isfile(dest):
+                    src_st = os.stat(src)
+                    dst_st = os.stat(dest)
+                    same_inode = bool(
+                        src_st.st_ino
+                        and src_st.st_ino == dst_st.st_ino
+                        and src_st.st_dev == dst_st.st_dev
+                    )
+                    if same_inode or src_st.st_size == dst_st.st_size:
+                        if not same_inode:
+                            os.remove(src)
+                            stats["duplicate_files_removed"] += 1
+                        path_remaps[os.path.normcase(src)] = dest
+                        continue
+
+                    idx = 2
+                    while os.path.isfile(dest):
+                        dest = normalize_path(os.path.join(resolved_target, f"{stem} ({idx}){ext}"))
+                        idx += 1
+
+                shutil.move(src, dest)
+                src_lrc = os.path.splitext(src)[0] + ".lrc"
+                if os.path.isfile(src_lrc):
+                    dest_lrc = os.path.splitext(dest)[0] + ".lrc"
+                    if not os.path.isfile(dest_lrc):
+                        try:
+                            shutil.move(src_lrc, dest_lrc)
+                        except OSError:
+                            pass
+                path_remaps[os.path.normcase(src)] = dest
+                stats["files_moved"] += 1
+            except Exception as move_exc:
+                logger.warning(f"Could not move stray audio file '{src}' -> '{dest}': {move_exc}")
+                stats["errors"] += 1
+
+        # Apply relocated file paths in SQLite before DB cleanup
+        if path_remaps:
+            try:
+                with self.connection() as conn:
+                    with conn:
+                        for row in conn.execute("SELECT spotify_id, file_path FROM downloaded_tracks").fetchall():
+                            raw_p = row["file_path"] or ""
+                            if not raw_p:
+                                continue
+                            new_p = path_remaps.get(os.path.normcase(normalize_path(raw_p)))
+                            if new_p and new_p != raw_p:
+                                conn.execute(
+                                    "UPDATE downloaded_tracks SET file_path = ? WHERE spotify_id = ?",
+                                    (new_p, row["spotify_id"]),
+                                )
+                        for row in conn.execute(
+                            "SELECT id, file_path FROM saved_playlist_tracks WHERE file_path IS NOT NULL AND file_path != ''"
+                        ).fetchall():
+                            raw_p = row["file_path"] or ""
+                            new_p = path_remaps.get(os.path.normcase(normalize_path(raw_p)))
+                            if new_p and new_p != raw_p:
+                                conn.execute(
+                                    "UPDATE saved_playlist_tracks SET file_path = ? WHERE id = ?",
+                                    (new_p, row["id"]),
+                                )
+            except Exception as exc:
+                logger.error(f"Failed updating relocated file paths in DB: {exc}")
+                stats["errors"] += 1
+
+        # Remove leftover empty source directories (never removing target_dir itself)
+        for d in sorted(old_dirs, key=lambda p: len(p), reverse=True):
+            d_norm = normalize_path(d)
+            if not d_norm or os.path.normcase(d_norm) == target_dir_key or not os.path.isdir(d_norm):
+                continue
+            try:
+                try:
+                    in_target = os.path.commonpath([os.path.normcase(d_norm), target_dir_key]) == target_dir_key
+                except ValueError:
+                    in_target = False
+                if not in_target:
+                    for sub in os.listdir(d_norm):
+                        sub_p = os.path.join(d_norm, sub)
+                        if os.path.isdir(sub_p) and not os.listdir(sub_p):
+                            try:
+                                os.rmdir(sub_p)
+                            except OSError:
+                                pass
+                if not os.listdir(d_norm):
+                    os.rmdir(d_norm)
+                    stats["empty_dirs_removed"] += 1
+            except OSError:
+                pass
+
+        # 2. Deduplicate, normalize, purge ghosts, and enrich downloaded_tracks & saved_playlist_tracks
+        try:
+            import mutagen
+        except ImportError:
+            mutagen = None
+
+        try:
+            with self.connection() as conn:
+                dt_rows = [dict(r) for r in conn.execute("SELECT * FROM downloaded_tracks").fetchall()]
+                missing_ids: List[str] = []
+                valid_by_fp: Dict[str, List[Dict[str, Any]]] = {}
+
+                for r in dt_rows:
+                    raw_fp = r.get("file_path") or ""
+                    norm_fp = normalize_path(raw_fp)
+                    if (
+                        not norm_fp
+                        or ".norm_tmp" in norm_fp.lower()
+                        or norm_fp.lower().endswith(".part")
+                        or not os.path.isfile(norm_fp)
+                    ):
+                        missing_ids.append(r["spotify_id"])
+                        stats["missing_db_rows_removed"] += 1
+                        continue
+                    r["_norm_fp"] = norm_fp
+                    valid_by_fp.setdefault(os.path.normcase(norm_fp), []).append(r)
+
+                delete_ids: List[str] = list(missing_ids)
+                updates_dt: List[Tuple[Any, ...]] = []
+                surviving_rows: List[Dict[str, Any]] = []
+
+                for _fp_key, grp in valid_by_fp.items():
+                    canonical_fp = grp[0]["_norm_fp"]
+                    try:
+                        disk_size = os.path.getsize(canonical_fp)
+                    except OSError:
+                        disk_size = 0
+
+                    ranked = sorted(grp, key=self._row_richness_key, reverse=True)
+                    best_master = ranked[0]
+                    best_dur = max((int(r.get("duration_ms") or 0) for r in grp), default=0)
+                    if best_dur <= 0 and mutagen:
+                        try:
+                            aud = mutagen.File(canonical_fp)
+                            if aud and getattr(aud, "info", None) and getattr(aud.info, "length", 0):
+                                best_dur = int(float(aud.info.length) * 1000)
+                        except Exception:
+                            pass
+
+                    best_genre = next((r["genre"].strip() for r in ranked if (r.get("genre") or "").strip()), "")
+                    best_album = next((r["album"].strip() for r in ranked if not self._is_generic_album(r.get("album"))), "")
+                    best_isrc = next((r["isrc"].strip() for r in ranked if (r.get("isrc") or "").strip()), "")
+                    best_badge = best_master.get("quality_badge") or ""
+                    best_source = best_master.get("source_type") or ""
+                    if not best_badge or best_source in ("", "Local File", "Local Archive"):
+                        qb_inf, st_inf = self.infer_badge_from_file(canonical_fp)
+                        if not best_badge or best_badge in ("FLAC", "Audio"):
+                            best_badge = qb_inf or best_badge
+                        if best_source in ("", "Local File"):
+                            best_source = st_inf or best_source
+
+                    has_real = any(not str(r.get("spotify_id") or "").startswith("local_") for r in grp)
+                    survivors_by_col: Dict[Tuple[str, str], Dict[str, Any]] = {}
+                    for r in grp:
+                        sid = str(r.get("spotify_id") or "")
+                        if has_real and sid.startswith("local_"):
+                            delete_ids.append(sid)
+                            stats["duplicate_db_rows_removed"] += 1
+                            continue
+                        col_key = (
+                            str(r.get("collection_type") or "").strip().lower(),
+                            str(r.get("collection_name") or "").strip().lower(),
+                        )
+                        if col_key not in survivors_by_col:
+                            survivors_by_col[col_key] = r
+                        else:
+                            existing = survivors_by_col[col_key]
+                            if self._row_richness_key(r) > self._row_richness_key(existing):
+                                delete_ids.append(existing["spotify_id"])
+                                survivors_by_col[col_key] = r
+                            else:
+                                delete_ids.append(sid)
+                            stats["duplicate_db_rows_removed"] += 1
+
+                    for keeper in survivors_by_col.values():
+                        new_fp = canonical_fp
+                        new_dur = int(keeper.get("duration_ms") or 0) or best_dur
+                        new_genre = (keeper.get("genre") or "").strip() or best_genre
+                        new_album = keeper.get("album") or ""
+                        if self._is_generic_album(new_album) and best_album:
+                            new_album = best_album
+                        new_isrc = (keeper.get("isrc") or "").strip() or best_isrc
+                        new_size = disk_size if disk_size > 0 else int(keeper.get("file_size") or 0)
+                        new_badge = keeper.get("quality_badge") or best_badge
+                        new_source = keeper.get("source_type") or best_source
+                        if new_source == "Local File" and best_source and best_source != "Local File":
+                            new_source = best_source
+                            new_badge = best_badge or new_badge
+
+                        if new_fp != (keeper.get("file_path") or ""):
+                            stats["paths_normalized"] += 1
+                        if (
+                            new_dur != (keeper.get("duration_ms") or 0)
+                            or new_genre != (keeper.get("genre") or "")
+                            or new_album != (keeper.get("album") or "")
+                        ):
+                            stats["metadata_enriched"] += 1
+
+                        if (
+                            new_fp != (keeper.get("file_path") or "")
+                            or new_size != (keeper.get("file_size") or 0)
+                            or new_dur != (keeper.get("duration_ms") or 0)
+                            or new_genre != (keeper.get("genre") or "")
+                            or new_album != (keeper.get("album") or "")
+                            or new_isrc != (keeper.get("isrc") or "")
+                            or new_badge != (keeper.get("quality_badge") or "")
+                            or new_source != (keeper.get("source_type") or "")
+                        ):
+                            updates_dt.append((
+                                new_fp,
+                                new_size,
+                                new_dur,
+                                new_genre,
+                                new_album,
+                                new_isrc,
+                                new_badge,
+                                new_source,
+                                keeper["spotify_id"],
+                            ))
+
+                        updated_copy = dict(keeper)
+                        updated_copy.update({
+                            "file_path": new_fp,
+                            "file_size": new_size,
+                            "duration_ms": new_dur,
+                            "genre": new_genre,
+                            "album": new_album,
+                            "isrc": new_isrc,
+                            "quality_badge": new_badge,
+                            "source_type": new_source,
+                        })
+                        surviving_rows.append(updated_copy)
+
+                with conn:
+                    for i in range(0, len(delete_ids), 500):
+                        chunk = delete_ids[i : i + 500]
+                        ph = ",".join("?" for _ in chunk)
+                        conn.execute(f"DELETE FROM downloaded_tracks WHERE spotify_id IN ({ph})", chunk)
+
+                    if updates_dt:
+                        conn.executemany(
+                            """
+                            UPDATE downloaded_tracks
+                            SET file_path = ?, file_size = ?, duration_ms = ?, genre = ?,
+                                album = ?, isrc = ?, quality_badge = ?, source_type = ?
+                            WHERE spotify_id = ?
+                            """,
+                            updates_dt,
+                        )
+
+                    # Reconcile saved_playlist_tracks paths & badges against surviving library files
+                    by_sid: Dict[str, Dict[str, Any]] = {}
+                    by_isrc: Dict[str, Dict[str, Any]] = {}
+                    by_ta: Dict[Tuple[str, str], Dict[str, Any]] = {}
+                    by_fp: Dict[str, Dict[str, Any]] = {}
+                    for sr in surviving_rows:
+                        by_sid[sr["spotify_id"]] = sr
+                        by_fp.setdefault(os.path.normcase(sr["file_path"]), sr)
+                        if (sr.get("isrc") or "").strip():
+                            by_isrc.setdefault(sr["isrc"].strip().lower(), sr)
+                        ta_k = (
+                            (sr.get("artist") or "").strip().lower(),
+                            (sr.get("title") or "").strip().lower(),
+                        )
+                        if ta_k[0] and ta_k[1]:
+                            by_ta.setdefault(ta_k, sr)
+
+                    sp_rows = [dict(r) for r in conn.execute("SELECT * FROM saved_playlist_tracks").fetchall()]
+                    sp_updates: List[Tuple[Any, ...]] = []
+                    for sp in sp_rows:
+                        cur_status = sp.get("status") or "pending"
+                        raw_sp_fp = sp.get("file_path") or ""
+                        norm_sp_fp = normalize_path(raw_sp_fp) if raw_sp_fp else ""
+                        valid_fp = (
+                            bool(norm_sp_fp)
+                            and ".norm_tmp" not in norm_sp_fp.lower()
+                            and not norm_sp_fp.lower().endswith(".part")
+                            and os.path.isfile(norm_sp_fp)
+                        )
+                        if valid_fp:
+                            canon = by_fp.get(os.path.normcase(norm_sp_fp))
+                            new_qb = sp.get("quality_badge") or (canon.get("quality_badge") if canon else "") or ""
+                            new_st = sp.get("source_type") or (canon.get("source_type") if canon else "") or ""
+                            new_gn = sp.get("genre") or (canon.get("genre") if canon else "") or ""
+                            if (
+                                norm_sp_fp != raw_sp_fp
+                                or cur_status != "downloaded"
+                                or new_qb != (sp.get("quality_badge") or "")
+                                or new_st != (sp.get("source_type") or "")
+                                or new_gn != (sp.get("genre") or "")
+                            ):
+                                sp_updates.append(("downloaded", norm_sp_fp, new_qb, new_st, new_gn, sp["id"]))
+                        elif cur_status == "downloaded" or raw_sp_fp:
+                            match = (
+                                by_sid.get(sp.get("spotify_id") or "")
+                                or by_isrc.get((sp.get("isrc") or "").strip().lower())
+                                or by_ta.get((
+                                    (sp.get("artist") or "").strip().lower(),
+                                    (sp.get("title") or "").strip().lower(),
+                                ))
+                            )
+                            if match and os.path.isfile(match["file_path"]):
+                                sp_updates.append((
+                                    "downloaded",
+                                    match["file_path"],
+                                    sp.get("quality_badge") or match.get("quality_badge") or "",
+                                    sp.get("source_type") or match.get("source_type") or "",
+                                    sp.get("genre") or match.get("genre") or "",
+                                    sp["id"],
+                                ))
+                                stats["saved_tracks_repaired"] += 1
+                            else:
+                                sp_updates.append(("pending", "", "", "", sp.get("genre") or "", sp["id"]))
+                                stats["saved_tracks_reset"] += 1
+
+                    if sp_updates:
+                        conn.executemany(
+                            """
+                            UPDATE saved_playlist_tracks
+                            SET status = ?, file_path = ?, quality_badge = ?, source_type = ?, genre = ?
+                            WHERE id = ?
+                            """,
+                            sp_updates,
+                        )
+
+                    conn.execute("""
+                        UPDATE saved_playlists
+                        SET total_tracks = (
+                            SELECT COUNT(*) FROM saved_playlist_tracks WHERE playlist_id = saved_playlists.id
+                        )
+                    """)
+        except Exception as db_exc:
+            logger.error(f"Database organization error: {db_exc}")
+            stats["errors"] += 1
+
+        # 3. Regenerate .m3u8 playlists pointing at consolidated folder & compact SQLite
+        try:
+            self.sync_all_playlist_m3u8_files()
+        except Exception as m3u_exc:
+            logger.debug(f"M3U8 refresh notice during organize: {m3u_exc}")
+
+        try:
+            with self._db_lock:
+                vconn = self._get_connection()
+                try:
+                    vconn.isolation_level = None
+                    vconn.execute("PRAGMA optimize;")
+                    vconn.execute("VACUUM;")
+                    vconn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                finally:
+                    vconn.close()
+        except Exception as vac_exc:
+            logger.debug(f"SQLite vacuum notice: {vac_exc}")
+
+        logger.info(f"Library consolidation & DB organization finished: {stats}")
         return stats
 
     def repair_library(

@@ -15,9 +15,9 @@ class TestMeloBotIntegration(unittest.TestCase):
         self.original_fallback = config.get("download.allow_fallback", True)
 
     def tearDown(self):
-        config.set("source_engine", self.original_source)
-        config.set("telegram.enabled", self.original_tg_enabled)
-        config.set("download.allow_fallback", self.original_fallback)
+        config.set("source_engine", self.original_source, auto_save=False)
+        config.set("telegram.enabled", self.original_tg_enabled, auto_save=False)
+        config.set("download.allow_fallback", self.original_fallback, auto_save=False)
 
     def test_engine_initialization(self):
         engine = MeloBotEngine(session_name="test_dummy_unauth_session")
@@ -57,8 +57,8 @@ class TestMeloBotIntegration(unittest.TestCase):
         engine = CascadingAudioEngine(melobot_engine=mock_melobot)
         track = TrackMetadata(id="sp_test", title="Test Song", artists=["Test Artist"], album="Test Album")
 
-        config.set("source_engine", "melobot")
-        config.set("telegram.enabled", True)
+        config.set("source_engine", "melobot", auto_save=False)
+        config.set("telegram.enabled", True, auto_save=False)
 
         resolved = engine.resolve_source(track)
         self.assertIsNotNone(resolved)
@@ -80,8 +80,8 @@ class TestMeloBotIntegration(unittest.TestCase):
         engine = CascadingAudioEngine(melobot_engine=mock_melobot, ytdlp_engine=mock_yt)
         track = TrackMetadata(id="sp_test_fallback", title="Unknown Song", artists=["Unknown Artist"], album="Unknown Album")
 
-        config.set("source_engine", "melobot")
-        config.set("download.allow_fallback", True)
+        config.set("source_engine", "melobot", auto_save=False)
+        config.set("download.allow_fallback", True, auto_save=False)
 
         resolved = engine.resolve_source(track)
         self.assertIsNotNone(resolved)
@@ -114,10 +114,10 @@ class TestMeloBotIntegration(unittest.TestCase):
         engine = CascadingAudioEngine(melobot_engine=mock_melobot, ytdlp_engine=mock_yt)
         track = TrackMetadata(id="sp_test_128", title="Standard Song", artists=["Artist"], album="Album")
 
-        config.set("source_engine", "melobot")
-        config.set("download.preferred_quality", "320")
-        config.set("download.allow_128k", False)
-        config.set("download.allow_fallback", True)
+        config.set("source_engine", "melobot", auto_save=False)
+        config.set("download.preferred_quality", "320", auto_save=False)
+        config.set("download.allow_128k", False, auto_save=False)
+        config.set("download.allow_fallback", True, auto_save=False)
 
         resolved = engine.resolve_source(track)
         self.assertIsNotNone(resolved)
@@ -235,20 +235,20 @@ class TestMeloBotIntegration(unittest.TestCase):
         qm = DownloadQueueManager(max_concurrent_downloads=5)
 
         # 1. When source is Musilon, concurrency respects user setting (5)
-        config.set("source_engine", "musilon")
-        config.set("musilon.enabled", True)
-        config.set("telegram.enabled", False)
+        config.set("source_engine", "musilon", auto_save=False)
+        config.set("musilon.enabled", True, auto_save=False)
+        config.set("telegram.enabled", False, auto_save=False)
         self.assertEqual(qm.get_effective_concurrency(), 5)
 
         # 2. When source is MeloBot, concurrency is strictly locked to 1
-        config.set("source_engine", "melobot")
-        config.set("telegram.enabled", True)
+        config.set("source_engine", "melobot", auto_save=False)
+        config.set("telegram.enabled", True, auto_save=False)
         self.assertEqual(qm.get_effective_concurrency(), 1)
 
         # 3. Dynamic scaling back to Musilon restores 5
-        config.set("source_engine", "musilon")
-        config.set("musilon.enabled", True)
-        config.set("telegram.enabled", False)
+        config.set("source_engine", "musilon", auto_save=False)
+        config.set("musilon.enabled", True, auto_save=False)
+        config.set("telegram.enabled", False, auto_save=False)
         self.assertEqual(qm.get_effective_concurrency(), 5)
 
 
@@ -386,18 +386,18 @@ class TestMeloBotIntegration(unittest.TestCase):
         ]
 
         # By default (preferred_quality=320, allow_128k=False), it MUST reject 128k
-        config.set("download.preferred_quality", "320")
-        config.set("download.allow_128k", False)
+        config.set("download.preferred_quality", "320", auto_save=False)
+        config.set("download.allow_128k", False, auto_save=False)
         clicked_rejected = asyncio.run(engine._handle_bot_keyboard(mock_only_128_msg, track, "bot_entity"))
         self.assertFalse(clicked_rejected)
         mock_only_128_btn.click.assert_not_called()
 
         # When explicitly allowed (allow_128k=True), it accepts 128k
-        config.set("download.allow_128k", True)
+        config.set("download.allow_128k", True, auto_save=False)
         clicked_allowed = asyncio.run(engine._handle_bot_keyboard(mock_only_128_msg, track, "bot_entity"))
         self.assertTrue(clicked_allowed)
         mock_only_128_btn.click.assert_called_once()
-        config.set("download.allow_128k", False)
+        config.set("download.allow_128k", False, auto_save=False)
 
     def test_score_candidate_parenthetical_features(self):
         engine = MeloBotEngine(session_name="test_dummy_unauth_session")

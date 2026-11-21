@@ -21,9 +21,9 @@ class TestQueueManager(unittest.TestCase):
         self._orig_source = config.get("source_engine", "musilon")
         self._orig_tg = config.get("telegram.enabled", False)
         self._orig_mus = config.get("musilon.enabled", True)
-        config.set("source_engine", "musilon")
-        config.set("telegram.enabled", False)
-        config.set("musilon.enabled", True)
+        config.set("source_engine", "musilon", auto_save=False)
+        config.set("telegram.enabled", False, auto_save=False)
+        config.set("musilon.enabled", True, auto_save=False)
 
         self.tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.tmp_db.close()
@@ -41,9 +41,9 @@ class TestQueueManager(unittest.TestCase):
             except Exception:
                 pass
         from core.config import config
-        config.set("source_engine", self._orig_source)
-        config.set("telegram.enabled", self._orig_tg)
-        config.set("musilon.enabled", self._orig_mus)
+        config.set("source_engine", self._orig_source, auto_save=False)
+        config.set("telegram.enabled", self._orig_tg, auto_save=False)
+        config.set("musilon.enabled", self._orig_mus, auto_save=False)
 
     def test_enqueue_and_get_items(self):
         tracks = [
@@ -174,7 +174,7 @@ class TestQueueManager(unittest.TestCase):
         fallback_called = []
         self.qm._fallback_to_youtube = lambda **kw: fallback_called.append(True)
 
-        config.set("source_engine", "melobot")
+        config.set("source_engine", "melobot", auto_save=False)
         self.qm._process_item(item)
 
         # Must NEVER invoke Musilon limit popup callback

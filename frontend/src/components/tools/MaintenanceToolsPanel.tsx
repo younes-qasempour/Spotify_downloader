@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Sparkles, Tags, Wrench } from "lucide-react";
+import { FolderSync, Loader2, Sparkles, Tags, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api/endpoints";
 import type {
   CleanLibraryResponse,
+  OrganizeLibraryResponse,
   RepairLibraryResponse,
   RetagGenresResponse,
 } from "@/api/types";
@@ -14,6 +15,10 @@ import { useAppStore } from "@/stores/appStore";
 export function MaintenanceToolsPanel() {
   const queryClient = useQueryClient();
   const activeToolProgress = useAppStore((s) => s.activeToolProgress);
+
+  const [organizing, setOrganizing] = useState(false);
+  const [organizeStats, setOrganizeStats] =
+    useState<OrganizeLibraryResponse | null>(null);
 
   const [cleaning, setCleaning] = useState(false);
   const [cleanStats, setCleanStats] = useState<CleanLibraryResponse | null>(
@@ -29,6 +34,29 @@ export function MaintenanceToolsPanel() {
   const [retagStats, setRetagStats] = useState<RetagGenresResponse | null>(
     null
   );
+
+  const handleOrganize = async () => {
+    if (organizing) return;
+    setOrganizing(true);
+    try {
+      const res = await api.tools.organizeLibrary({
+        enforce_single_folder: true,
+      });
+      setOrganizeStats(res);
+      void queryClient.invalidateQueries({ queryKey: ["library"] });
+      void queryClient.invalidateQueries({ queryKey: ["playlists"] });
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
+      toast.success("Single Folder & DB Organization Complete", {
+        description: `${res.files_moved} file(s) consolidated · ${res.duplicate_db_rows_removed} duplicate DB row(s) removed`,
+      });
+    } catch (err) {
+      toast.error("Library organization failed", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    } finally {
+      setOrganizing(false);
+    }
+  };
 
   const handleClean = async () => {
     if (cleaning) return;
@@ -99,7 +127,73 @@ export function MaintenanceToolsPanel() {
       : null;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      {/* Consolidate Single Folder & Organize DB */}
+      <div className="glass-panel rounded-2xl p-6 space-y-4 flex flex-col justify-between">
+        <div className="space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300 border border-sky-500/25">
+              <FolderSync className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-white">
+                Consolidate Single Folder & Organize DB
+              </h2>
+              <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">
+                Moves any downloaded tracks in subfolders or temp directories into
+                your single music folder, enforces flat downloads, removes duplicate
+                or dead DB rows, and compacts the SQLite database.
+              </p>
+            </div>
+          </div>
+
+          {organizeStats && (
+            <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-3 text-xs space-y-1 font-mono">
+              <div className="flex justify-between text-zinc-300">
+                <span>Files Consolidated</span>
+                <span className="text-sky-300 font-bold tabular-nums">
+                  {organizeStats.files_moved}
+                </span>
+              </div>
+              <div className="flex justify-between text-zinc-300">
+                <span>Duplicate DB Rows Removed</span>
+                <span className="text-emerald-300 font-bold tabular-nums">
+                  {organizeStats.duplicate_db_rows_removed}
+                </span>
+              </div>
+              <div className="flex justify-between text-zinc-300">
+                <span>Ghost DB Rows Purged</span>
+                <span className="text-white font-bold tabular-nums">
+                  {organizeStats.missing_db_rows_removed}
+                </span>
+              </div>
+              <div className="flex justify-between text-zinc-300">
+                <span>Metadata Records Enriched</span>
+                <span className="text-white font-bold tabular-nums">
+                  {organizeStats.metadata_enriched}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <Button
+          type="button"
+          disabled={organizing}
+          onClick={() => void handleOrganize()}
+          className="w-full"
+        >
+          {organizing ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FolderSync className="h-4 w-4" />
+          )}
+          {organizing
+            ? "Consolidating & Organizing..."
+            : "Consolidate Folder & Organize DB"}
+        </Button>
+      </div>
+
       {/* Clean Corrupt Files & Cache */}
       <div className="glass-panel rounded-2xl p-6 space-y-4 flex flex-col justify-between">
         <div className="space-y-3">
