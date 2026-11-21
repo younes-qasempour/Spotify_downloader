@@ -60,5 +60,15 @@ ENV/
 .vscode/
 .idea/
 .DS_Store
+ThumBs.db
 Thumbs.db
 desktop.ini
+
+# Frontend (Vite / React / TypeScript)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Desktop (Tauri v2)
+desktop/node_modules/
+desktop/src-tauri/target/
