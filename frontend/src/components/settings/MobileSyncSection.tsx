@@ -46,10 +46,16 @@ export function MobileSyncSection({
     setDeviceName(mobile?.device_name || "");
   }, [mobile?.device_name]);
 
-  const { data: syncInfo, isLoading } = useQuery({
+  const { data: syncInfo, isLoading, isFetching, refetch } = useQuery({
     queryKey: ["sync-info"],
     queryFn: () => api.sync.info(),
   });
+
+  const handleRefreshAddresses = () => {
+    setQrError(false);
+    setQrVersion(Date.now());
+    void refetch();
+  };
 
   const handleCopy = async (label: string, key: string, value: string) => {
     try {
@@ -109,11 +115,21 @@ export function MobileSyncSection({
           </div>
 
           <Badge
-            variant={mobile?.lan_enabled ?? true ? "emerald" : "default"}
+            variant={
+              (mobile?.lan_enabled ?? true) && syncInfo?.restart_required
+                ? "gold"
+                : mobile?.lan_enabled ?? true
+                  ? "emerald"
+                  : "default"
+            }
             className="gap-1.5"
           >
             <Wifi className="h-3 w-3" />
-            {mobile?.lan_enabled ?? true ? "LAN Sync Ready" : "Localhost Only"}
+            {(mobile?.lan_enabled ?? true) && syncInfo?.restart_required
+              ? "Restart Required"
+              : mobile?.lan_enabled ?? true
+                ? "LAN Sync Ready"
+                : "Localhost Only"}
           </Badge>
         </div>
 
@@ -209,6 +225,14 @@ export function MobileSyncSection({
           </div>
         )}
 
+        {(mobile?.lan_enabled ?? true) && syncInfo?.restart_required && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200">
+            Backend started in Localhost-Only mode ({syncInfo.bind_host}). Restart
+            Flacify so the server binds to <code className="font-mono">0.0.0.0:{port}</code>{" "}
+            and begins advertising over mDNS.
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6 items-start">
           {/* QR Box */}
           <div className="flex flex-col items-center gap-2.5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
@@ -235,13 +259,46 @@ export function MobileSyncSection({
             <span className="text-[11px] text-zinc-400 text-center">
               Scan in Flacify Android to auto-fill host IP & token
             </span>
+            {syncInfo?.pair_uri && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="w-full text-[11px]"
+                onClick={() =>
+                  void handleCopy("Pairing URI", "pair-uri", syncInfo.pair_uri!)
+                }
+              >
+                {copiedKey === "pair-uri" ? (
+                  <Check className="h-3 w-3 text-emerald-400" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
+                Copy Pairing URI
+              </Button>
+            )}
           </div>
 
           {/* Connection Details */}
           <div className="space-y-4 min-w-0">
             <div className="space-y-1.5">
-              <div className="text-xs font-medium text-zinc-300">
-                Detected PC Addresses
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-medium text-zinc-300">
+                  Detected PC Addresses
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={isFetching}
+                  onClick={handleRefreshAddresses}
+                  className="h-7 px-2.5 text-[11px]"
+                >
+                  <RefreshCw
+                    className={cn("h-3 w-3", isFetching && "animate-spin")}
+                  />
+                  Refresh
+                </Button>
               </div>
               {isLoading ? (
                 <div className="text-xs text-zinc-500">Detecting network adapters...</div>

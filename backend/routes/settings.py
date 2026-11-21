@@ -5,6 +5,7 @@ Settings, Credentials & Engine Auth REST endpoints (/api/settings/*).
 import asyncio
 import logging
 import os
+import re
 import subprocess
 from typing import Any, Dict, List, Optional
 
@@ -32,8 +33,8 @@ _ALLOWED_KEY_PREFIXES = (
     "playlists.",
     "export.",
     "export_m3u.",
-    "mobile.",
 )
+_MUTABLE_MOBILE_KEYS = frozenset({"mobile.lan_enabled", "mobile.device_name"})
 _QUALITY_PRIORITY_320 = [
     "musilon_mp3_320",
     "musilon_flac_16",
@@ -97,7 +98,7 @@ def _save_config(cfg: Any) -> None:
 def _is_allowed_config_key(key: str) -> bool:
     if not isinstance(key, str) or not key or ".." in key or key.endswith("."):
         return False
-    if key in _ALLOWED_EXACT_KEYS:
+    if key in _ALLOWED_EXACT_KEYS or key in _MUTABLE_MOBILE_KEYS:
         return True
     return any(key.startswith(prefix) and len(key) > len(prefix) for prefix in _ALLOWED_KEY_PREFIXES)
 
@@ -211,7 +212,25 @@ async def update_settings(request: Request, body: SettingsUpdateRequest):
     if not body.values:
         raise HTTPException(status_code=400, detail="No setting values supplied.")
 
+    client_host = request.client.host if request.client else ""
     for key in body.values:
+        if key == "mobile.pair_token":
+            raise HTTPException(
+                status_code=403,
+                detail="mobile.pair_token can only be rotated locally via POST /api/sync/token/regenerate.",
+            )
+        if isinstance(key, str) and key.startswith("mobile."):
+            if key not in _MUTABLE_MOBILE_KEYS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported or disallowed configuration key: '{key}'",
+                )
+            if not is_loopback_host(client_host):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"{key} can only be changed locally on the host PC.",
+                )
+            continue
         if not _is_allowed_config_key(key):
             raise HTTPException(
                 status_code=400,
@@ -361,25 +380,14 @@ async def update_settings(request: Request, body: SettingsUpdateRequest):
             updated_keys.append(key)
             continue
 
-        if key == "mobile.pair_token":
-            raise HTTPException(
-                status_code=403,
-                detail="mobile.pair_token can only be rotated locally via POST /api/sync/token/regenerate.",
-            )
-
         if key == "mobile.lan_enabled":
-            client_host = request.client.host if request.client else ""
-            if not is_loopback_host(client_host):
-                raise HTTPException(
-                    status_code=403,
-                    detail="mobile.lan_enabled can only be changed locally on the host PC.",
-                )
             cfg.set(key, bool(raw_val))
             updated_keys.append(key)
             continue
 
         if key == "mobile.device_name":
-            cfg.set(key, str(raw_val or "").strip())
+            clean_name = re.sub(r"[\r\n\t\x00-\x1f\x7f]+", " ", str(raw_val or "")).strip()[:64]
+            cfg.set(key, clean_name)
             updated_keys.append(key)
             continue
 
@@ -870,6 +878,13 @@ async def install_ffmpeg(request: Request):
 async def open_local_folder(
     request: Request, body: Optional[OpenFolderRequest] = None
 ):
+    client_host = request.client.host if request.client else ""
+    if not is_loopback_host(client_host):
+        raise HTTPException(
+            status_code=403,
+            detail="Opening local folders is only allowed locally on the host PC.",
+        )
+
     backend = _get_backend(request)
     req = body or OpenFolderRequest()
     raw_target = (
@@ -886,8 +901,11 @@ async def open_local_folder(
 
     target = os.path.normpath(raw_target)
     if os.name == "nt":
-        if req.reveal and os.path.isfile(target):
-            subprocess.Popen(["explorer", f"/select,{target}"])
+        if os.path.isfile(target):
+            if req.reveal:
+                subprocess.Popen(["explorer", f"/select,{target}"])
+            else:
+                os.startfile(os.path.dirname(target))
         else:
             os.startfile(target)
     elif os.name == "posix":

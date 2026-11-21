@@ -87,6 +87,8 @@ def main() -> None:
         except Exception:
             bind_host = "127.0.0.1"
 
+    os.environ["FLACIFY_BIND_HOST"] = bind_host
+
     if args.frontend_dist:
         os.environ["FLACIFY_FRONTEND_DIST"] = args.frontend_dist
 

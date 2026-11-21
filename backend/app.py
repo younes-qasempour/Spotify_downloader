@@ -31,6 +31,7 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 _RESERVED_PREFIXES = ("api", "ws")
 _DOCS_PATHS = {"docs", "redoc", "openapi.json"}
+_PROTECTED_DOCS_PATHS = frozenset({"/docs", "/redoc", "/openapi.json"})
 
 
 def resolve_frontend_dist(explicit: Optional[str] = None) -> Optional[Path]:
@@ -96,11 +97,12 @@ def create_app(
     @app.middleware("http")
     async def mobile_pair_token_middleware(request: Request, call_next):
         path = request.url.path
-        if (
-            request.method == "OPTIONS"
-            or not path.startswith("/api/")
-            or path == "/api/health"
-        ):
+        is_protected = (
+            (path.startswith("/api/") and path != "/api/health")
+            or path in _PROTECTED_DOCS_PATHS
+            or path.startswith("/docs/")
+        )
+        if request.method == "OPTIONS" or not is_protected:
             return await call_next(request)
 
         client_host = request.client.host if request.client else ""

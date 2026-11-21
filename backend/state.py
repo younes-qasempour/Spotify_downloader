@@ -10,7 +10,7 @@ import threading
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
-from backend.mdns import FlacifyMdnsBroadcaster, get_device_name
+from backend.mdns import FlacifyMdnsBroadcaster, get_device_name, is_loopback_host
 from backend.serializers import (
     mask_config_value,
     serialize_queue_item,
@@ -369,22 +369,28 @@ class BackendState:
             return True
 
     def refresh_mdns(self) -> None:
-        """Starts or stops mDNS advertising based on `mobile.lan_enabled`."""
+        """Starts or stops mDNS advertising based on `mobile.lan_enabled` and bound host."""
         try:
             if not self.run_mdns:
                 return
-            if bool(self.config.get("mobile.lan_enabled", True)):
-                from core import __version__
-
-                port = int(os.getenv("FLACIFY_PORT", "8765") or "8765")
-                threading.Thread(
-                    target=self._mdns.start,
-                    args=(port, get_device_name(self.config), __version__),
-                    daemon=True,
-                    name="BackendMdnsAdvertiser",
-                ).start()
-            else:
+            bind_host = os.getenv("FLACIFY_BIND_HOST", "").strip()
+            if not bool(self.config.get("mobile.lan_enabled", True)) or (
+                bind_host and is_loopback_host(bind_host)
+            ):
                 self._mdns.stop()
+                return
+
+            from core import __version__
+
+            port = int(os.getenv("FLACIFY_PORT", "8765") or "8765")
+            gen = self._mdns.next_generation()
+            threading.Thread(
+                target=self._mdns.start,
+                args=(port, get_device_name(self.config), __version__),
+                kwargs={"generation": gen},
+                daemon=True,
+                name="BackendMdnsAdvertiser",
+            ).start()
         except Exception as exc:
             logger.debug(f"Could not refresh mDNS broadcaster: {exc}")
 

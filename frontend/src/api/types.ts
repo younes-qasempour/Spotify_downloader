@@ -627,6 +627,8 @@ export interface FfmpegInstallResponse {
 
 export interface MobileSyncInfo {
   lan_enabled: boolean;
+  bind_host?: string;
+  restart_required?: boolean;
   device_name: string;
   port: number;
   server_version: string;

@@ -90,64 +90,21 @@ class FlacifyMdnsBroadcaster:
         self._lock = threading.RLock()
         self._zeroconf: Optional[Any] = None
         self._info: Optional[Any] = None
+        self._generation: int = 0
 
     @staticmethod
     def _build_dns_host_label(device_name: str) -> str:
         raw = re.sub(r"[^a-z0-9-]+", "-", (device_name or "").lower()).strip("-")
         return raw[:40].strip("-") or "flacify"
 
-    def start(self, port: int, device_name: str, version: str) -> bool:
-        """Registers the Flacify service over Zeroconf; non-fatal if unavailable."""
+    def next_generation(self) -> int:
+        """Advances and returns the monotonic broadcaster generation counter."""
         with self._lock:
-            self.stop()
-            try:
-                from zeroconf import ServiceInfo, Zeroconf
+            self._generation += 1
+            return self._generation
 
-                ips = detect_reachable_lan_ips()
-                if not ips:
-                    return False
-
-                packed_addrs = [socket.inet_aton(ip) for ip in ips]
-                safe_instance = "".join(
-                    ch if (ch.isalnum() or ch in (" ", "-", "_")) else "-"
-                    for ch in (device_name or "Flacify PC")
-                ).strip() or "Flacify PC"
-                service_name = f"Flacify ({safe_instance[:40]}).{_SERVICE_TYPE}"
-                host_label = self._build_dns_host_label(device_name)
-
-                info = ServiceInfo(
-                    type_=_SERVICE_TYPE,
-                    name=service_name,
-                    addresses=packed_addrs,
-                    port=int(port),
-                    properties={
-                        b"version": str(version).encode("utf-8"),
-                        b"api": b"2.1",
-                        b"name": str(device_name or "Flacify PC").encode("utf-8"),
-                        b"pair": b"1",
-                    },
-                    server=f"{host_label}.local.",
-                )
-                zc = Zeroconf()
-                zc.register_service(info, allow_name_change=True)
-                self._zeroconf = zc
-                self._info = info
-                logger.info(
-                    f"mDNS advertising {service_name} on {ips[0]}:{port}"
-                )
-                return True
-            except Exception as exc:
-                logger.debug(f"mDNS broadcaster disabled/unavailable: {exc}")
-                self.stop()
-                return False
-
-    def stop(self) -> None:
-        """Unregisters and shuts down Zeroconf cleanly."""
-        with self._lock:
-            zc = self._zeroconf
-            info = self._info
-            self._zeroconf = None
-            self._info = None
+    @staticmethod
+    def _close_zeroconf(zc: Optional[Any], info: Optional[Any]) -> None:
         if zc is None:
             return
         try:
@@ -159,3 +116,94 @@ class FlacifyMdnsBroadcaster:
             zc.close()
         except Exception:
             pass
+
+    def _stop_locked(self, *, bump_generation: bool = True) -> tuple[Optional[Any], Optional[Any]]:
+        if bump_generation:
+            self._generation += 1
+        zc = self._zeroconf
+        info = self._info
+        self._zeroconf = None
+        self._info = None
+        return zc, info
+
+    def start(
+        self,
+        port: int,
+        device_name: str,
+        version: str,
+        *,
+        generation: Optional[int] = None,
+    ) -> bool:
+        """Registers the Flacify service over Zeroconf; non-fatal if unavailable."""
+        with self._lock:
+            if generation is not None:
+                if generation != self._generation:
+                    return False
+                target_gen = generation
+            else:
+                self._generation += 1
+                target_gen = self._generation
+            old_zc, old_info = self._stop_locked(bump_generation=False)
+
+        self._close_zeroconf(old_zc, old_info)
+
+        zc: Optional[Any] = None
+        info: Optional[Any] = None
+        try:
+            from zeroconf import ServiceInfo, Zeroconf
+
+            ips = detect_reachable_lan_ips()
+            if not ips:
+                return False
+
+            packed_addrs = [socket.inet_aton(ip) for ip in ips]
+            safe_instance = "".join(
+                ch if (ch.isalnum() or ch in (" ", "-", "_")) else "-"
+                for ch in (device_name or "Flacify PC")
+            ).strip() or "Flacify PC"
+            service_name = f"Flacify ({safe_instance[:40]}).{_SERVICE_TYPE}"
+            host_label = self._build_dns_host_label(device_name)
+
+            info = ServiceInfo(
+                type_=_SERVICE_TYPE,
+                name=service_name,
+                addresses=packed_addrs,
+                port=int(port),
+                properties={
+                    b"version": str(version).encode("utf-8"),
+                    b"api": b"2.1",
+                    b"name": str(device_name or "Flacify PC").encode("utf-8"),
+                    b"pair": b"1",
+                },
+                server=f"{host_label}.local.",
+            )
+            zc = Zeroconf()
+            zc.register_service(info, allow_name_change=True)
+
+            with self._lock:
+                if target_gen != self._generation:
+                    stale = True
+                else:
+                    self._zeroconf = zc
+                    self._info = info
+                    stale = False
+
+            if stale:
+                self._close_zeroconf(zc, info)
+                return False
+
+            logger.info(
+                f"mDNS advertising {service_name} on {ips[0]}:{port}"
+            )
+            return True
+        except Exception as exc:
+            logger.debug(f"mDNS broadcaster disabled/unavailable: {exc}")
+            self._close_zeroconf(zc, None)
+            self.stop()
+            return False
+
+    def stop(self) -> None:
+        """Unregisters and shuts down Zeroconf cleanly."""
+        with self._lock:
+            zc, info = self._stop_locked(bump_generation=True)
+        self._close_zeroconf(zc, info)

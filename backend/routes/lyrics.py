@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from backend.mdns import is_loopback_host
 from backend.state import BackendState
 from backend.track_lookup import resolve_track_row_and_file
 from core.spotify_client import TrackMetadata
@@ -261,6 +262,14 @@ async def export_track_lrc(
     track_id: str,
     body: Optional[ExportLrcRequest] = Body(default=None),
 ):
+    req = body or ExportLrcRequest()
+    client_host = request.client.host if request.client else ""
+    if req.output_path is not None and not is_loopback_host(client_host):
+        raise HTTPException(
+            status_code=403,
+            detail="Custom output_path is only allowed locally on the host PC.",
+        )
+
     backend = _get_backend(request)
     file_path, row, q_track = _resolve_track_and_file(backend, track_id)
     if not file_path or not os.path.isfile(file_path):
@@ -276,7 +285,6 @@ async def export_track_lrc(
             status_code=404, detail=f"No lyrics found for track '{track_id}'."
         )
 
-    req = body or ExportLrcRequest()
     translations: Optional[List[str]] = None
     if req.include_translation and req.target_lang in ("en", "fa"):
         translations = await asyncio.to_thread(

@@ -83,7 +83,9 @@ class SpotifyClient:
     """
 
     SPOTIFY_URL_PATTERN = re.compile(
-        r'(?:https?://open\.spotify\.com/|spotify:)(?P<type>track|album|playlist|artist)[/:](?P<id>[a-zA-Z0-9]+)'
+        r'(?:https?://open\.spotify\.com/(?:intl-[a-z]{2}(?:-[a-zA-Z]+)?/)?(?:embed/)?|spotify:)'
+        r'(?:user[/:][^/:]+[/:])?'
+        r'(?P<type>track|album|playlist|artist)[/:](?P<id>[a-zA-Z0-9]+)'
     )
 
     def __init__(self, client_id: str = "", client_secret: str = ""):
@@ -314,7 +316,7 @@ class SpotifyClient:
         self._init_api()
 
     COLLECTION_URL_PATTERN = re.compile(
-        r'(?:https?://open\.spotify\.com/|spotify:)(?:user[/:][^/:]+[/:])?collection(?:[/:]tracks|[/:]liked)?/?$',
+        r'(?:https?://open\.spotify\.com/(?:intl-[a-z]{2}(?:-[a-zA-Z]+)?/)?|spotify:)(?:user[/:][^/:]+[/:])?collection(?:[/:]tracks|[/:]liked)?/?$',
         re.IGNORECASE
     )
 
@@ -325,7 +327,7 @@ class SpotifyClient:
         Supports tracks, albums, playlists, artists, and personal collections (Liked Songs).
         Returns None if invalid.
         """
-        clean = url_or_uri.strip().split('?')[0]
+        clean = (url_or_uri or "").strip().split('?')[0].split('#')[0]
         if cls.COLLECTION_URL_PATTERN.search(clean) or clean.rstrip('/') in ("https://open.spotify.com/collection/tracks", "spotify:collection:tracks"):
             return "collection", "tracks"
 
