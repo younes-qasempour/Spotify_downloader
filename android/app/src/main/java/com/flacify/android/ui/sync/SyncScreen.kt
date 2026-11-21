@@ -24,8 +24,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CleaningServices
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
@@ -72,6 +74,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.flacify.android.data.db.PendingShareStatus
 import com.flacify.android.ui.library.FormatUtils
 import com.flacify.android.ui.theme.FlacifyAmberAccent
 import com.flacify.android.ui.theme.FlacifyBorder
@@ -437,6 +440,159 @@ fun SyncScreen(
                                             ),
                                         )
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1b. Send Spotify / YouTube Link to PC & Pending Offline Shares
+        if (state.connectionConfig.isPaired || state.pendingShares.isNotEmpty()) {
+            val unsentCount = state.pendingShares.count { it.status != PendingShareStatus.SENT }
+            val sentCount = state.pendingShares.count { it.status == PendingShareStatus.SENT }
+            Card(
+                colors = CardDefaults.cardColors(containerColor = FlacifyCardSurface),
+                border = BorderStroke(1.dp, FlacifyBorder),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Send Link to PC Queue",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = FlacifyTextPrimary,
+                            )
+                            Text(
+                                text = "Also works directly from Spotify -> Share -> Send to Flacify PC",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = FlacifyTextMuted,
+                            )
+                        }
+                        if (sentCount > 0) {
+                            TextButton(onClick = { viewModel.clearSentShares() }) {
+                                Text("Clear Sent", color = FlacifyTextMuted)
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = state.shareUrlInput,
+                            onValueChange = viewModel::updateShareUrlInput,
+                            label = { Text("Spotify or YouTube URL") },
+                            singleLine = true,
+                            colors = fieldColors,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Button(
+                            onClick = { viewModel.sendSharedLink() },
+                            enabled = state.shareUrlInput.isNotBlank() && !state.isSendingShare && state.connectionConfig.isPaired,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = FlacifyEmerald,
+                                contentColor = Color(0xFF032219),
+                            ),
+                        ) {
+                            if (state.isSendingShare) {
+                                CircularProgressIndicator(
+                                    strokeWidth = 2.dp,
+                                    color = Color(0xFF032219),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.Send,
+                                    contentDescription = "Send to PC",
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    if (unsentCount > 0 && state.connectionConfig.isPaired) {
+                        OutlinedButton(
+                            onClick = { viewModel.retryPendingShares() },
+                            border = BorderStroke(1.dp, FlacifyAmberAccent.copy(alpha = 0.5f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = FlacifyAmberAccent),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Retry $unsentCount Pending Share(s)")
+                        }
+                    }
+
+                    state.pendingShares.take(8).forEach { share ->
+                        val statusColor = when (share.status) {
+                            PendingShareStatus.SENT -> FlacifyEmeraldBright
+                            PendingShareStatus.FAILED -> FlacifyDanger
+                            else -> FlacifyAmberAccent
+                        }
+                        Surface(
+                            color = FlacifyElevatedSurface,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, FlacifyBorder),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Text(
+                                            text = share.displayKind,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = FlacifyTextPrimary,
+                                        )
+                                        Text(
+                                            text = share.status,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = statusColor,
+                                        )
+                                    }
+                                    Text(
+                                        text = share.rawUrl,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = FlacifyTextMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    share.lastError?.let { err ->
+                                        Text(
+                                            text = err,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = statusColor,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                                IconButton(onClick = { viewModel.deletePendingShare(share.id) }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Delete entry",
+                                        tint = FlacifyTextMuted,
+                                        modifier = Modifier.size(16.dp),
+                                    )
                                 }
                             }
                         }

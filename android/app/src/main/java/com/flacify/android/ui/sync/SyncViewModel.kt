@@ -7,12 +7,15 @@ import com.flacify.android.FlacifyApplication
 import com.flacify.android.data.ConnectionConfig
 import com.flacify.android.data.ConnectionSettingsStore
 import com.flacify.android.data.FlacifyRepository
+import com.flacify.android.data.db.PendingShareEntity
 import com.flacify.android.data.storage.StorageSummary
 import com.flacify.android.network.DiscoveredPc
 import com.flacify.android.network.FlacifyApiClient
 import com.flacify.android.network.MdnsDiscoveryManager
 import com.flacify.android.network.PairingUriParser
 import com.flacify.android.network.SyncInfoResponse
+import com.flacify.android.share.ShareSubmissionResult
+import com.flacify.android.share.ShareToPcManager
 import com.flacify.android.sync.FlacifySyncManager
 import com.flacify.android.sync.PlaylistSyncSummary
 import com.flacify.android.sync.SyncProgressState
@@ -41,6 +44,9 @@ data class SyncUiState(
     val syncedTrackCount: Int = 0,
     val isRefreshingCatalog: Boolean = false,
     val syncProgress: SyncProgressState = SyncProgressState(),
+    val pendingShares: List<PendingShareEntity> = emptyList(),
+    val shareUrlInput: String = "",
+    val isSendingShare: Boolean = false,
 )
 
 class SyncViewModel(
@@ -49,6 +55,7 @@ class SyncViewModel(
     private val mdnsDiscovery: MdnsDiscoveryManager,
     private val repository: FlacifyRepository,
     private val syncManager: FlacifySyncManager,
+    private val shareManager: ShareToPcManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SyncUiState())
@@ -102,6 +109,11 @@ class SyncViewModel(
                         errorMessage = prog.errorMessage ?: cur.errorMessage,
                     )
                 }
+            }
+        }
+        viewModelScope.launch {
+            shareManager.observePendingShares().collect { list ->
+                _uiState.update { it.copy(pendingShares = list) }
             }
         }
 
@@ -286,6 +298,7 @@ class SyncViewModel(
                 if (_uiState.value.playlistSummaries.isEmpty()) {
                     refreshCatalog()
                 }
+                shareManager.flushPendingSharesNow()
             } catch (ex: Exception) {
                 _uiState.update {
                     it.copy(
@@ -365,6 +378,62 @@ class SyncViewModel(
         }
     }
 
+    fun updateShareUrlInput(value: String) {
+        _uiState.update { it.copy(shareUrlInput = value, errorMessage = null) }
+    }
+
+    fun sendSharedLink() {
+        val raw = _uiState.value.shareUrlInput.trim()
+        if (raw.isEmpty() || _uiState.value.isSendingShare) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSendingShare = true, errorMessage = null) }
+            when (val res = shareManager.sendOrQueue(raw, autoDownload = true)) {
+                ShareSubmissionResult.InvalidUrl -> _uiState.update {
+                    it.copy(isSendingShare = false, errorMessage = "No valid Spotify or YouTube link found.")
+                }
+                is ShareSubmissionResult.NotPaired -> _uiState.update {
+                    it.copy(isSendingShare = false, errorMessage = "Pair with your PC first.")
+                }
+                is ShareSubmissionResult.SentNow -> _uiState.update {
+                    it.copy(
+                        isSendingShare = false,
+                        shareUrlInput = "",
+                        statusMessage = "Sent to PC queue (${res.response.queuedCount} track(s)).",
+                    )
+                }
+                is ShareSubmissionResult.QueuedOffline -> _uiState.update {
+                    it.copy(
+                        isSendingShare = false,
+                        shareUrlInput = "",
+                        statusMessage = res.reason,
+                    )
+                }
+                is ShareSubmissionResult.Failed -> _uiState.update {
+                    it.copy(isSendingShare = false, errorMessage = res.message)
+                }
+            }
+        }
+    }
+
+    fun retryPendingShares() {
+        viewModelScope.launch {
+            shareManager.flushPendingSharesNow()
+            _uiState.update { it.copy(statusMessage = "Retrying pending shared links in background...") }
+        }
+    }
+
+    fun deletePendingShare(id: Long) {
+        viewModelScope.launch {
+            shareManager.deleteShare(id)
+        }
+    }
+
+    fun clearSentShares() {
+        viewModelScope.launch {
+            shareManager.clearSentShares()
+        }
+    }
+
     fun disconnect() {
         viewModelScope.launch {
             syncManager.cancelSync()
@@ -406,6 +475,7 @@ class SyncViewModel(
                 mdnsDiscovery = app.mdnsDiscovery,
                 repository = app.repository,
                 syncManager = app.syncManager,
+                shareManager = app.shareManager,
             ) as T
     }
 

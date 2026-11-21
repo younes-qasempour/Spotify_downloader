@@ -13,6 +13,7 @@ import com.flacify.android.data.storage.LocalMediaStorage
 import com.flacify.android.network.FlacifyApiClient
 import com.flacify.android.network.MdnsDiscoveryManager
 import com.flacify.android.player.FlacifyPlayerController
+import com.flacify.android.share.ShareToPcManager
 import com.flacify.android.sync.FlacifySyncManager
 import com.flacify.android.sync.ResumableFileDownloader
 import kotlinx.coroutines.CoroutineScope
@@ -42,6 +43,8 @@ class FlacifyApplication : Application(), ImageLoaderFactory {
         private set
     lateinit var playerController: FlacifyPlayerController
         private set
+    lateinit var shareManager: ShareToPcManager
+        private set
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val latestConnection = AtomicReference(ConnectionConfig())
@@ -62,6 +65,12 @@ class FlacifyApplication : Application(), ImageLoaderFactory {
         )
         syncManager = FlacifySyncManager(this)
         playerController = FlacifyPlayerController(this)
+        shareManager = ShareToPcManager(
+            context = this,
+            dao = database.dao(),
+            connectionStore = connectionStore,
+            apiClient = apiClient,
+        )
 
         appScope.launch {
             connectionStore.configFlow.collect { cfg ->

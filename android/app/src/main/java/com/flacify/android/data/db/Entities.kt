@@ -85,3 +85,23 @@ data class TrackAliasEntity(
     @PrimaryKey val aliasId: String,
     val canonicalTrackId: String,
 )
+
+object PendingShareStatus {
+    const val PENDING = "PENDING"
+    const val SENDING = "SENDING"
+    const val SENT = "SENT"
+    const val FAILED = "FAILED"
+}
+
+@Entity(tableName = "pending_shares")
+data class PendingShareEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val rawUrl: String,
+    val displayKind: String,
+    val autoDownload: Boolean = true,
+    val status: String = PendingShareStatus.PENDING,
+    val queuedCount: Int = 0,
+    val lastError: String? = null,
+    val createdAt: Long,
+    val updatedAt: Long,
+)

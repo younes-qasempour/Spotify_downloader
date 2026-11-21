@@ -141,4 +141,40 @@ interface FlacifyDao {
 
     @Query("UPDATE tracks SET syncStatus = 'NOT_SYNCED' WHERE syncStatus = 'SYNCING'")
     suspend fun resetStaleSyncingTracks()
+
+    @Query("SELECT * FROM pending_shares ORDER BY createdAt DESC LIMIT 50")
+    fun observePendingShares(): Flow<List<PendingShareEntity>>
+
+    @Query("SELECT * FROM pending_shares WHERE status IN ('PENDING', 'FAILED') ORDER BY createdAt ASC")
+    suspend fun getUnsentShares(): List<PendingShareEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPendingShare(share: PendingShareEntity): Long
+
+    @Query(
+        """
+        UPDATE pending_shares
+        SET status = :status,
+            queuedCount = :queuedCount,
+            lastError = :lastError,
+            updatedAt = :updatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun updatePendingShareStatus(
+        id: Long,
+        status: String,
+        queuedCount: Int,
+        lastError: String?,
+        updatedAt: Long,
+    )
+
+    @Query("UPDATE pending_shares SET status = 'PENDING', updatedAt = :updatedAt WHERE status = 'FAILED'")
+    suspend fun resetFailedSharesToPending(updatedAt: Long)
+
+    @Query("DELETE FROM pending_shares WHERE id = :id")
+    suspend fun deletePendingShare(id: Long)
+
+    @Query("DELETE FROM pending_shares WHERE status = 'SENT'")
+    suspend fun clearSentShares()
 }
