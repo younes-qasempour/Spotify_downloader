@@ -9,6 +9,7 @@ class FlacifyAudioEngine {
   private bassShelf: BiquadFilterNode | null = null;
   private bandFilters: BiquadFilterNode[] = [];
   private limiter: DynamicsCompressorNode | null = null;
+  private analyser: AnalyserNode | null = null;
   private graphInitFailed = false;
   private currentEq: EqualizerConfig | null = null;
 
@@ -56,6 +57,10 @@ class FlacifyAudioEngine {
       limiter.attack.value = 0.003;
       limiter.release.value = 0.15;
 
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.8;
+
       let tail: AudioNode = source;
       tail.connect(preamp);
       tail = preamp;
@@ -66,7 +71,8 @@ class FlacifyAudioEngine {
         tail = f;
       }
       tail.connect(limiter);
-      limiter.connect(ctx.destination);
+      limiter.connect(analyser);
+      analyser.connect(ctx.destination);
 
       this.ctx = ctx;
       this.sourceNode = source;
@@ -74,6 +80,7 @@ class FlacifyAudioEngine {
       this.bassShelf = bassShelf;
       this.bandFilters = filters;
       this.limiter = limiter;
+      this.analyser = analyser;
 
       if (this.currentEq) {
         this.applyEqualizer(this.currentEq);
@@ -168,6 +175,12 @@ class FlacifyAudioEngine {
 
   get hasWebAudio(): boolean {
     return Boolean(this.ctx && this.sourceNode && this.limiter);
+  }
+
+  getFrequencyData(target: Uint8Array<ArrayBuffer>): boolean {
+    if (!this.analyser) return false;
+    this.analyser.getByteFrequencyData(target);
+    return true;
   }
 }
 

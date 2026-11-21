@@ -25,6 +25,8 @@ interface AppState {
   commandPaletteOpen: boolean;
   lyricsDrawerOpen: boolean;
   eqPopoverOpen: boolean;
+  miniPlayerOpen: boolean;
+  miniPlayerPinned: boolean;
   ambientColor: RgbColor;
 
   wsStatus: WsConnectionStatus;
@@ -43,6 +45,10 @@ interface AppState {
   toggleLyricsDrawer: () => void;
   setEqPopoverOpen: (open: boolean) => void;
   toggleEqPopover: () => void;
+  setMiniPlayerOpen: (open: boolean) => void;
+  toggleMiniPlayer: () => void;
+  setMiniPlayerPinned: (pinned: boolean) => void;
+  toggleMiniPlayerPinned: () => void;
   setAmbientColor: (rgb: RgbColor) => void;
   resetAmbientColor: () => void;
 
@@ -68,10 +74,12 @@ export const useAppStore = create<AppState>((set) => ({
   commandPaletteOpen: false,
   lyricsDrawerOpen: false,
   eqPopoverOpen: false,
+  miniPlayerOpen: false,
+  miniPlayerPinned: true,
   ambientColor: DEFAULT_AMBIENT_RGB,
 
   wsStatus: "connecting",
-  backendVersion: "2.0.0",
+  backendVersion: "2.0.1",
   queuePaused: false,
   pendingPrompts: [],
   liveProgress: {},
@@ -90,6 +98,12 @@ export const useAppStore = create<AppState>((set) => ({
   setEqPopoverOpen: (open) => set({ eqPopoverOpen: open }),
   toggleEqPopover: () =>
     set((state) => ({ eqPopoverOpen: !state.eqPopoverOpen })),
+  setMiniPlayerOpen: (miniPlayerOpen) => set({ miniPlayerOpen }),
+  toggleMiniPlayer: () =>
+    set((state) => ({ miniPlayerOpen: !state.miniPlayerOpen })),
+  setMiniPlayerPinned: (miniPlayerPinned) => set({ miniPlayerPinned }),
+  toggleMiniPlayerPinned: () =>
+    set((state) => ({ miniPlayerPinned: !state.miniPlayerPinned })),
 
   setAmbientColor: (rgb) => {
     applyAmbientColor(rgb);

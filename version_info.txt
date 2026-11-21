@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 0, 0, 0),
-    prodvers=(2, 0, 0, 0),
+    filevers=(2, 0, 1, 0),
+    prodvers=(2, 0, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Flacify Project'),
             StringStruct('FileDescription', 'Flacify Lossless Audio Studio'),
-            StringStruct('FileVersion', '2.0.0.0'),
+            StringStruct('FileVersion', '2.0.1.0'),
             StringStruct('InternalName', 'Flacify'),
             StringStruct('LegalCopyright', '\xa9 2026 Flacify'),
             StringStruct('OriginalFilename', 'Flacify.exe'),
             StringStruct('ProductName', 'Flacify'),
-            StringStruct('ProductVersion', '2.0.0.0'),
+            StringStruct('ProductVersion', '2.0.1.0'),
           ]
         )
       ]

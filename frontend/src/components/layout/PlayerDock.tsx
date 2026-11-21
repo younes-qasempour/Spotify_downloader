@@ -5,6 +5,7 @@ import {
   ListMusic,
   Loader2,
   Pause,
+  PictureInPicture2,
   Play,
   Repeat,
   Repeat1,
@@ -48,6 +49,8 @@ export function PlayerDock() {
   const toggleLyricsDrawer = useAppStore((s) => s.toggleLyricsDrawer);
   const eqPopoverOpen = useAppStore((s) => s.eqPopoverOpen);
   const toggleEqPopover = useAppStore((s) => s.toggleEqPopover);
+  const miniPlayerOpen = useAppStore((s) => s.miniPlayerOpen);
+  const toggleMiniPlayer = useAppStore((s) => s.toggleMiniPlayer);
   const setAmbientColor = useAppStore((s) => s.setAmbientColor);
   const resetAmbientColor = useAppStore((s) => s.resetAmbientColor);
 
@@ -180,6 +183,19 @@ export function PlayerDock() {
               {eqEnabled && (
                 <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-emerald-bright" />
               )}
+            </button>
+            <button
+              type="button"
+              onClick={toggleMiniPlayer}
+              className={cn(
+                "rounded-lg p-1.5 transition-colors cursor-pointer border",
+                miniPlayerOpen
+                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                  : "text-zinc-400 border-transparent hover:text-white"
+              )}
+              title="Studio Mini Player (Alt+M)"
+            >
+              <PictureInPicture2 className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -397,6 +413,20 @@ export function PlayerDock() {
           {eqEnabled && (
             <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-emerald-bright" />
           )}
+        </button>
+
+        <button
+          type="button"
+          onClick={toggleMiniPlayer}
+          className={cn(
+            "rounded-lg p-2 transition-colors cursor-pointer border",
+            miniPlayerOpen
+              ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+              : "text-zinc-400 border-transparent hover:bg-white/8 hover:text-white"
+          )}
+          title="Studio Mini Player (Alt+M)"
+        >
+          <PictureInPicture2 className="h-4 w-4" />
         </button>
 
         <div className="hidden md:flex items-center gap-2 pl-1">

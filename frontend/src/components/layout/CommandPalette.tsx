@@ -9,6 +9,7 @@ import {
   ListMusic,
   PanelLeft,
   Pause,
+  PictureInPicture2,
   Play,
   RefreshCw,
   Search,
@@ -43,6 +44,7 @@ export function CommandPalette() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const toggleLyricsDrawer = useAppStore((s) => s.toggleLyricsDrawer);
   const toggleEqPopover = useAppStore((s) => s.toggleEqPopover);
+  const toggleMiniPlayer = useAppStore((s) => s.toggleMiniPlayer);
 
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -274,6 +276,15 @@ export function CommandPalette() {
         run: () => toggleEqPopover(),
       },
       {
+        id: "act-mini-player",
+        section: "Quick Actions",
+        title: "Toggle Studio Mini Player",
+        subtitle: "Resizable PiP / Always-on-top mini player (Alt+M)",
+        icon: PictureInPicture2,
+        keywords: "mini player pip float compact visualizer",
+        run: () => toggleMiniPlayer(),
+      },
+      {
         id: "act-sidebar",
         section: "Quick Actions",
         title: "Toggle Sidebar Width",
@@ -302,6 +313,7 @@ export function CommandPalette() {
     queuePaused,
     toggleEqPopover,
     toggleLyricsDrawer,
+    toggleMiniPlayer,
     toggleSidebar,
     trimmedQuery,
   ]);

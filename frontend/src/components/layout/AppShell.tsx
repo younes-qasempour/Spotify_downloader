@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { Outlet } from "react-router-dom";
 import { Toaster } from "sonner";
 import { CommandPalette } from "@/components/layout/CommandPalette";
@@ -8,9 +8,17 @@ import { TopBar } from "@/components/layout/TopBar";
 import { AudioEngineController } from "@/components/player/AudioEngineController";
 import { EqualizerPopover } from "@/components/player/EqualizerPopover";
 import { KaraokeLyricsDrawer } from "@/components/player/KaraokeLyricsDrawer";
+import { loadSavedMiniGeometry, MiniPlayer } from "@/components/player/MiniPlayer";
 import { MusilonPromptModal } from "@/components/queue/MusilonPromptModal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBackendEvents } from "@/hooks/useBackendEvents";
+import {
+  enterDesktopMiniPlayer,
+  exitDesktopMiniPlayer,
+  isDesktopApp,
+  listenDesktopMiniPlayerToggle,
+} from "@/lib/desktop";
+import { useAppStore } from "@/stores/appStore";
 
 function RouteSuspenseFallback() {
   return (
@@ -30,6 +38,66 @@ function RouteSuspenseFallback() {
 
 export function AppShell() {
   useBackendEvents();
+
+  const miniPlayerOpen = useAppStore((s) => s.miniPlayerOpen);
+  const toggleMiniPlayer = useAppStore((s) => s.toggleMiniPlayer);
+  const desktop = isDesktopApp();
+  const wasDesktopMiniRef = useRef(false);
+
+  // Sync Tauri desktop window geometry between Full App and Studio Mini Player
+  useEffect(() => {
+    if (!desktop) return;
+    if (miniPlayerOpen) {
+      wasDesktopMiniRef.current = true;
+      const geo = loadSavedMiniGeometry();
+      const pinned = useAppStore.getState().miniPlayerPinned;
+      void enterDesktopMiniPlayer(geo.width, geo.height, pinned);
+    } else if (wasDesktopMiniRef.current) {
+      wasDesktopMiniRef.current = false;
+      void exitDesktopMiniPlayer();
+    }
+  }, [desktop, miniPlayerOpen]);
+
+  // Global Alt+M shortcut & desktop System Tray toggle
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "m") {
+        if (
+          e.target instanceof HTMLElement &&
+          ["input", "textarea", "select"].includes(e.target.tagName.toLowerCase())
+        ) {
+          return;
+        }
+        e.preventDefault();
+        toggleMiniPlayer();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+
+    let unlisten = () => {};
+    if (desktop) {
+      void listenDesktopMiniPlayerToggle(() => {
+        useAppStore.getState().toggleMiniPlayer();
+      }).then((fn) => {
+        unlisten = fn;
+      });
+    }
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      unlisten();
+    };
+  }, [desktop, toggleMiniPlayer]);
+
+  if (miniPlayerOpen && desktop) {
+    return (
+      <>
+        <MiniPlayer mode="desktop" />
+        <AudioEngineController />
+        <Toaster theme="dark" position="bottom-right" richColors />
+      </>
+    );
+  }
 
   return (
     <div className="flex h-screen supports-[height:100dvh]:h-dvh w-screen overflow-hidden bg-canvas text-zinc-100">
@@ -53,6 +121,7 @@ export function AppShell() {
         </div>
       </div>
 
+      {miniPlayerOpen && !desktop && <MiniPlayer mode="web" />}
       <AudioEngineController />
       <EqualizerPopover />
       <KaraokeLyricsDrawer />

@@ -85,3 +85,66 @@ export async function isDesktopWindowMaximized(): Promise<boolean> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   return getCurrentWindow().isMaximized();
 }
+
+export type DesktopResizeDirection =
+  | "East"
+  | "North"
+  | "NorthEast"
+  | "NorthWest"
+  | "South"
+  | "SouthEast"
+  | "SouthWest"
+  | "West";
+
+export async function enterDesktopMiniPlayer(
+  width: number,
+  height: number,
+  alwaysOnTop: boolean
+): Promise<void> {
+  if (!isDesktopApp()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("enter_mini_player", {
+    width,
+    height,
+    alwaysOnTop,
+  });
+}
+
+export async function exitDesktopMiniPlayer(): Promise<void> {
+  if (!isDesktopApp()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("exit_mini_player");
+}
+
+export async function resizeDesktopMiniPlayer(
+  width: number,
+  height: number
+): Promise<void> {
+  if (!isDesktopApp()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("resize_mini_player", { width, height });
+}
+
+export async function setDesktopAlwaysOnTop(pinned: boolean): Promise<void> {
+  if (!isDesktopApp()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("set_mini_always_on_top", { pinned });
+}
+
+export async function startDesktopResizeDragging(
+  direction: DesktopResizeDirection
+): Promise<void> {
+  if (!isDesktopApp()) return;
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  await getCurrentWindow().startResizeDragging(direction);
+}
+
+export async function listenDesktopMiniPlayerToggle(
+  handler: () => void
+): Promise<() => void> {
+  if (!isDesktopApp()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("flacify://toggle-mini-player", () => {
+    handler();
+  });
+}

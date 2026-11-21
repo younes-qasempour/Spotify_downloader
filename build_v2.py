@@ -13,9 +13,17 @@ import argparse
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
+
+
+def get_app_version(repo_root: Path) -> str:
+    init_py = repo_root / "core" / "__init__.py"
+    text = init_py.read_text(encoding="utf-8")
+    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
+    return match.group(1) if match else "2.0.0"
 
 
 def log(msg: str) -> None:
@@ -112,20 +120,24 @@ def assemble_v2_bundle(repo_root: Path, tauri_exe: Path, backend_dir: Path) -> P
     return bundle_dir
 
 
-def compile_installer(repo_root: Path, iscc_path: Path) -> Path:
-    log(f"Compiling Inno Setup v2.0.0 installer via {iscc_path}...")
+def compile_installer(repo_root: Path, iscc_path: Path, app_version: str) -> Path:
+    log(f"Compiling Inno Setup v{app_version} installer via {iscc_path}...")
     iss_path = repo_root / "installer_v2.iss"
     installer_out_dir = repo_root / "dist" / "installer"
     installer_out_dir.mkdir(parents=True, exist_ok=True)
 
     run_step([str(iscc_path), str(iss_path)], cwd=repo_root)
-    setup_exe = installer_out_dir / "Flacify_Setup_v2.0.0.exe"
+    setup_exe = installer_out_dir / f"Flacify_Setup_v{app_version}.exe"
     if not setup_exe.is_file():
-        raise FileNotFoundError(f"Expected installer not found: {setup_exe}")
+        matches = sorted(installer_out_dir.glob("Flacify_Setup_v2*.exe"), reverse=True)
+        if matches:
+            setup_exe = matches[0]
+        else:
+            raise FileNotFoundError(f"Expected installer not found: {setup_exe}")
 
     size_mb = setup_exe.stat().st_size / (1024 * 1024)
     digest = compute_sha256(setup_exe)
-    log("Flacify v2.0.0 Installer Ready!")
+    log(f"Flacify v{app_version} Installer Ready!")
     print(f"  Location : {setup_exe}")
     print(f"  Size     : {size_mb:.2f} MB ({setup_exe.stat().st_size:,} bytes)")
     print(f"  SHA-256  : {digest}")
@@ -133,7 +145,7 @@ def compile_installer(repo_root: Path, iscc_path: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build Flacify v2.0 Desktop + Web Bundle")
+    parser = argparse.ArgumentParser(description="Build Flacify v2.x Desktop + Web Bundle")
     parser.add_argument(
         "--skip-installer",
         action="store_true",
@@ -142,6 +154,7 @@ def main() -> None:
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent
+    app_version = get_app_version(repo_root)
     build_frontend(repo_root)
     tauri_exe = build_tauri_desktop(repo_root)
     backend_dir = build_backend_sidecar(repo_root)
@@ -157,7 +170,7 @@ def main() -> None:
         print(f"  Portable bundle ready at: {bundle_dir}")
         return
 
-    compile_installer(repo_root, iscc)
+    compile_installer(repo_root, iscc, app_version)
 
 
 if __name__ == "__main__":

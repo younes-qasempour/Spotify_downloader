@@ -43,6 +43,7 @@ interface PlayerState {
 
   setTrack: (track: PlayerTrack) => void;
   playTrackList: (tracks: PlayerTrack[], startIndex?: number) => void;
+  playQueueIndex: (index: number) => void;
   togglePlay: () => void;
   setPlaying: (playing: boolean) => void;
   setBuffering: (buffering: boolean) => void;
@@ -114,6 +115,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       currentTrack: track,
       queue: tracks,
       currentIndex: clampedIdx,
+      isPlaying: true,
+      isBuffering: true,
+      audioError: null,
+      currentTimeSec: 0,
+      durationSec: track.durationSec || 0,
+    });
+  },
+
+  playQueueIndex: (index) => {
+    const { queue } = get();
+    if (!queue.length || index < 0 || index >= queue.length) return;
+    const track = queue[index];
+    set({
+      currentTrack: track,
+      currentIndex: index,
       isPlaying: true,
       isBuffering: true,
       audioError: null,
