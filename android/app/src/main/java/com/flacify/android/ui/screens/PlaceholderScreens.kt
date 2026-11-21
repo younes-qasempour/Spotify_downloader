@@ -17,7 +17,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.LibraryMusic
-import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -27,8 +28,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.flacify.android.ui.sync.SyncUiState
 import com.flacify.android.ui.theme.FlacifyBorder
 import com.flacify.android.ui.theme.FlacifyCardSurface
 import com.flacify.android.ui.theme.FlacifyElevatedSurface
@@ -39,40 +42,60 @@ import com.flacify.android.ui.theme.FlacifyTextMuted
 import com.flacify.android.ui.theme.FlacifyTextPrimary
 
 @Composable
-fun PlaylistsScreen(modifier: Modifier = Modifier) {
+fun PlaylistsScreen(
+    syncState: SyncUiState,
+    onOpenSyncTab: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val paired = syncState.connectionConfig.isPaired
+    val pcName = syncState.syncInfo?.deviceName?.ifBlank { syncState.connectionConfig.deviceName }
+        ?: syncState.connectionConfig.deviceName.ifBlank { "Flacify PC" }
+    val plCount = syncState.syncInfo?.savedPlaylistsCount ?: 0
+
     StarterSectionLayout(
         title = "Offline Playlists",
         subtitle = "Keep selected Spotify & PC playlists downloaded on your phone in original bit-perfect FLAC.",
-        badgeText = "STEP 2.3–2.4",
+        badgeText = if (paired) "NEXT: STEP 2.3" else "PAIR FIRST",
         icon = Icons.AutoMirrored.Rounded.QueueMusic,
-        detailsTitle = "Zero-Duplicate Offline Sync",
-        detailsBody = "Shared songs across playlists are stored once by canonical ID and indexed locally in Room for instant 100% offline playback.",
+        detailsTitle = if (paired) "Paired with $pcName" else "Connect to Your PC First",
+        detailsBody = if (paired) {
+            "$plCount playlists available on $pcName. Offline Room database & resumable FLAC sync engine arrive in Step 2.3."
+        } else {
+            "Pair with Flacify Desktop in the Sync tab so we can load your playlists and sync original lossless FLAC tracks."
+        },
+        showSyncAction = !paired,
+        onOpenSyncTab = onOpenSyncTab,
         modifier = modifier,
     )
 }
 
 @Composable
-fun LibraryScreen(modifier: Modifier = Modifier) {
+fun LibraryScreen(
+    syncState: SyncUiState,
+    onOpenSyncTab: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val paired = syncState.connectionConfig.isPaired
+    val trackCount = syncState.syncInfo?.libraryStats?.totalTracks ?: 0
+    val sizeStr = syncState.syncInfo?.libraryStats?.sizeStr ?: ""
+
     StarterSectionLayout(
         title = "Offline Library",
         subtitle = "Browse thousands of lossless tracks by title, artist, album, or genre without touching mobile data.",
         badgeText = "FLAC 16 / 24-BIT",
         icon = Icons.Rounded.LibraryMusic,
-        detailsTitle = "Media3 Lossless Playback Ready",
-        detailsBody = "Background ExoPlayer service, mini player, and offline .lrc synced lyrics will light up here once paired.",
-        modifier = modifier,
-    )
-}
-
-@Composable
-fun SyncScreen(modifier: Modifier = Modifier) {
-    StarterSectionLayout(
-        title = "Connect to Flacify PC",
-        subtitle = "Pair with your PC over Wi-Fi, Tailscale, or Android Emulator (10.0.2.2:8765) via QR scan or mDNS.",
-        badgeText = "NEXT: STEP 2.2",
-        icon = Icons.Rounded.Sync,
-        detailsTitle = "Wi-Fi Sync & Android Share Ready",
-        detailsBody = "Open Flacify Settings -> Mobile Sync on your PC to view your pairing QR code. QR pairing, _flacify._tcp discovery, and resumable transfers arrive next.",
+        detailsTitle = if (paired && trackCount > 0) {
+            "$trackCount Lossless Tracks on PC ($sizeStr)"
+        } else {
+            "Media3 Lossless Playback Ready"
+        },
+        detailsBody = if (paired) {
+            "Deduplicated Room storage + instant offline search & Media3 player arrive in Steps 2.3–2.5."
+        } else {
+            "Pair with your PC in the Sync tab to browse and download your lossless library."
+        },
+        showSyncAction = !paired,
+        onOpenSyncTab = onOpenSyncTab,
         modifier = modifier,
     )
 }
@@ -85,6 +108,8 @@ private fun StarterSectionLayout(
     icon: ImageVector,
     detailsTitle: String,
     detailsBody: String,
+    showSyncAction: Boolean,
+    onOpenSyncTab: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -182,6 +207,18 @@ private fun StarterSectionLayout(
                     style = MaterialTheme.typography.bodyMedium,
                     color = FlacifyTextMuted,
                 )
+
+                if (showSyncAction) {
+                    Button(
+                        onClick = onOpenSyncTab,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = FlacifyEmerald,
+                            contentColor = Color(0xFF032219),
+                        ),
+                    ) {
+                        Text("Open PC Sync & Pair")
+                    }
+                }
             }
         }
     }
