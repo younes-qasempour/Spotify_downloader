@@ -27,6 +27,7 @@ interface AppState {
   eqPopoverOpen: boolean;
   miniPlayerOpen: boolean;
   miniPlayerPinned: boolean;
+  closeConfirmOpen: boolean;
   ambientColor: RgbColor;
 
   wsStatus: WsConnectionStatus;
@@ -49,6 +50,7 @@ interface AppState {
   toggleMiniPlayer: () => void;
   setMiniPlayerPinned: (pinned: boolean) => void;
   toggleMiniPlayerPinned: () => void;
+  setCloseConfirmOpen: (open: boolean) => void;
   setAmbientColor: (rgb: RgbColor) => void;
   resetAmbientColor: () => void;
 
@@ -76,6 +78,7 @@ export const useAppStore = create<AppState>((set) => ({
   eqPopoverOpen: false,
   miniPlayerOpen: false,
   miniPlayerPinned: true,
+  closeConfirmOpen: false,
   ambientColor: DEFAULT_AMBIENT_RGB,
 
   wsStatus: "connecting",
@@ -104,6 +107,7 @@ export const useAppStore = create<AppState>((set) => ({
   setMiniPlayerPinned: (miniPlayerPinned) => set({ miniPlayerPinned }),
   toggleMiniPlayerPinned: () =>
     set((state) => ({ miniPlayerPinned: !state.miniPlayerPinned })),
+  setCloseConfirmOpen: (closeConfirmOpen) => set({ closeConfirmOpen }),
 
   setAmbientColor: (rgb) => {
     applyAmbientColor(rgb);

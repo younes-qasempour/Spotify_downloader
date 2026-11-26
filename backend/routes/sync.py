@@ -15,7 +15,7 @@ import time
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 from urllib.parse import quote, urlparse
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 import requests
@@ -34,6 +34,12 @@ from backend.routes.media import (
 from backend.routes.queue import _resolve_and_enqueue_sync
 from backend.state import BackendState
 from backend.track_lookup import resolve_track_row_and_file
+from backend.usb_sync import (
+    disable_usb_reverse,
+    enable_usb_reverse,
+    get_usb_sync_status,
+    install_platform_tools,
+)
 from core import __version__
 from core.archive import normalize_path
 from core.spotify_client import SpotifyClient
@@ -699,3 +705,70 @@ async def share_url_from_mobile(request: Request, body: ShareSpotifyUrlRequest):
         "tracks": result["items"],
         "errors": result["errors"],
     }
+
+
+class UsbBridgeRequest(BaseModel):
+    serial: Optional[str] = None
+
+
+def _require_loopback_usb(request: Request) -> None:
+    client_host = request.client.host if request.client else ""
+    if not is_loopback_host(client_host):
+        raise HTTPException(
+            status_code=403,
+            detail="USB Cable Sync controls are only available locally on the host PC.",
+        )
+
+
+async def _run_usb_reverse_action(
+    request: Request,
+    body: Optional[UsbBridgeRequest],
+    *,
+    enable: bool,
+) -> Dict[str, Any]:
+    _require_loopback_usb(request)
+    port = _resolve_port(request)
+    serial = body.serial if body else None
+    fn = enable_usb_reverse if enable else disable_usb_reverse
+    try:
+        return await asyncio.to_thread(fn, port, serial)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/usb/status")
+async def get_usb_status_endpoint(request: Request):
+    _require_loopback_usb(request)
+    port = _resolve_port(request)
+    return await asyncio.to_thread(get_usb_sync_status, port)
+
+
+@router.post("/usb/enable")
+async def enable_usb_bridge_endpoint(
+    request: Request,
+    body: Optional[UsbBridgeRequest] = Body(default=None),
+):
+    return await _run_usb_reverse_action(request, body, enable=True)
+
+
+@router.post("/usb/disable")
+async def disable_usb_bridge_endpoint(
+    request: Request,
+    body: Optional[UsbBridgeRequest] = Body(default=None),
+):
+    return await _run_usb_reverse_action(request, body, enable=False)
+
+
+@router.post("/usb/install-adb")
+async def install_adb_platform_tools_endpoint(request: Request):
+    _require_loopback_usb(request)
+    try:
+        return await asyncio.to_thread(install_platform_tools)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=f"Invalid Platform-Tools archive: {exc}")
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to download Android Platform-Tools: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not install Android Platform-Tools: {exc}")

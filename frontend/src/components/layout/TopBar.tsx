@@ -15,7 +15,6 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "@/api/endpoints";
 import {
-  closeDesktopWindow,
   hideDesktopToTray,
   isDesktopApp,
   isDesktopWindowMaximized,
@@ -76,6 +75,7 @@ export function TopBar() {
 
   const setMobileNavOpen = useAppStore((s) => s.setMobileNavOpen);
   const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen);
+  const setCloseConfirmOpen = useAppStore((s) => s.setCloseConfirmOpen);
   const pendingPrompts = useAppStore((s) => s.pendingPrompts);
   const queuePaused = useAppStore((s) => s.queuePaused);
 
@@ -234,7 +234,7 @@ export function TopBar() {
             </button>
             <button
               type="button"
-              onClick={() => void closeDesktopWindow()}
+              onClick={() => setCloseConfirmOpen(true)}
               className="rounded-lg p-1.5 text-zinc-400 hover:bg-red-500/80 hover:text-white transition-colors cursor-pointer"
               title="Close Window"
               aria-label="Close"

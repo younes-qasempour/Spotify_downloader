@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useRef } from "react";
 import { Outlet } from "react-router-dom";
 import { Toaster } from "sonner";
+import { CloseConfirmModal } from "@/components/layout/CloseConfirmModal";
 import { CommandPalette } from "@/components/layout/CommandPalette";
 import { PlayerDock } from "@/components/layout/PlayerDock";
 import { Sidebar } from "@/components/layout/Sidebar";
@@ -16,6 +17,8 @@ import {
   enterDesktopMiniPlayer,
   exitDesktopMiniPlayer,
   isDesktopApp,
+  listenDesktopCloseRequest,
+  listenDesktopMiniPlayerExit,
   listenDesktopMiniPlayerToggle,
 } from "@/lib/desktop";
 import { useAppStore } from "@/stores/appStore";
@@ -74,18 +77,37 @@ export function AppShell() {
     };
     window.addEventListener("keydown", onKeyDown);
 
-    let unlisten = () => {};
+    let unlistenToggle = () => {};
+    let unlistenExit = () => {};
+    let unlistenClose = () => {};
+    let active = true;
     if (desktop) {
       void listenDesktopMiniPlayerToggle(() => {
         useAppStore.getState().toggleMiniPlayer();
       }).then((fn) => {
-        unlisten = fn;
+        if (active) unlistenToggle = fn;
+        else fn();
+      });
+      void listenDesktopMiniPlayerExit(() => {
+        useAppStore.getState().setMiniPlayerOpen(false);
+      }).then((fn) => {
+        if (active) unlistenExit = fn;
+        else fn();
+      });
+      void listenDesktopCloseRequest(() => {
+        useAppStore.getState().setCloseConfirmOpen(true);
+      }).then((fn) => {
+        if (active) unlistenClose = fn;
+        else fn();
       });
     }
 
     return () => {
+      active = false;
       window.removeEventListener("keydown", onKeyDown);
-      unlisten();
+      unlistenToggle();
+      unlistenExit();
+      unlistenClose();
     };
   }, [desktop, toggleMiniPlayer]);
 
@@ -127,6 +149,7 @@ export function AppShell() {
       <KaraokeLyricsDrawer />
       <CommandPalette />
       <MusilonPromptModal />
+      <CloseConfirmModal />
       <Toaster
         theme="dark"
         position="bottom-right"

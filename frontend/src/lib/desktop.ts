@@ -139,12 +139,38 @@ export async function startDesktopResizeDragging(
   await getCurrentWindow().startResizeDragging(direction);
 }
 
+export async function quitDesktopApp(): Promise<void> {
+  if (!isDesktopApp()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("quit_app");
+}
+
 export async function listenDesktopMiniPlayerToggle(
   handler: () => void
 ): Promise<() => void> {
   if (!isDesktopApp()) return () => {};
   const { listen } = await import("@tauri-apps/api/event");
   return listen("flacify://toggle-mini-player", () => {
+    handler();
+  });
+}
+
+export async function listenDesktopMiniPlayerExit(
+  handler: () => void
+): Promise<() => void> {
+  if (!isDesktopApp()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("flacify://exit-mini-player", () => {
+    handler();
+  });
+}
+
+export async function listenDesktopCloseRequest(
+  handler: () => void
+): Promise<() => void> {
+  if (!isDesktopApp()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("flacify://request-close", () => {
     handler();
   });
 }

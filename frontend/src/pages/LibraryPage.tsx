@@ -19,7 +19,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { apiUrl } from "@/api/client";
 import { api } from "@/api/endpoints";
@@ -80,6 +80,7 @@ function toPlayerTrack(tr: LibraryTrack): PlayerTrack {
 
 export function LibraryPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
   const playTrackList = usePlayerStore((s) => s.playTrackList);
@@ -107,6 +108,11 @@ export function LibraryPage() {
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const lastAnchorRef = useRef<number | null>(null);
+
+  const paramTab = searchParams.get("tab");
+  const paramCollection = searchParams.get("collection");
+  const paramType: "playlist" | "album" =
+    searchParams.get("type") === "album" ? "album" : "playlist";
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(searchQuery.trim()), 150);
@@ -189,6 +195,69 @@ export function LibraryPage() {
     enabled: activeCollection !== null,
   });
 
+  // Sync URL query params -> Library tab / drilled-in collection
+  useEffect(() => {
+    if (paramCollection) {
+      const targetTab: LibraryTab =
+        paramType === "album" ? "albums" : "playlists";
+      setActiveTab(targetTab);
+      setSearchQuery("");
+      setDebouncedSearch("");
+      setSelectedIds(new Set());
+      if (paramType === "album") {
+        setSortBy((prev) =>
+          prev === "title" || prev === "recent" ? "track_number" : prev
+        );
+      }
+      setActiveCollection((prev) => {
+        if (
+          prev &&
+          prev.name === paramCollection &&
+          prev.type === paramType
+        ) {
+          return prev;
+        }
+        const cachedList =
+          paramType === "album"
+            ? (queryClient.getQueryData<{ albums: LibraryCollection[] }>([
+                "library",
+                "albums",
+                "sidebar",
+              ])?.albums ?? albumsData?.albums ?? [])
+            : (queryClient.getQueryData<{ playlists: LibraryCollection[] }>([
+                "library",
+                "playlists",
+                "sidebar",
+              ])?.playlists ?? playlistsData?.playlists ?? []);
+        const match = cachedList.find((c) => c.name === paramCollection);
+        return {
+          name: paramCollection,
+          type: paramType,
+          artist: match?.artist,
+          folderPath: match?.folder_path,
+          coverUrlLocal:
+            match?.cover_url_local ||
+            `/api/media/cover/collection?name=${encodeURIComponent(paramCollection)}`,
+          sizeStr: match?.size_str,
+          trackCount: match?.track_count,
+        };
+      });
+      return;
+    }
+
+    setActiveCollection(null);
+    if (
+      paramTab === "tracks" ||
+      paramTab === "playlists" ||
+      paramTab === "albums"
+    ) {
+      setActiveTab(paramTab);
+    } else {
+      setActiveTab("tracks");
+    }
+    setSelectedIds(new Set());
+  }, [paramCollection, paramType, paramTab, queryClient]);
+
   const tracks = activeCollection
     ? (collTracksData?.tracks ?? [])
     : (tracksData?.tracks ?? []);
@@ -237,6 +306,7 @@ export function LibraryPage() {
     if (tab === "tracks" && sortBy === "artist") {
       setSortBy("title");
     }
+    setSearchParams(tab === "tracks" ? {} : { tab });
   };
 
   const handleBrowseCollection = (
@@ -257,6 +327,11 @@ export function LibraryPage() {
       coverUrlLocal: coll.cover_url_local,
       sizeStr: coll.size_str,
       trackCount: coll.track_count,
+    });
+    setSearchParams({
+      tab: type === "album" ? "albums" : "playlists",
+      collection: coll.name,
+      type,
     });
   };
 
@@ -576,8 +651,11 @@ export function LibraryPage() {
               size="sm"
               variant="secondary"
               onClick={() => {
+                const backTab =
+                  activeCollection.type === "album" ? "albums" : "playlists";
                 setActiveCollection(null);
                 setSelectedIds(new Set());
+                setSearchParams({ tab: backTab });
               }}
             >
               <ArrowLeft className="h-3.5 w-3.5" />
@@ -974,7 +1052,18 @@ export function LibraryPage() {
         collectionType="playlist"
         onRenamed={(newName) => {
           if (activeCollection && activeCollection.name === renamingName) {
-            setActiveCollection({ ...activeCollection, name: newName });
+            setActiveCollection({
+              ...activeCollection,
+              name: newName,
+              coverUrlLocal: `/api/media/cover/collection?name=${encodeURIComponent(newName)}`,
+            });
+            if (paramCollection) {
+              setSearchParams({
+                tab: activeCollection.type === "album" ? "albums" : "playlists",
+                collection: newName,
+                type: activeCollection.type,
+              });
+            }
           }
         }}
         onClose={() => setRenamingName(null)}

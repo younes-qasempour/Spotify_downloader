@@ -765,6 +765,113 @@ class TestBackendSyncAndMobile(unittest.TestCase):
             self.fake_config.set("mobile.lan_enabled", False)
             self.assertEqual(lan_client.get("/openapi.json", headers=hdrs).status_code, 403)
 
+    def test_usb_adb_parsers(self):
+        from backend.usb_sync import parse_adb_devices_output, parse_reverse_list_output
+
+        raw_devices = "\n".join(
+            [
+                "* daemon not running; starting now at tcp:5037",
+                "* daemon started successfully",
+                "List of devices attached",
+                "R5CT123456A            device product:b0qxx model:SM_S908B device:b0q transport_id:2",
+                "emulator-5554          device product:sdk_gphone64_x86_64 model:sdk_gphone64_x86_64 device:emu64xa transport_id:1",
+                "ZX1G22ABC              unauthorized usb:1-3 transport_id:3",
+                "0123456789ABCDEF       offline transport_id:4",
+                "",
+            ]
+        )
+        parsed = parse_adb_devices_output(raw_devices)
+        self.assertEqual(len(parsed), 4)
+        self.assertEqual(parsed[0]["serial"], "R5CT123456A")
+        self.assertEqual(parsed[0]["state"], "device")
+        self.assertEqual(parsed[0]["model"], "SM S908B")
+        self.assertFalse(parsed[0]["is_emulator"])
+        self.assertTrue(parsed[1]["is_emulator"])
+        self.assertEqual(parsed[2]["state"], "unauthorized")
+        self.assertEqual(parsed[2]["model"], "ZX1G22ABC")
+        self.assertEqual(parsed[3]["state"], "offline")
+
+        self.assertTrue(parse_reverse_list_output("(All) tcp:8765 tcp:8765\n", 8765))
+        self.assertTrue(parse_reverse_list_output("UsbFfs tcp:8765 tcp:8765\n", 8765))
+        self.assertFalse(parse_reverse_list_output("UsbFfs tcp:9000 tcp:9000\n", 8765))
+        self.assertFalse(parse_reverse_list_output("", 8765))
+
+    def test_usb_sync_endpoints_and_loopback_security(self):
+        from backend import usb_sync
+
+        sample_adb_devices = (
+            "List of devices attached\n"
+            "PHONE_SER_1 device product:p1 model:Pixel_8 device:shiba transport_id:5\n"
+        )
+        active_tunnels = set()
+
+        def fake_run_adb(_adb_path, args, timeout=8.0):
+            if args[:2] == ["devices", "-l"]:
+                return (0, sample_adb_devices, "")
+            if args[:2] == ["-s", "PHONE_SER_1"] and args[2:4] == ["reverse", "--list"]:
+                out = "\n".join(f"UsbFfs tcp:{p} tcp:{p}" for p in sorted(active_tunnels))
+                return (0, out, "")
+            if args[:2] == ["-s", "PHONE_SER_1"] and args[2] == "reverse" and args[3].startswith("tcp:"):
+                port_val = int(args[3].split(":", 1)[1])
+                active_tunnels.add(port_val)
+                return (0, f"{port_val}\n", "")
+            if args[:2] == ["-s", "PHONE_SER_1"] and args[2:4] == ["reverse", "--remove"]:
+                port_val = int(args[4].split(":", 1)[1])
+                active_tunnels.discard(port_val)
+                return (0, "", "")
+            return (1, "", "unexpected adb args")
+
+        with (
+            patch.object(usb_sync, "find_adb_executable", return_value="C:/fake/adb.exe"),
+            patch.object(usb_sync, "_run_adb", side_effect=fake_run_adb),
+            TestClient(self.app) as client,
+        ):
+            st = client.get("/api/sync/usb/status")
+            self.assertEqual(st.status_code, 200)
+            st_data = st.json()
+            self.assertTrue(st_data["adb_available"])
+            self.assertEqual(st_data["ready_count"], 1)
+            self.assertFalse(st_data["reverse_active"])
+            self.assertEqual(st_data["devices"][0]["model"], "Pixel 8")
+
+            en = client.post("/api/sync/usb/enable", json={})
+            self.assertEqual(en.status_code, 200)
+            en_data = en.json()
+            self.assertTrue(en_data["success"])
+            self.assertTrue(en_data["reverse_active"])
+            self.assertEqual(en_data["enabled_serials"], ["PHONE_SER_1"])
+            self.assertTrue(en_data["devices"][0]["reverse_active"])
+
+            dis = client.post("/api/sync/usb/disable")
+            self.assertEqual(dis.status_code, 200)
+            dis_data = dis.json()
+            self.assertTrue(dis_data["success"])
+            self.assertFalse(dis_data["reverse_active"])
+            self.assertEqual(dis_data["disabled_serials"], ["PHONE_SER_1"])
+
+            # Malformed serial rejected cleanly with 400
+            bad = client.post("/api/sync/usb/enable", json={"serial": "--help"})
+            self.assertEqual(bad.status_code, 400)
+
+        # Missing ADB returns 503 on enable/disable and adb_available=False on status
+        with (
+            patch.object(usb_sync, "find_adb_executable", return_value=None),
+            TestClient(self.app) as client,
+        ):
+            st_missing = client.get("/api/sync/usb/status")
+            self.assertEqual(st_missing.status_code, 200)
+            self.assertFalse(st_missing.json()["adb_available"])
+            self.assertEqual(client.post("/api/sync/usb/enable", json={}).status_code, 503)
+            self.assertEqual(client.post("/api/sync/usb/disable", json={}).status_code, 503)
+
+        # Non-loopback LAN clients MUST receive 403 on all /api/sync/usb/* routes even with valid token
+        with TestClient(self.app, client=("192.168.1.77", 55006)) as lan_client:
+            hdrs = {"Authorization": "Bearer test_pair_token_xyz_123"}
+            self.assertEqual(lan_client.get("/api/sync/usb/status", headers=hdrs).status_code, 403)
+            self.assertEqual(lan_client.post("/api/sync/usb/enable", json={}, headers=hdrs).status_code, 403)
+            self.assertEqual(lan_client.post("/api/sync/usb/disable", json={}, headers=hdrs).status_code, 403)
+            self.assertEqual(lan_client.post("/api/sync/usb/install-adb", headers=hdrs).status_code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()

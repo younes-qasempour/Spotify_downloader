@@ -74,9 +74,31 @@ impl BackendManager {
     pub fn shutdown(&self) {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
+                #[cfg(target_os = "windows")]
+                {
+                    let pid_str = child.id().to_string();
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", &pid_str, "/T", "/F"])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
                 let _ = child.kill();
                 let _ = child.wait();
             }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let _ = Command::new("taskkill")
+                .args(["/IM", "flacify-backend.exe", "/T", "/F"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
         }
     }
 

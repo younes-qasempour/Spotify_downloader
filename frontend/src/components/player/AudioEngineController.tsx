@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { apiUrl } from "@/api/client";
 import { api } from "@/api/endpoints";
 import { audioEngine } from "@/lib/audioEngine";
+import { useAppStore } from "@/stores/appStore";
 import { usePlayerStore } from "@/stores/playerStore";
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -17,6 +18,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 export function AudioEngineController() {
+  const wsStatus = useAppStore((s) => s.wsStatus);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const reloadNonce = usePlayerStore((s) => s.reloadNonce);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
@@ -29,38 +31,48 @@ export function AudioEngineController() {
   const loadedKeyRef = useRef<string>("");
   const lastSeekSeqRef = useRef<number>(0);
   const volumePersistInitializedRef = useRef(false);
+  const eqHydratedRef = useRef(false);
+  const volumeConfigHydratedRef = useRef(false);
 
-  // Hydrate initial EQ settings & saved player volume from backend config
+  // Hydrate initial EQ settings & saved player volume from backend config (retries on WS connect)
   useEffect(() => {
+    if (eqHydratedRef.current && volumeConfigHydratedRef.current) return;
     let active = true;
-    void api.tools
-      .getEq()
-      .then((res) => {
-        if (!active) return;
-        usePlayerStore
-          .getState()
-          .hydrateEq(res.config, res.presets, res.frequencies);
-        audioEngine.applyEqualizer(res.config);
-      })
-      .catch(() => {
-        // Ignore if backend is offline on initial paint
-      });
 
-    void api.settings
-      .get()
-      .then((res) => {
-        if (!active) return;
-        const pct = Number(res.config.ui?.player_volume ?? 100);
-        if (Number.isFinite(pct)) {
-          usePlayerStore.getState().hydrateVolume(pct / 100);
-        }
-      })
-      .catch(() => {});
+    if (!eqHydratedRef.current) {
+      void api.tools
+        .getEq()
+        .then((res) => {
+          if (!active) return;
+          eqHydratedRef.current = true;
+          usePlayerStore
+            .getState()
+            .hydrateEq(res.config, res.presets, res.frequencies);
+          audioEngine.applyEqualizer(res.config);
+        })
+        .catch(() => {
+          // Ignore if backend is still booting; retries when wsStatus === "connected"
+        });
+    }
+
+    if (!volumeConfigHydratedRef.current) {
+      void api.settings
+        .get()
+        .then((res) => {
+          if (!active) return;
+          volumeConfigHydratedRef.current = true;
+          const pct = Number(res.config.ui?.player_volume ?? 100);
+          if (Number.isFinite(pct)) {
+            usePlayerStore.getState().hydrateVolume(pct / 100);
+          }
+        })
+        .catch(() => {});
+    }
 
     return () => {
       active = false;
     };
-  }, []);
+  }, [wsStatus]);
 
   // Wire HTML5 audio element listeners -> Zustand store
   useEffect(() => {

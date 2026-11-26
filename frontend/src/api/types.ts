@@ -642,3 +642,40 @@ export interface MobileSyncInfo {
   pair_uri?: string;
   qr_svg_url?: string;
 }
+
+export interface UsbDeviceInfo {
+  serial: string;
+  state: string;
+  model: string;
+  product: string;
+  device: string;
+  transport_id: string;
+  is_emulator: boolean;
+  reverse_active: boolean;
+}
+
+export interface UsbSyncStatus {
+  adb_available: boolean;
+  adb_path: string;
+  port: number;
+  usb_url: string;
+  devices: UsbDeviceInfo[];
+  ready_count: number;
+  unauthorized_count: number;
+  active_count: number;
+  reverse_active: boolean;
+  error: string;
+}
+
+export interface UsbReverseActionResponse extends UsbSyncStatus {
+  success: boolean;
+  enabled_serials?: string[];
+  disabled_serials?: string[];
+  errors: string[];
+}
+
+export interface InstallAdbResponse {
+  success: boolean;
+  adb_path: string;
+  message: string;
+}

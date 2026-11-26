@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   Disc3,
   Loader2,
-  Maximize2,
-  Minimize2,
   Minus,
   PanelBottomClose,
   Pause,
@@ -24,7 +22,6 @@ import { MiniPlayerStudioTabs } from "@/components/player/MiniPlayerStudioTabs";
 import { SpectrumVisualizerCanvas } from "@/components/player/SpectrumVisualizerCanvas";
 import { QualityBadge } from "@/components/ui/badge";
 import {
-  closeDesktopWindow,
   hideDesktopToTray,
   minimizeDesktopWindow,
   resizeDesktopMiniPlayer,
@@ -38,6 +35,11 @@ import { usePlayerStore } from "@/stores/playerStore";
 
 const STORAGE_KEY = "flacify.miniPlayer.v1";
 
+const MIN_WIDTH = 300;
+const MAX_WIDTH = 920;
+const MIN_HEIGHT = 152;
+const MAX_HEIGHT = 900;
+
 export interface MiniPlayerGeometry {
   width: number;
   height: number;
@@ -46,16 +48,16 @@ export interface MiniPlayerGeometry {
 }
 
 const DEFAULT_GEOMETRY: MiniPlayerGeometry = {
-  width: 396,
-  height: 520,
+  width: 416,
+  height: 548,
   x: 32,
   y: 72,
 };
 
 const PRESETS = [
-  { id: "micro", label: "Micro", width: 356, height: 152 },
-  { id: "card", label: "Art", width: 340, height: 356 },
-  { id: "studio", label: "Studio", width: 416, height: 560 },
+  { id: "micro", label: "Micro", width: 384, height: 156 },
+  { id: "card", label: "Art", width: 360, height: 396 },
+  { id: "studio", label: "Studio", width: 432, height: 584 },
 ] as const;
 
 export function loadSavedMiniGeometry(): MiniPlayerGeometry {
@@ -64,8 +66,14 @@ export function loadSavedMiniGeometry(): MiniPlayerGeometry {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_GEOMETRY;
     const parsed = JSON.parse(raw) as Partial<MiniPlayerGeometry>;
-    const w = Math.max(280, Math.min(920, Number(parsed.width) || DEFAULT_GEOMETRY.width));
-    const h = Math.max(148, Math.min(900, Number(parsed.height) || DEFAULT_GEOMETRY.height));
+    const w = Math.max(
+      MIN_WIDTH,
+      Math.min(MAX_WIDTH, Number(parsed.width) || DEFAULT_GEOMETRY.width)
+    );
+    const h = Math.max(
+      MIN_HEIGHT,
+      Math.min(MAX_HEIGHT, Number(parsed.height) || DEFAULT_GEOMETRY.height)
+    );
     const maxX = Math.max(16, window.innerWidth - w - 16);
     const maxY = Math.max(16, window.innerHeight - h - 16);
     const x = Math.max(12, Math.min(maxX, Number(parsed.x) || maxX));
@@ -126,7 +134,7 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
     saveMiniGeometry(geo);
   }, [geo]);
 
-  // Measure live dimensions so layout transitions automatically between Micro / Card / Studio
+  // Measure live dimensions so layout transitions cleanly between Micro / Art / Studio
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -158,6 +166,59 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
       void setDesktopAlwaysOnTop(miniPlayerPinned);
     }
   }, [isDesktop, miniPlayerPinned]);
+
+  const effectiveDuration = durationSec || currentTrack?.durationSec || 0;
+  const progressPct =
+    effectiveDuration > 0
+      ? Math.min(100, Math.max(0, (currentTimeSec / effectiveDuration) * 100))
+      : 0;
+
+  const tier: "micro" | "card" | "studio" =
+    measuredSize.height < 230
+      ? "micro"
+      : measuredSize.height < 420
+        ? "card"
+        : "studio";
+
+  // Keep viewport anchored at (0, 0) on mount and tier switches
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    if (containerRef.current) {
+      containerRef.current.scrollTop = 0;
+    }
+  }, [tier]);
+
+  // Keyboard shortcuts inside Mini Player (Escape exits to Full Studio; Arrows seek)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLElement &&
+        (["input", "textarea", "select"].includes(e.target.tagName.toLowerCase()) ||
+          e.target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        useAppStore.getState().setMiniPlayerOpen(false);
+        return;
+      }
+
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        const st = usePlayerStore.getState();
+        const dur = st.durationSec || st.currentTrack?.durationSec || 0;
+        if (!st.currentTrack || dur <= 0) return;
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 5;
+        const delta = e.key === "ArrowRight" ? step : -step;
+        st.seek(Math.max(0, Math.min(dur, st.currentTimeSec + delta)));
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const applyPreset = (w: number, h: number) => {
     if (isDesktop) {
@@ -235,17 +296,29 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
         let nextY = init.y;
 
         if (hasE) {
-          nextW = Math.max(280, Math.min(window.innerWidth - init.x - 8, init.width + dx));
+          nextW = Math.max(
+            MIN_WIDTH,
+            Math.min(window.innerWidth - init.x - 8, init.width + dx)
+          );
         } else if (hasW) {
-          const proposedW = Math.max(280, Math.min(init.x + init.width - 8, init.width - dx));
+          const proposedW = Math.max(
+            MIN_WIDTH,
+            Math.min(init.x + init.width - 8, init.width - dx)
+          );
           nextX = init.x + (init.width - proposedW);
           nextW = proposedW;
         }
 
         if (hasS) {
-          nextH = Math.max(148, Math.min(window.innerHeight - init.y - 8, init.height + dy));
+          nextH = Math.max(
+            MIN_HEIGHT,
+            Math.min(window.innerHeight - init.y - 8, init.height + dy)
+          );
         } else if (hasN) {
-          const proposedH = Math.max(148, Math.min(init.y + init.height - 8, init.height - dy));
+          const proposedH = Math.max(
+            MIN_HEIGHT,
+            Math.min(init.y + init.height - 8, init.height - dy)
+          );
           nextY = init.y + (init.height - proposedH);
           nextH = proposedH;
         }
@@ -280,20 +353,53 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
     setCoverFailed(false);
   }, [coverSrc]);
 
-  const effectiveDuration = durationSec || currentTrack?.durationSec || 0;
-  const progressPct =
-    effectiveDuration > 0
-      ? Math.min(100, Math.max(0, (currentTimeSec / effectiveDuration) * 100))
-      : 0;
-
-  const tier: "micro" | "card" | "studio" =
-    measuredSize.height < 220
-      ? "micro"
-      : measuredSize.height < 395
-        ? "card"
-        : "studio";
-
   const [r, g, b] = ambientColor;
+
+  const artSize = Math.max(
+    68,
+    Math.min(184, measuredSize.height - 216, measuredSize.width - 72)
+  );
+
+  const renderScrubber = (trackHeightClass: string, ariaLabel: string) => (
+    <div className="flex items-center gap-2">
+      <span className="w-8 text-right text-[10px] font-mono tabular-nums text-zinc-400">
+        {formatDuration(currentTimeSec, false)}
+      </span>
+      <div className="group relative flex-1 h-4 flex items-center">
+        <div
+          className={cn(
+            "w-full rounded-full bg-white/14 overflow-hidden transition-[height] duration-150 group-hover:h-1.5",
+            trackHeightClass
+          )}
+        >
+          <div
+            className="h-full bg-emerald-bright rounded-full transition-[width] duration-75"
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+        {currentTrack && effectiveDuration > 0 && (
+          <div
+            className="pointer-events-none absolute top-1/2 -translate-y-1/2 h-2.5 w-2.5 rounded-full bg-white shadow-[0_0_8px_rgba(30,215,96,0.95)] opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-100 transition-all duration-150"
+            style={{ left: `calc(${progressPct}% - 5px)` }}
+          />
+        )}
+        <input
+          type="range"
+          min={0}
+          max={effectiveDuration || 100}
+          step={0.5}
+          value={currentTimeSec}
+          disabled={!currentTrack || effectiveDuration <= 0}
+          onChange={(e) => seek(Number(e.target.value))}
+          aria-label={ariaLabel}
+          className="absolute inset-0 w-full opacity-0 cursor-pointer"
+        />
+      </div>
+      <span className="w-8 text-[10px] font-mono tabular-nums text-zinc-400">
+        {formatDuration(effectiveDuration, false)}
+      </span>
+    </div>
+  );
 
   return (
     <div
@@ -309,9 +415,9 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
             }
       }
       className={cn(
-        "relative flex flex-col overflow-hidden bg-panel text-zinc-100 select-none",
+        "flex flex-col overflow-hidden bg-panel text-zinc-100 select-none",
         isDesktop
-          ? "h-screen w-screen"
+          ? "fixed inset-0 h-full w-full border border-white/[0.10]"
           : "fixed z-50 rounded-2xl border border-white/15 shadow-[0_24px_70px_-10px_rgba(0,0,0,0.9)] backdrop-blur-2xl"
       )}
     >
@@ -336,7 +442,7 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
       {/* 8-Direction Resize Handles */}
       {(
         [
-          ["North", "inset-x-3 top-0 h-1.5 cursor-ns-resize"],
+          ["North", "inset-x-3 top-0 h-1 cursor-ns-resize"],
           ["South", "inset-x-3 bottom-0 h-1.5 cursor-ns-resize"],
           ["West", "inset-y-3 left-0 w-1.5 cursor-ew-resize"],
           ["East", "inset-y-3 right-0 w-1.5 cursor-ew-resize"],
@@ -369,8 +475,12 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
       <div
         data-tauri-drag-region={isDesktop ? true : undefined}
         onPointerDown={handleWebHeaderDrag}
+        onDoubleClick={(e) => {
+          if ((e.target as HTMLElement).closest("button, input, a")) return;
+          setMiniPlayerOpen(false);
+        }}
         className={cn(
-          "relative z-20 flex h-9 shrink-0 items-center justify-between gap-2 border-b border-white/[0.07] bg-black/30 px-2.5 backdrop-blur-md",
+          "relative z-20 flex h-10 shrink-0 items-center justify-between gap-2 border-b border-white/[0.08] bg-black/35 px-2.5 backdrop-blur-md",
           !isDesktop && "cursor-grab active:cursor-grabbing"
         )}
       >
@@ -388,13 +498,13 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
           />
           <span
             data-tauri-drag-region={isDesktop ? true : undefined}
-            className="text-[11px] font-semibold tracking-tight text-zinc-200 truncate"
+            className="hidden min-[385px]:inline text-[11px] font-semibold tracking-tight text-zinc-200 truncate"
           >
-            Flacify Mini
+            Flacify
           </span>
 
           {/* Size Presets */}
-          <div className="hidden min-[330px]:flex items-center gap-0.5 ml-1 rounded-lg bg-white/[0.05] p-0.5 border border-white/[0.07]">
+          <div className="flex items-center gap-0.5 rounded-lg bg-white/[0.05] p-0.5 border border-white/[0.07]">
             {PRESETS.map((p) => {
               const active =
                 (p.id === "micro" && tier === "micro") ||
@@ -421,88 +531,68 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
         </div>
 
         <div className="flex items-center gap-0.5 shrink-0">
-          {isDesktop && (
-            <button
-              type="button"
-              onClick={toggleMiniPlayerPinned}
-              className={cn(
-                "rounded-md p-1 transition-colors cursor-pointer",
-                miniPlayerPinned
-                  ? "text-emerald-300 bg-emerald-500/15"
-                  : "text-zinc-400 hover:bg-white/10 hover:text-white"
-              )}
-              title={
-                miniPlayerPinned
-                  ? "Always on Top: Enabled (Click to unpin)"
-                  : "Pin Always on Top"
-              }
-            >
-              {miniPlayerPinned ? (
-                <Pin className="h-3.5 w-3.5" />
-              ) : (
-                <PinOff className="h-3.5 w-3.5" />
-              )}
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setMiniPlayerOpen(false)}
-            className="rounded-md p-1 text-zinc-300 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
-            title="Expand Back to Full Studio (Alt+M)"
-          >
-            {isDesktop ? (
-              <Maximize2 className="h-3.5 w-3.5" />
-            ) : (
-              <Minimize2 className="h-3.5 w-3.5" />
-            )}
-          </button>
-
           {isDesktop ? (
             <>
               <button
                 type="button"
+                onClick={toggleMiniPlayerPinned}
+                className={cn(
+                  "h-7 w-7 flex items-center justify-center rounded-md transition-colors cursor-pointer",
+                  miniPlayerPinned
+                    ? "text-emerald-300 bg-emerald-500/15"
+                    : "text-zinc-400 hover:bg-white/10 hover:text-white"
+                )}
+                title={
+                  miniPlayerPinned
+                    ? "Always on Top: Enabled (Click to unpin)"
+                    : "Pin Always on Top"
+                }
+                aria-label="Toggle Always on Top"
+              >
+                {miniPlayerPinned ? (
+                  <Pin className="h-3.5 w-3.5" />
+                ) : (
+                  <PinOff className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => void hideDesktopToTray()}
-                className="rounded-md p-1 text-zinc-400 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+                className="h-7 w-7 flex items-center justify-center rounded-md text-zinc-400 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
                 title="Hide to System Tray"
+                aria-label="Hide to System Tray"
               >
                 <PanelBottomClose className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
                 onClick={() => void minimizeDesktopWindow()}
-                className="rounded-md p-1 text-zinc-400 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+                className="h-7 w-7 flex items-center justify-center rounded-md text-zinc-400 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
                 title="Minimize"
+                aria-label="Minimize Window"
               >
                 <Minus className="h-3.5 w-3.5" />
               </button>
-              <button
-                type="button"
-                onClick={() => void closeDesktopWindow()}
-                className="rounded-md p-1 text-zinc-400 hover:bg-red-500/80 hover:text-white transition-colors cursor-pointer"
-                title="Close"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
             </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setMiniPlayerOpen(false)}
-              className="rounded-md p-1 text-zinc-400 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
-              title="Close Mini Player"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
+          ) : null}
+
+          <button
+            type="button"
+            onClick={() => setMiniPlayerOpen(false)}
+            className="h-7 w-7 flex items-center justify-center rounded-md text-zinc-300 hover:bg-white/15 hover:text-white transition-colors cursor-pointer"
+            title="Close Mini Player (Return to Studio · Alt+M)"
+            aria-label="Close Mini Player"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
 
       {/* Main Content Area by Size Tier */}
-      <div className="relative z-10 flex-1 min-h-0 flex flex-col">
+      <div className="relative z-10 flex-1 min-h-0 flex flex-col overflow-hidden">
         {tier === "micro" ? (
-          /* MICRO STRIP TIER (< 220px height) */
-          <div className="flex-1 flex flex-col justify-between px-3 py-2">
+          /* MICRO STRIP TIER (< 230px height) */
+          <div className="flex-1 min-h-0 flex flex-col justify-between px-3 py-2 overflow-hidden">
             <div className="flex items-center justify-between gap-2.5 min-w-0 flex-1">
               <div className="flex items-center gap-2.5 min-w-0 flex-1">
                 <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-elevated border border-white/10 shadow-md">
@@ -558,7 +648,7 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
                   onClick={togglePlay}
                   disabled={!currentTrack}
                   className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black hover:scale-105 active:scale-95 transition-transform disabled:opacity-40 cursor-pointer shadow"
-                  title={isPlaying ? "Pause" : "Play"}
+                  title={isPlaying ? "Pause (Space)" : "Play (Space)"}
                 >
                   {isBuffering ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -581,55 +671,40 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
             </div>
 
             {/* Bottom edge scrubber */}
-            <div className="flex items-center gap-2 pt-1">
-              <span className="text-[10px] font-mono tabular-nums text-zinc-400">
-                {formatDuration(currentTimeSec, false)}
-              </span>
-              <div className="relative flex-1 h-3 flex items-center">
-                <div className="h-1 w-full rounded-full bg-white/15 overflow-hidden">
-                  <div
-                    className="h-full bg-emerald-bright rounded-full"
-                    style={{ width: `${progressPct}%` }}
-                  />
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={effectiveDuration || 100}
-                  step={0.5}
-                  value={currentTimeSec}
-                  disabled={!currentTrack || effectiveDuration <= 0}
-                  onChange={(e) => seek(Number(e.target.value))}
-                  aria-label="Seek"
-                  className="absolute inset-0 w-full opacity-0 cursor-pointer"
-                />
-              </div>
-              <span className="text-[10px] font-mono tabular-nums text-zinc-400">
-                {formatDuration(effectiveDuration, false)}
-              </span>
+            <div className="shrink-0 pt-1">
+              {renderScrubber("h-1", "Seek")}
             </div>
           </div>
         ) : (
-          /* ART CARD (220..394px) OR STUDIO DECK (>= 395px) */
+          /* ART CARD (230..419px) OR STUDIO DECK (>= 420px) */
           <>
             <div
               className={cn(
-                "px-4 pt-3 pb-3 flex flex-col gap-3",
-                tier === "card" ? "flex-1 justify-between" : "shrink-0"
+                "flex flex-col",
+                tier === "card"
+                  ? "flex-1 min-h-0 justify-between px-3.5 pt-2.5 pb-3 gap-2 overflow-hidden"
+                  : "shrink-0 px-3.5 pt-2.5 pb-2.5 gap-2.5"
               )}
             >
-              {/* Artwork + Live FFT Spectrum Row */}
+              {/* Artwork + Title/Spectrum Row */}
               <div
                 onWheel={handleVolumeWheel}
                 className={cn(
-                  "flex items-center gap-3.5",
-                  tier === "card" && "flex-1 min-h-0 flex-col justify-center"
+                  "flex items-center",
+                  tier === "card"
+                    ? "flex-1 min-h-0 flex-col justify-center gap-2 overflow-hidden"
+                    : "gap-3"
                 )}
               >
                 <div
+                  style={
+                    tier === "card"
+                      ? { width: artSize, height: artSize }
+                      : undefined
+                  }
                   className={cn(
                     "relative overflow-hidden rounded-2xl bg-elevated border border-white/10 shadow-xl shrink-0",
-                    tier === "card" ? "h-36 w-36" : "h-20 w-20"
+                    tier === "studio" && "h-[72px] w-[72px]"
                   )}
                 >
                   {coverSrc && !coverFailed ? (
@@ -649,8 +724,8 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
                       />
                     </div>
                   )}
-                  {tier === "card" && (
-                    <div className="absolute inset-x-2 bottom-1.5 h-8 opacity-90">
+                  {tier === "card" && artSize >= 96 && (
+                    <div className="absolute inset-x-2 bottom-1.5 h-7 opacity-90">
                       <SpectrumVisualizerCanvas isPlaying={isPlaying} barCount={22} />
                     </div>
                   )}
@@ -658,8 +733,8 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
 
                 <div
                   className={cn(
-                    "min-w-0 flex-1 w-full",
-                    tier === "card" && "text-center"
+                    "min-w-0 w-full",
+                    tier === "card" ? "shrink-0 text-center" : "flex-1"
                   )}
                 >
                   <div
@@ -685,7 +760,7 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
                   </p>
 
                   {tier === "studio" && (
-                    <div className="mt-2.5 h-7 w-full">
+                    <div className="mt-2 h-6 w-full">
                       <SpectrumVisualizerCanvas isPlaying={isPlaying} barCount={28} />
                     </div>
                   )}
@@ -693,36 +768,12 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
               </div>
 
               {/* Scrubber */}
-              <div className="flex items-center gap-2">
-                <span className="w-8 text-right text-[10px] font-mono tabular-nums text-zinc-400">
-                  {formatDuration(currentTimeSec, false)}
-                </span>
-                <div className="relative flex-1 h-4 flex items-center">
-                  <div className="h-1.5 w-full rounded-full bg-white/12 overflow-hidden">
-                    <div
-                      className="h-full bg-emerald-bright rounded-full transition-[width] duration-75"
-                      style={{ width: `${progressPct}%` }}
-                    />
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={effectiveDuration || 100}
-                    step={0.5}
-                    value={currentTimeSec}
-                    disabled={!currentTrack || effectiveDuration <= 0}
-                    onChange={(e) => seek(Number(e.target.value))}
-                    aria-label="Seek track position"
-                    className="absolute inset-0 w-full opacity-0 cursor-pointer"
-                  />
-                </div>
-                <span className="w-8 text-[10px] font-mono tabular-nums text-zinc-400">
-                  {formatDuration(effectiveDuration, false)}
-                </span>
+              <div className="shrink-0">
+                {renderScrubber("h-1.5", "Seek track position")}
               </div>
 
               {/* Transport + Volume */}
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex shrink-0 items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
@@ -799,6 +850,7 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
                     type="button"
                     onClick={toggleMute}
                     className="rounded-md p-1 text-zinc-400 hover:text-white cursor-pointer"
+                    aria-label={muted ? "Unmute" : "Mute"}
                   >
                     {muted || volume === 0 ? (
                       <VolumeX className="h-3.5 w-3.5 text-zinc-500" />
@@ -814,7 +866,7 @@ export function MiniPlayer({ mode }: MiniPlayerProps) {
                     value={muted ? 0 : volume}
                     onChange={(e) => setVolume(Number(e.target.value))}
                     aria-label="Mini player volume"
-                    className="w-16 accent-emerald-500 cursor-pointer h-1"
+                    className="hidden min-[330px]:block w-16 accent-emerald-500 cursor-pointer h-1"
                   />
                 </div>
               </div>

@@ -49,6 +49,11 @@ export function useBackendEvents(): void {
         if (!active) return;
         backoffMs = 1000;
         useAppStore.getState().setWsStatus("connected");
+        void queryClient.invalidateQueries({ queryKey: ["playlists"] });
+        void queryClient.invalidateQueries({ queryKey: ["library"] });
+        void queryClient.invalidateQueries({ queryKey: ["queue"] });
+        void queryClient.invalidateQueries({ queryKey: ["settings"] });
+        void queryClient.invalidateQueries({ queryKey: ["health"] });
         heartbeatTimer = window.setInterval(() => {
           if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: "ping" }));

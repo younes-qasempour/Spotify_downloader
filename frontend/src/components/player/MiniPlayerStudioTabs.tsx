@@ -54,6 +54,7 @@ export function MiniPlayerStudioTabs() {
   const userScrollingRef = useRef(false);
   const resumeTimerRef = useRef<number | null>(null);
   const activeLineRef = useRef<HTMLButtonElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const lastEqSaveVersionRef = useRef(eqDirtyVersion);
 
   useEffect(() => {
@@ -117,11 +118,21 @@ export function MiniPlayerStudioTabs() {
       activeTab === "lyrics" &&
       activeLineIndex >= 0 &&
       !userScrollingRef.current &&
-      activeLineRef.current
+      activeLineRef.current &&
+      scrollContainerRef.current
     ) {
-      activeLineRef.current.scrollIntoView({
+      const container = scrollContainerRef.current;
+      const lineEl = activeLineRef.current;
+      const containerRect = container.getBoundingClientRect();
+      const lineRect = lineEl.getBoundingClientRect();
+      const targetTop =
+        container.scrollTop +
+        (lineRect.top - containerRect.top) -
+        container.clientHeight / 2 +
+        lineRect.height / 2;
+      container.scrollTo({
+        top: Math.max(0, targetTop),
         behavior: "smooth",
-        block: "center",
       });
     }
   }, [activeLineIndex, activeTab]);
@@ -186,7 +197,7 @@ export function MiniPlayerStudioTabs() {
   return (
     <div className="flex flex-1 min-h-0 flex-col border-t border-white/[0.08] bg-black/25">
       {/* Studio Tabs Bar */}
-      <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-white/[0.06]">
+      <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-1.5 border-b border-white/[0.06]">
         <div className="flex items-center gap-1">
           {(
             [
@@ -244,7 +255,10 @@ export function MiniPlayerStudioTabs() {
       </div>
 
       {/* Tab Body */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2.5">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 min-h-0 overflow-y-auto px-3 py-2.5"
+      >
         {activeTab === "lyrics" &&
           (!currentTrack ? (
             <div className="h-full flex flex-col items-center justify-center text-center text-xs text-zinc-500 py-6">

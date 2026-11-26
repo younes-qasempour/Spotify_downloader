@@ -1,6 +1,7 @@
 import { lazy } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { ApiError } from "@/api/client";
 import { AppShell } from "@/components/layout/AppShell";
 
 const QueuePage = lazy(() =>
@@ -28,7 +29,13 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 10_000,
-      retry: 1,
+      retry: (failureCount, error) => {
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+          return false;
+        }
+        return failureCount < 5;
+      },
+      retryDelay: (attemptIndex) => Math.min(1000 * (attemptIndex + 1), 3000),
       refetchOnWindowFocus: false,
     },
   },

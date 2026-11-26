@@ -12,6 +12,7 @@ import type {
   FfmpegInstallResponse,
   FfmpegStatusResponse,
   HealthResponse,
+  InstallAdbResponse,
   LibraryAlbumsResponse,
   LibraryCollectionTracksResponse,
   LibraryPlaylistsResponse,
@@ -43,6 +44,8 @@ import type {
   TelegramStatusResponse,
   TelegramVerifyResponse,
   TrackLyricsResponse,
+  UsbReverseActionResponse,
+  UsbSyncStatus,
 } from "@/api/types";
 
 export const api = {
@@ -741,6 +744,21 @@ export const api = {
     info: () => apiFetch<MobileSyncInfo>("/api/sync/info"),
     regenerateToken: () =>
       apiFetch<MobileSyncInfo>("/api/sync/token/regenerate", {
+        method: "POST",
+      }),
+    usbStatus: () => apiFetch<UsbSyncStatus>("/api/sync/usb/status"),
+    usbEnable: (serial?: string) =>
+      apiFetch<UsbReverseActionResponse>("/api/sync/usb/enable", {
+        method: "POST",
+        body: JSON.stringify(serial ? { serial } : {}),
+      }),
+    usbDisable: (serial?: string) =>
+      apiFetch<UsbReverseActionResponse>("/api/sync/usb/disable", {
+        method: "POST",
+        body: JSON.stringify(serial ? { serial } : {}),
+      }),
+    installAdb: () =>
+      apiFetch<InstallAdbResponse>("/api/sync/usb/install-adb", {
         method: "POST",
       }),
   },

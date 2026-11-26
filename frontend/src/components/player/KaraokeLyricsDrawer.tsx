@@ -50,6 +50,7 @@ export function KaraokeLyricsDrawer() {
   const userScrollingRef = useRef(false);
   const scrollResumeTimerRef = useRef<number | null>(null);
   const activeLineRef = useRef<HTMLButtonElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -240,10 +241,27 @@ export function KaraokeLyricsDrawer() {
   }, [isSynced, lines, posMs]);
 
   useEffect(() => {
-    if (!open || activeIndex < 0 || userScrollingRef.current) return;
-    activeLineRef.current?.scrollIntoView({
+    if (
+      !open ||
+      activeIndex < 0 ||
+      userScrollingRef.current ||
+      !activeLineRef.current ||
+      !scrollContainerRef.current
+    ) {
+      return;
+    }
+    const container = scrollContainerRef.current;
+    const lineEl = activeLineRef.current;
+    const containerRect = container.getBoundingClientRect();
+    const lineRect = lineEl.getBoundingClientRect();
+    const targetTop =
+      container.scrollTop +
+      (lineRect.top - containerRect.top) -
+      container.clientHeight / 2 +
+      lineRect.height / 2;
+    container.scrollTo({
+      top: Math.max(0, targetTop),
       behavior: "smooth",
-      block: "center",
     });
   }, [activeIndex, open]);
 
@@ -405,6 +423,7 @@ export function KaraokeLyricsDrawer() {
 
             {/* Karaoke Scrolling Viewport */}
             <div
+              ref={scrollContainerRef}
               onWheel={handleViewportWheelOrTouch}
               onTouchStart={handleViewportWheelOrTouch}
               className="flex-1 overflow-y-auto px-4 py-6 space-y-1.5"

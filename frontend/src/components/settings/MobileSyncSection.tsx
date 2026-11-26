@@ -1,25 +1,42 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   Check,
   Copy,
+  Download,
   Eye,
   EyeOff,
+  Loader2,
+  Plug,
   QrCode,
   RefreshCw,
   Save,
   ShieldCheck,
   Smartphone,
+  Usb,
   Wifi,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { apiUrl } from "@/api/client";
 import { api } from "@/api/endpoints";
-import type { SettingsResponse } from "@/api/types";
+import type { SettingsResponse, UsbSyncStatus } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+
+const USB_AUTO_ENABLE_KEY = "flacify.usbAutoEnable";
+
+function readUsbAutoEnablePref(): boolean {
+  try {
+    const raw = window.localStorage.getItem(USB_AUTO_ENABLE_KEY);
+    return raw === null ? true : raw === "true";
+  } catch {
+    return true;
+  }
+}
 
 interface MobileSyncSectionProps {
   settings: SettingsResponse;
@@ -42,6 +59,12 @@ export function MobileSyncSection({
   const [qrVersion, setQrVersion] = useState<number>(() => Date.now());
   const [qrError, setQrError] = useState(false);
 
+  const [autoEnableUsb, setAutoEnableUsb] = useState<boolean>(readUsbAutoEnablePref);
+  const [usbBusySerial, setUsbBusySerial] = useState<string | null>(null);
+  const [installingAdb, setInstallingAdb] = useState(false);
+  const autoAttemptedSerialsRef = useRef<Set<string>>(new Set());
+  const manuallyDisabledSerialsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     setDeviceName(mobile?.device_name || "");
   }, [mobile?.device_name]);
@@ -50,6 +73,157 @@ export function MobileSyncSection({
     queryKey: ["sync-info"],
     queryFn: () => api.sync.info(),
   });
+
+  const {
+    data: usbStatus,
+    isLoading: usbLoading,
+    isFetching: usbFetching,
+    refetch: refetchUsb,
+  } = useQuery({
+    queryKey: ["sync-usb-status"],
+    queryFn: () => api.sync.usbStatus(),
+    refetchInterval: 4000,
+  });
+
+  const handleToggleAutoEnableUsb = (checked: boolean) => {
+    setAutoEnableUsb(checked);
+    try {
+      window.localStorage.setItem(USB_AUTO_ENABLE_KEY, String(checked));
+    } catch {
+      // Ignore storage failures in restricted webviews.
+    }
+    if (checked) {
+      autoAttemptedSerialsRef.current.clear();
+      manuallyDisabledSerialsRef.current.clear();
+    }
+  };
+
+  const handleEnableUsb = async (
+    serial?: string,
+    opts?: { silent?: boolean }
+  ) => {
+    if (serial) {
+      manuallyDisabledSerialsRef.current.delete(serial);
+    } else {
+      manuallyDisabledSerialsRef.current.clear();
+    }
+    setUsbBusySerial(serial ?? "__all__");
+    try {
+      const res = await api.sync.usbEnable(serial);
+      queryClient.setQueryData<UsbSyncStatus>(["sync-usb-status"], res);
+      if (res.success) {
+        toast.success("USB Cable Sync enabled", {
+          description: `Phone can reach this PC at ${res.usb_url}`,
+        });
+      } else if (!opts?.silent) {
+        toast.error(res.errors[0] || "Could not enable USB Cable Sync");
+      }
+    } catch (err) {
+      if (!opts?.silent) {
+        toast.error("Could not enable USB Cable Sync", {
+          description: err instanceof Error ? err.message : undefined,
+        });
+      }
+    } finally {
+      setUsbBusySerial(null);
+    }
+  };
+
+  const handleDisableUsb = async (serial?: string) => {
+    if (serial) {
+      manuallyDisabledSerialsRef.current.add(serial);
+    } else {
+      for (const dev of usbStatus?.devices ?? []) {
+        if (dev.reverse_active) {
+          manuallyDisabledSerialsRef.current.add(dev.serial);
+        }
+      }
+    }
+    setUsbBusySerial(serial ?? "__all__");
+    try {
+      const res = await api.sync.usbDisable(serial);
+      queryClient.setQueryData<UsbSyncStatus>(["sync-usb-status"], res);
+      if (res.success) {
+        toast.success("USB Cable Sync disabled");
+      } else {
+        toast.error(res.errors[0] || "Could not disable USB Cable Sync");
+      }
+    } catch (err) {
+      toast.error("Could not disable USB Cable Sync", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    } finally {
+      setUsbBusySerial(null);
+    }
+  };
+
+  const handleInstallAdb = async () => {
+    if (installingAdb) return;
+    setInstallingAdb(true);
+    try {
+      const res = await api.sync.installAdb();
+      toast.success(res.message || "Android Platform-Tools installed", {
+        description: res.adb_path,
+      });
+      autoAttemptedSerialsRef.current.clear();
+      await refetchUsb();
+    } catch (err) {
+      toast.error("Failed to install ADB (Platform-Tools)", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    } finally {
+      setInstallingAdb(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!usbStatus) return;
+
+    const readySerials = new Set(
+      usbStatus.devices
+        .filter((d) => d.state === "device")
+        .map((d) => d.serial)
+    );
+
+    for (const s of Array.from(autoAttemptedSerialsRef.current)) {
+      if (!readySerials.has(s)) {
+        autoAttemptedSerialsRef.current.delete(s);
+      }
+    }
+    for (const s of Array.from(manuallyDisabledSerialsRef.current)) {
+      if (!readySerials.has(s)) {
+        manuallyDisabledSerialsRef.current.delete(s);
+      }
+    }
+
+    if (
+      !autoEnableUsb ||
+      !usbStatus.adb_available ||
+      usbBusySerial ||
+      installingAdb
+    ) {
+      return;
+    }
+
+    const targets = usbStatus.devices.filter(
+      (d) =>
+        d.state === "device" &&
+        !d.reverse_active &&
+        !autoAttemptedSerialsRef.current.has(d.serial) &&
+        !manuallyDisabledSerialsRef.current.has(d.serial)
+    );
+
+    if (targets.length === 0) return;
+
+    for (const target of targets) {
+      autoAttemptedSerialsRef.current.add(target.serial);
+    }
+
+    void handleEnableUsb(
+      targets.length === 1 ? targets[0].serial : undefined,
+      { silent: true }
+    );
+  }, [usbStatus, autoEnableUsb, usbBusySerial, installingAdb]);
 
   const handleRefreshAddresses = () => {
     setQrError(false);
@@ -193,6 +367,303 @@ export function MobileSyncSection({
         </form>
       </div>
 
+      {/* USB Cable Sync (High Speed) */}
+      <div className="glass-panel rounded-2xl p-6 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <Usb className="h-4 w-4 text-emerald-bright" />
+            <div>
+              <h3 className="text-base font-semibold text-white">
+                USB Cable Sync (High Speed)
+              </h3>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                Transfer lossless FLAC libraries directly over USB via{" "}
+                <code className="font-mono text-zinc-300">adb reverse</code> — bypasses
+                Wi-Fi routers and automatically falls back to Wi-Fi when unplugged.
+              </p>
+            </div>
+          </div>
+
+          <Badge
+            variant={
+              usbLoading
+                ? "default"
+                : !usbStatus?.adb_available
+                  ? "gold"
+                  : usbStatus.reverse_active
+                    ? "emerald"
+                    : usbStatus.unauthorized_count > 0
+                      ? "gold"
+                      : usbStatus.ready_count > 0
+                        ? "sky"
+                        : "default"
+            }
+            className="gap-1.5"
+          >
+            {usbStatus?.reverse_active ? (
+              <Zap className="h-3 w-3" />
+            ) : (
+              <Usb className="h-3 w-3" />
+            )}
+            {usbLoading
+              ? "Checking USB..."
+              : !usbStatus?.adb_available
+                ? "ADB Not Installed"
+                : usbStatus.reverse_active
+                  ? `USB Bridge Active (${usbStatus.active_count})`
+                  : usbStatus.unauthorized_count > 0
+                    ? "Tap Allow on Phone"
+                    : usbStatus.ready_count > 0
+                      ? `${usbStatus.ready_count} Phone Ready`
+                      : "No USB Phone"}
+          </Badge>
+        </div>
+
+        {!usbLoading && usbStatus && !usbStatus.adb_available ? (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-3">
+            <div className="flex items-start gap-2.5 text-xs text-amber-200">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300 mt-0.5" />
+              <div className="space-y-1">
+                <div className="font-medium text-amber-100">
+                  Android Platform-Tools (adb) not found on this PC
+                </div>
+                <p className="text-[11px] text-amber-200/80">
+                  Flacify uses Google&apos;s official{" "}
+                  <code className="font-mono">adb.exe</code> to open the high-speed USB
+                  tunnel. Click below to download it into your local Flacify folder.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                disabled={installingAdb}
+                onClick={() => void handleInstallAdb()}
+              >
+                {installingAdb ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+                {installingAdb
+                  ? "Installing Platform-Tools..."
+                  : "Install ADB (Platform-Tools)"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={usbFetching || installingAdb}
+                onClick={() => void refetchUsb()}
+              >
+                <RefreshCw
+                  className={cn("h-3.5 w-3.5", usbFetching && "animate-spin")}
+                />
+                Recheck
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.025] px-4 py-3">
+              <label className="flex items-center gap-3 text-xs text-zinc-200 cursor-pointer flex-1 min-w-[220px]">
+                <input
+                  type="checkbox"
+                  checked={autoEnableUsb}
+                  onChange={(e) => handleToggleAutoEnableUsb(e.target.checked)}
+                  className="h-4 w-4 shrink-0 accent-emerald-500"
+                />
+                <div>
+                  <div className="font-medium text-white">
+                    Auto-enable USB bridge when phone is plugged in
+                  </div>
+                  <div className="text-[11px] text-zinc-400 mt-0.5">
+                    Checks every 4 seconds and opens{" "}
+                    <code className="font-mono">adb reverse tcp:{usbStatus?.port || port}</code>{" "}
+                    automatically.
+                  </div>
+                </div>
+              </label>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={usbFetching || Boolean(usbBusySerial)}
+                  onClick={() => void refetchUsb()}
+                >
+                  <RefreshCw
+                    className={cn("h-3.5 w-3.5", usbFetching && "animate-spin")}
+                  />
+                  Refresh
+                </Button>
+                {usbStatus &&
+                  usbStatus.ready_count > 0 &&
+                  usbStatus.active_count < usbStatus.ready_count && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={Boolean(usbBusySerial)}
+                      onClick={() => void handleEnableUsb()}
+                    >
+                      {usbBusySerial === "__all__" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Plug className="h-3.5 w-3.5" />
+                      )}
+                      Enable USB Sync
+                    </Button>
+                  )}
+                {usbStatus && usbStatus.active_count > 0 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={Boolean(usbBusySerial)}
+                    onClick={() => void handleDisableUsb()}
+                  >
+                    Disable All
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {usbStatus?.error && (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 py-2.5 text-xs text-red-200">
+                {usbStatus.error}
+              </div>
+            )}
+
+            {usbStatus && usbStatus.unauthorized_count > 0 && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200">
+                Phone detected over USB but waiting for authorization — unlock your
+                phone and tap <strong>Allow</strong> on the &ldquo;Allow USB
+                debugging?&rdquo; prompt.
+              </div>
+            )}
+
+            {usbStatus && usbStatus.devices.length > 0 ? (
+              <div className="space-y-2">
+                {usbStatus.devices.map((dev) => {
+                  const isReady = dev.state === "device";
+                  const isBusy =
+                    usbBusySerial === dev.serial || usbBusySerial === "__all__";
+                  return (
+                    <div
+                      key={dev.serial}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-black/30 px-3.5 py-2.5"
+                    >
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-medium text-white truncate">
+                            {dev.model || dev.device || dev.serial}
+                          </span>
+                          {dev.is_emulator && (
+                            <Badge variant="violet" className="text-[10px]">
+                              Emulator
+                            </Badge>
+                          )}
+                          <Badge
+                            variant={
+                              dev.reverse_active
+                                ? "emerald"
+                                : isReady
+                                  ? "sky"
+                                  : dev.state === "unauthorized"
+                                    ? "gold"
+                                    : "default"
+                            }
+                            className="text-[10px]"
+                          >
+                            {dev.reverse_active
+                              ? "USB Bridge Active"
+                              : isReady
+                                ? "Ready"
+                                : dev.state === "unauthorized"
+                                  ? "Unauthorized"
+                                  : dev.state}
+                          </Badge>
+                        </div>
+                        <div className="font-mono text-[11px] text-zinc-400 truncate">
+                          {dev.serial}
+                          {dev.product ? ` · ${dev.product}` : ""}
+                        </div>
+                      </div>
+
+                      {isReady && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={dev.reverse_active ? "outline" : "default"}
+                          disabled={isBusy}
+                          onClick={() =>
+                            void (dev.reverse_active
+                              ? handleDisableUsb(dev.serial)
+                              : handleEnableUsb(dev.serial))
+                          }
+                        >
+                          {isBusy ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : dev.reverse_active ? null : (
+                            <Plug className="h-3.5 w-3.5" />
+                          )}
+                          {dev.reverse_active ? "Disable" : "Enable USB Sync"}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : !usbLoading ? (
+              <div className="rounded-xl border border-dashed border-white/[0.08] bg-black/20 px-4 py-3 text-xs text-zinc-400">
+                No Android phone detected over USB. Plug in a USB data cable with USB
+                Debugging enabled — Flacify checks every 4 seconds.
+              </div>
+            ) : null}
+
+            <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-zinc-400 shrink-0">USB Tunnel Endpoint:</span>
+                  <code className="font-mono text-emerald-300 truncate">
+                    {usbStatus?.usb_url || `http://127.0.0.1:${port}`}
+                  </code>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void handleCopy(
+                      "USB Tunnel URL",
+                      "usb-url",
+                      usbStatus?.usb_url || `http://127.0.0.1:${port}`
+                    )
+                  }
+                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-zinc-300 hover:bg-white/10 cursor-pointer shrink-0"
+                >
+                  {copiedKey === "usb-url" ? (
+                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                  Copy
+                </button>
+              </div>
+              {usbStatus?.adb_path && (
+                <div className="font-mono text-[10px] text-zinc-500 truncate">
+                  ADB: {usbStatus.adb_path}
+                </div>
+              )}
+              <div className="text-[11px] text-zinc-400">
+                Android tip: Settings → About phone → tap Build number 7× → Developer
+                options → enable USB debugging → tap Allow when prompted on PC.
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
       {/* Pairing QR Code, LAN URLs & Token */}
       <div className="glass-panel rounded-2xl p-6 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -221,7 +692,8 @@ export function MobileSyncSection({
         {(mobile?.lan_enabled === false || syncInfo?.lan_enabled === false) && (
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200">
             Wi-Fi / LAN access is currently disabled — toggle &ldquo;Allow Connections
-            from Phone&rdquo; on above so your Android device can connect.
+            from Phone&rdquo; on above for wireless sync (USB Cable Sync still works
+            over localhost).
           </div>
         )}
 
