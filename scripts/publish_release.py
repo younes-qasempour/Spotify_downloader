@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import time
 import urllib.error
@@ -31,6 +32,54 @@ def get_github_token() -> str:
     return token
 
 
+def _refresh_assets(repo: str, release_id: int, headers: dict) -> dict:
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/releases/{release_id}",
+        headers=headers,
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode())
+    return {a["name"]: a["id"] for a in data.get("assets", [])}
+
+
+class _ProgressFile:
+    """File-like wrapper that logs upload progress so large assets never appear stalled."""
+
+    def __init__(self, path: str, total_bytes: int, label: str) -> None:
+        self._fh = open(path, "rb")
+        self._total = total_bytes
+        self._label = label
+        self._sent = 0
+        self._last_log = time.monotonic()
+
+    def __len__(self) -> int:
+        return self._total
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._fh.read(size if size and size > 0 else 262144)
+        if chunk:
+            self._sent += len(chunk)
+            now = time.monotonic()
+            if now - self._last_log >= 5.0 or self._sent >= self._total:
+                pct = (self._sent * 100.0 / self._total) if self._total else 100.0
+                print(
+                    f"  [{self._label}] {self._sent / (1024 * 1024):.1f} / "
+                    f"{self._total / (1024 * 1024):.1f} MB ({pct:.0f}%)",
+                    flush=True,
+                )
+                self._last_log = now
+        return chunk
+
+    def close(self) -> None:
+        self._fh.close()
+
+    def __enter__(self) -> "_ProgressFile":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+
 def upload_asset(
     repo: str,
     release_id: int,
@@ -42,19 +91,6 @@ def upload_asset(
     import requests
 
     asset_name = os.path.basename(asset_path)
-    if asset_name in existing_assets:
-        old_asset_id = existing_assets[asset_name]
-        print(
-            f"Deleting previous asset '{asset_name}' (ID={old_asset_id}) to upload fresh build..."
-        )
-        del_req = urllib.request.Request(
-            f"https://api.github.com/repos/{repo}/releases/assets/{old_asset_id}",
-            headers=headers,
-            method="DELETE",
-        )
-        urllib.request.urlopen(del_req)
-        print("Previous asset deleted.")
-
     file_size = os.path.getsize(asset_path)
     print(f"Uploading '{asset_name}' ({file_size:,} bytes) to GitHub Release...", flush=True)
 
@@ -74,13 +110,74 @@ def upload_asset(
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
+            current_assets = (
+                existing_assets if attempt == 1 else _refresh_assets(repo, release_id, headers)
+            )
+            if asset_name in current_assets:
+                old_asset_id = current_assets[asset_name]
+                print(
+                    f"Deleting previous/incomplete asset '{asset_name}' (ID={old_asset_id})...",
+                    flush=True,
+                )
+                del_req = urllib.request.Request(
+                    f"https://api.github.com/repos/{repo}/releases/assets/{old_asset_id}",
+                    headers=headers,
+                    method="DELETE",
+                )
+                urllib.request.urlopen(del_req, timeout=30)
+
             print(f"Uploading '{asset_name}' attempt {attempt}/{max_retries}...", flush=True)
-            with open(asset_path, "rb") as f:
+            curl_bin = shutil.which("curl.exe") or shutil.which("curl")
+            if curl_bin:
+                safe_path = asset_path.replace("\\", "/").replace('"', '\\"')
+                curl_cfg = "\n".join([
+                    f'url = "{upload_url}"',
+                    'request = "POST"',
+                    f'header = "Authorization: Bearer {token}"',
+                    'header = "Accept: application/vnd.github+json"',
+                    'header = "User-Agent: FlacifyReleaseAgent"',
+                    'header = "X-GitHub-Api-Version: 2022-11-28"',
+                    'header = "Content-Type: application/octet-stream"',
+                    f'header = "Content-Length: {file_size}"',
+                    f'data-binary = "@{safe_path}"',
+                    "connect-timeout = 30",
+                    "max-time = 900",
+                    "speed-limit = 2048",
+                    "speed-time = 60",
+                    "keepalive-time = 20",
+                    "show-error",
+                    'write-out = "\\n%{http_code}"',
+                ])
+                proc = subprocess.run(
+                    [curl_bin, "-sS", "-K", "-"],
+                    input=curl_cfg,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    check=False,
+                )
+                lines = proc.stdout.strip().splitlines()
+                http_code = int(lines[-1]) if lines and lines[-1].isdigit() else 0
+                body_text = "\n".join(lines[:-1]) if lines and lines[-1].isdigit() else proc.stdout
+                if proc.returncode == 0 and http_code in (200, 201):
+                    asset_data = json.loads(body_text)
+                    print(
+                        f"Asset '{asset_name}' uploaded successfully! "
+                        f"ID={asset_data['id']} URL={asset_data.get('browser_download_url')}",
+                        flush=True,
+                    )
+                    return asset_data
+                err_detail = proc.stderr.strip() or body_text
+                raise RuntimeError(
+                    f"curl upload failed for '{asset_name}' (rc={proc.returncode}, HTTP {http_code}): {err_detail}"
+                )
+
+            with _ProgressFile(asset_path, file_size, asset_name) as pf:
                 resp = requests.post(
                     upload_url,
-                    data=f,
+                    data=pf,
                     headers=upload_headers,
-                    timeout=(30, 600),
+                    timeout=(30, 300),
                 )
             if resp.status_code in (200, 201):
                 asset_data = resp.json()
@@ -218,8 +315,8 @@ def main() -> None:
     release_id = release_data["id"]
     existing_assets = {a["name"]: a["id"] for a in release_data.get("assets", [])}
 
-    # 3. Upload both Windows Installer and Android Companion APK
-    for asset_path in (windows_installer, android_apk):
+    # 3. Upload both Android Companion APK and Windows Installer
+    for asset_path in (android_apk, windows_installer):
         upload_asset(repo, release_id, asset_path, existing_assets, headers, token)
 
     print(f"Release URL: {release_data.get('html_url')}")
