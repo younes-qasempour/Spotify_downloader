@@ -17,17 +17,22 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.TimeUnit
 
 data class DownloadedFileResult(
     val file: File,
     val bytesWrittenTotal: Long,
     val etag: String?,
     val resumedFromBytes: Long,
+    val resolvedBaseUrl: String = "",
 )
 
 class ResumableFileDownloader(
     private val httpClient: OkHttpClient,
 ) {
+    private val usbHttpClient: OkHttpClient = httpClient.newBuilder()
+        .connectTimeout(1500, TimeUnit.MILLISECONDS)
+        .build()
     private val json = Json { ignoreUnknownKeys = true }
 
     @Serializable
@@ -72,6 +77,7 @@ class ResumableFileDownloader(
 
         for (baseUrl in normalizedUrls) {
             lastUrlTried = baseUrl
+            val activeClient = if (PairingUriParser.isUsbLoopbackUrl(baseUrl)) usbHttpClient else httpClient
             var retriedAfter416 = false
 
             while (true) {
@@ -99,7 +105,7 @@ class ResumableFileDownloader(
                 }
 
                 try {
-                    httpClient.newCall(reqBuilder.build()).execute().use { response ->
+                    activeClient.newCall(reqBuilder.build()).execute().use { response ->
                         when (response.code) {
                             401 -> throw FlacifyApiException.Unauthorized(extractDetail(response))
                             403 -> throw FlacifyApiException.LanDisabled(extractDetail(response))
@@ -175,6 +181,7 @@ class ResumableFileDownloader(
                             bytesWrittenTotal = destFile.length(),
                             etag = responseEtag,
                             resumedFromBytes = startOffset,
+                            resolvedBaseUrl = baseUrl,
                         )
                     }
                 } catch (apiEx: FlacifyApiException) {
@@ -252,6 +259,6 @@ class ResumableFileDownloader(
     }
 
     private companion object {
-        const val DEFAULT_CHUNK_SIZE = 64 * 1024
+        const val DEFAULT_CHUNK_SIZE = 256 * 1024
     }
 }

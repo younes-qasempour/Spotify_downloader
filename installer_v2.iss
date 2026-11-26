@@ -2,7 +2,7 @@
 ; Per-User Windows Installer bundling Tauri v2 Desktop App + FastAPI Backend Sidecar + Web UI
 
 #define MyAppName "Flacify"
-#define MyAppVersion "2.1.0"
+#define MyAppVersion "2.2.0"
 #define MyAppPublisher "Flacify Project"
 #define MyAppExeName "Flacify.exe"
 #define MyAppBackendExe "binaries\flacify-backend\flacify-backend.exe"
@@ -22,7 +22,7 @@ DisableProgramGroupPage=yes
 AllowNoIcons=yes
 
 OutputDir=dist\installer
-OutputBaseFilename=Flacify_Setup_v2.1.0
+OutputBaseFilename=Flacify_Setup_v2.2.0
 SetupIconFile=assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
@@ -32,12 +32,12 @@ WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 
-VersionInfoVersion=2.1.0.0
+VersionInfoVersion=2.2.0.0
 VersionInfoCompany={#MyAppPublisher}
-VersionInfoDescription=Flacify v2.1.0 Lossless Audio Studio Setup
+VersionInfoDescription=Flacify v2.2.0 Lossless Audio Studio Setup
 VersionInfoCopyright=Copyright (C) 2026 {#MyAppPublisher}
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=2.1.0.0
+VersionInfoProductVersion=2.2.0.0
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

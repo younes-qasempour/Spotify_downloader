@@ -1,6 +1,6 @@
-# Flacify Android Companion (`v2.1.0`)
+# Flacify Android Companion (`v2.2.0`)
 
-Native Kotlin + Jetpack Compose companion app (`com.flacify.android`, `versionCode = 2`, `versionName = "2.1.0"`) for pairing with Flacify Desktop over Wi-Fi/LAN, syncing lossless `.flac` playlists offline, playing synced audio via Media3, and sharing Spotify URLs directly to your PC download queue.
+Native Kotlin + Jetpack Compose companion app (`com.flacify.android`, `versionCode = 3`, `versionName = "2.2.0"`) for pairing with Flacify Desktop over high-speed USB Cable (`adb reverse`) or Wi-Fi/LAN, syncing lossless `.flac` playlists offline, playing synced audio via Media3, and sharing Spotify URLs directly to your PC download queue.
 
 ## Features
 

@@ -4,6 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -46,8 +48,19 @@ class FlacifyApiClient(
         .writeTimeout(12, TimeUnit.SECONDS)
         .build()
 
+    private val usbShortClient: OkHttpClient = baseClient.newBuilder()
+        .connectTimeout(1500, TimeUnit.MILLISECONDS)
+        .readTimeout(12, TimeUnit.SECONDS)
+        .writeTimeout(12, TimeUnit.SECONDS)
+        .build()
+
     private val manifestClient: OkHttpClient = baseClient.newBuilder()
         .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .build()
+
+    private val usbManifestClient: OkHttpClient = baseClient.newBuilder()
+        .connectTimeout(1500, TimeUnit.MILLISECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .build()
 
@@ -65,6 +78,7 @@ class FlacifyApiClient(
     suspend fun fetchHealth(candidateUrls: List<String>): ApiCallResult<HealthResponse> =
         executeWithFailover(
             client = shortClient,
+            usbClient = usbShortClient,
             candidateUrls = candidateUrls,
             token = null,
             path = "/api/health",
@@ -78,6 +92,7 @@ class FlacifyApiClient(
     ): ApiCallResult<SyncInfoResponse> =
         executeWithFailover(
             client = shortClient,
+            usbClient = usbShortClient,
             candidateUrls = candidateUrls,
             token = token,
             path = "/api/sync/info",
@@ -101,6 +116,7 @@ class FlacifyApiClient(
         }
         return executeWithFailover(
             client = manifestClient,
+            usbClient = usbManifestClient,
             candidateUrls = candidateUrls,
             token = token,
             path = "/api/sync/manifest?$query",
@@ -123,6 +139,7 @@ class FlacifyApiClient(
         )
         return executeWithFailover(
             client = shortClient,
+            usbClient = usbShortClient,
             candidateUrls = candidateUrls,
             token = token,
             path = "/api/sync/share",
@@ -142,6 +159,7 @@ class FlacifyApiClient(
             .replace("+", "%20")
         return executeWithFailover(
             client = shortClient,
+            usbClient = usbShortClient,
             candidateUrls = candidateUrls,
             token = token,
             path = "/api/lyrics/$encodedId",
@@ -160,13 +178,14 @@ class FlacifyApiClient(
         if (normalized.isEmpty()) return@withContext null
 
         for (baseUrl in normalized) {
+            val activeClient = if (PairingUriParser.isUsbLoopbackUrl(baseUrl)) usbShortClient else shortClient
             val req = Request.Builder()
                 .url("$baseUrl$cleanPath")
                 .header("Authorization", "Bearer ${token.trim()}")
                 .get()
                 .build()
             try {
-                shortClient.newCall(req).execute().use { resp ->
+                activeClient.newCall(req).execute().use { resp ->
                     when {
                         resp.code == 401 -> throw FlacifyApiException.Unauthorized(
                             extractErrorDetail(resp.body?.string().orEmpty())
@@ -193,6 +212,7 @@ class FlacifyApiClient(
 
     private suspend fun <T> executeWithFailover(
         client: OkHttpClient,
+        usbClient: OkHttpClient? = null,
         candidateUrls: List<String>,
         token: String?,
         path: String,
@@ -210,6 +230,11 @@ class FlacifyApiClient(
 
         for (baseUrl in normalized) {
             lastUrlTried = baseUrl
+            val activeClient = if (usbClient != null && PairingUriParser.isUsbLoopbackUrl(baseUrl)) {
+                usbClient
+            } else {
+                client
+            }
             val requestBuilder = Request.Builder().url("$baseUrl$path")
             if (!token.isNullOrBlank()) {
                 requestBuilder.header("Authorization", "Bearer ${token.trim()}")
@@ -222,7 +247,7 @@ class FlacifyApiClient(
             }
 
             try {
-                client.newCall(requestBuilder.build()).execute().use { response ->
+                activeClient.newCall(requestBuilder.build()).execute().use { response ->
                     val rawBody = response.body?.string().orEmpty()
                     if (!response.isSuccessful) {
                         val detail = extractErrorDetail(rawBody)
@@ -263,8 +288,16 @@ class FlacifyApiClient(
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
-        fun defaultOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
-            .retryOnConnectionFailure(true)
-            .build()
+        fun defaultOkHttpClient(): OkHttpClient {
+            val dispatcher = Dispatcher().apply {
+                maxRequests = 32
+                maxRequestsPerHost = 8
+            }
+            return OkHttpClient.Builder()
+                .dispatcher(dispatcher)
+                .connectionPool(ConnectionPool(8, 2, TimeUnit.MINUTES))
+                .retryOnConnectionFailure(true)
+                .build()
+        }
     }
 }

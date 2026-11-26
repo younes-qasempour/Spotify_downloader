@@ -11,6 +11,7 @@ import com.flacify.android.data.storage.LocalMediaStorage
 import com.flacify.android.data.storage.StorageSummary
 import com.flacify.android.network.FlacifyApiClient
 import com.flacify.android.network.FlacifyApiException
+import com.flacify.android.network.PairingUriParser
 import com.flacify.android.network.SyncManifestResponse
 import com.flacify.android.sync.PlaylistSyncSummary
 import com.flacify.android.sync.SyncPlanner
@@ -29,6 +30,11 @@ data class PlaylistTrackItem(
             track.syncStatus == TrackSyncStatus.SYNCED &&
             !track.localFilePath.isNullOrBlank()
 }
+
+data class ManifestRefreshResult(
+    val manifest: SyncManifestResponse,
+    val resolvedBaseUrl: String,
+)
 
 class FlacifyRepository(
     val database: FlacifyDatabase,
@@ -86,7 +92,10 @@ class FlacifyRepository(
 
     suspend fun currentConnection(): ConnectionConfig = connectionStore.configFlow.first()
 
-    suspend fun refreshManifestFromPc(): SyncManifestResponse {
+    suspend fun refreshManifestFromPc(): SyncManifestResponse =
+        refreshManifestFromPcWithTransport().manifest
+
+    suspend fun refreshManifestFromPcWithTransport(): ManifestRefreshResult {
         val cfg = currentConnection()
         if (!cfg.isPaired) {
             throw FlacifyApiException.Unreachable("Not paired with Flacify PC yet.")
@@ -97,7 +106,9 @@ class FlacifyRepository(
             token = cfg.pairToken,
             includeTracks = true,
         )
-        if (call.resolvedBaseUrl != cfg.activeUrl) {
+        if (call.resolvedBaseUrl != cfg.activeUrl &&
+            !PairingUriParser.isUsbLoopbackUrl(call.resolvedBaseUrl)
+        ) {
             connectionStore.updateActiveUrl(call.resolvedBaseUrl)
         }
 
@@ -240,7 +251,10 @@ class FlacifyRepository(
             }
         }
 
-        return manifest
+        return ManifestRefreshResult(
+            manifest = manifest,
+            resolvedBaseUrl = call.resolvedBaseUrl,
+        )
     }
 
     suspend fun setPlaylistSyncEnabled(playlistId: String, enabled: Boolean) {

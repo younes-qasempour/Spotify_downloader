@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.Close
@@ -36,8 +37,10 @@ import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Storage
+import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiFind
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -75,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.flacify.android.data.db.PendingShareStatus
+import com.flacify.android.network.PairingUriParser
 import com.flacify.android.ui.library.FormatUtils
 import com.flacify.android.ui.theme.FlacifyAmberAccent
 import com.flacify.android.ui.theme.FlacifyBorder
@@ -176,7 +180,7 @@ fun SyncScreen(
                     color = FlacifyTextPrimary,
                 )
                 Text(
-                    text = "Pair over Wi-Fi, Tailscale, or Android Emulator (10.0.2.2)",
+                    text = "Pair over USB Cable (High Speed), Wi-Fi, or Tailscale",
                     style = MaterialTheme.typography.bodySmall,
                     color = FlacifyTextMuted,
                 )
@@ -186,6 +190,7 @@ fun SyncScreen(
                 isConnected = state.isConnected,
                 isPaired = state.connectionConfig.isPaired,
                 restartRequired = state.syncInfo?.restartRequired == true,
+                isUsbConnected = state.isUsbConnected,
             )
         }
 
@@ -314,6 +319,59 @@ fun SyncScreen(
                                     color = FlacifyEmeraldBright,
                                     trackColor = FlacifyBorder,
                                     modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+
+                            val speedLabel = FormatUtils.formatSpeed(prog.speedBytesPerSec)
+                            val bytesSummary = if (prog.totalBytes > 0L) {
+                                "${FormatUtils.formatBytes(prog.bytesDone)} / ${FormatUtils.formatBytes(prog.totalBytes)}"
+                            } else {
+                                FormatUtils.formatBytes(prog.bytesDone)
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (prog.transport.isNotBlank()) {
+                                    val pillColor = if (prog.isUsb) FlacifyEmeraldBright else FlacifySkyAccent
+                                    Surface(
+                                        color = pillColor.copy(alpha = 0.14f),
+                                        shape = RoundedCornerShape(999.dp),
+                                        border = BorderStroke(1.dp, pillColor.copy(alpha = 0.35f)),
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        ) {
+                                            Icon(
+                                                imageVector = if (prog.isUsb) Icons.Rounded.Bolt else Icons.Rounded.Wifi,
+                                                contentDescription = null,
+                                                tint = pillColor,
+                                                modifier = Modifier.size(12.dp),
+                                            )
+                                            Text(
+                                                text = if (prog.isUsb) "USB Cable · High Speed" else "Wi-Fi / LAN",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = pillColor,
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    Spacer(modifier = Modifier.width(1.dp))
+                                }
+
+                                val rightText = if (speedLabel.isNotBlank()) {
+                                    "$speedLabel · $bytesSummary"
+                                } else {
+                                    bytesSummary
+                                }
+                                Text(
+                                    text = rightText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = if (speedLabel.isNotBlank()) FlacifyEmeraldBright else FlacifyTextMuted,
                                 )
                             }
 
@@ -639,12 +697,29 @@ fun SyncScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     color = FlacifyTextPrimary,
                                 )
-                                Text(
-                                    text = cfg.activeUrl,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = FlacifySkyAccent,
-                                )
+                                if (state.isUsbConnected) {
+                                    Text(
+                                        text = "USB Tunnel: ${state.resolvedLiveUrl}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = FlacifyEmeraldBright,
+                                    )
+                                    if (!PairingUriParser.isUsbLoopbackUrl(cfg.activeUrl) && cfg.activeUrl.isNotBlank()) {
+                                        Text(
+                                            text = "Wi-Fi fallback: ${cfg.activeUrl}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = FlacifyTextMuted,
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        text = cfg.activeUrl,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = FlacifySkyAccent,
+                                    )
+                                }
                             }
                         }
                         if (info?.serverVersion?.isNotBlank() == true || cfg.serverVersion.isNotBlank()) {
@@ -668,6 +743,57 @@ fun SyncScreen(
                                 fontFamily = FontFamily.Monospace,
                                 color = FlacifyTextMuted,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            )
+                        }
+                    }
+
+                    Surface(
+                        color = FlacifyElevatedSurface,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, FlacifyBorder),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Usb,
+                                        contentDescription = null,
+                                        tint = FlacifyEmeraldBright,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        text = "Prefer USB Cable (Auto-Switch)",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = FlacifyTextPrimary,
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Use USB cable (127.0.0.1) first when plugged in; falls back to Wi-Fi automatically.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = FlacifyTextMuted,
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = cfg.preferUsb,
+                                onCheckedChange = { checked -> viewModel.setPreferUsb(checked) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFF032219),
+                                    checkedTrackColor = FlacifyEmerald,
+                                    uncheckedThumbColor = FlacifyTextMuted,
+                                    uncheckedTrackColor = FlacifyCardSurface,
+                                ),
                             )
                         }
                     }
@@ -916,12 +1042,21 @@ fun SyncScreen(
                         style = MaterialTheme.typography.titleMedium,
                         color = FlacifyTextPrimary,
                     )
-                    TextButton(onClick = { viewModel.useEmulatorHost() }) {
-                        Text(
-                            text = "Use Emulator (10.0.2.2)",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = FlacifySkyAccent,
-                        )
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        TextButton(onClick = { viewModel.useUsbCableHost() }) {
+                            Text(
+                                text = "Use USB (127.0.0.1)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = FlacifyEmeraldBright,
+                            )
+                        }
+                        TextButton(onClick = { viewModel.useEmulatorHost() }) {
+                            Text(
+                                text = "Use Emulator (10.0.2.2)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = FlacifySkyAccent,
+                            )
+                        }
                     }
                 }
 
@@ -1003,24 +1138,44 @@ private fun StatusBadge(
     isConnected: Boolean,
     isPaired: Boolean,
     restartRequired: Boolean,
+    isUsbConnected: Boolean = false,
 ) {
     val (label, color) = when {
         isConnected && restartRequired -> "PC Restart Needed" to FlacifyAmberAccent
-        isConnected -> "Connected" to FlacifyEmeraldBright
+        isConnected && isUsbConnected -> "USB Cable · High Speed" to FlacifyEmeraldBright
+        isConnected -> "Wi-Fi / LAN" to FlacifyEmeraldBright
         isPaired -> "Saved (Offline)" to FlacifyAmberAccent
         else -> "Not Paired" to FlacifyTextMuted
+    }
+    val icon = when {
+        isConnected && isUsbConnected -> Icons.Rounded.Usb
+        isConnected && !restartRequired -> Icons.Rounded.Wifi
+        else -> null
     }
     Surface(
         color = color.copy(alpha = 0.14f),
         shape = RoundedCornerShape(999.dp),
         border = BorderStroke(1.dp, color.copy(alpha = 0.35f)),
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
+        Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-        )
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = color,
+                    modifier = Modifier.size(13.dp),
+                )
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = color,
+            )
+        }
     }
 }
 

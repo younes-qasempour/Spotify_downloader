@@ -1,6 +1,6 @@
 [package]
 name = "flacify"
-version = "2.1.0"
+version = "2.2.0"
 description = "Flacify — High-Fidelity Lossless Audio Downloader & Library Studio"
 authors = ["Flacify Contributors"]
 edition = "2021"

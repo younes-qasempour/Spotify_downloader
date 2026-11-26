@@ -56,7 +56,7 @@ def upload_asset(
         print("Previous asset deleted.")
 
     file_size = os.path.getsize(asset_path)
-    print(f"Uploading '{asset_name}' ({file_size:,} bytes) to GitHub Release...")
+    print(f"Uploading '{asset_name}' ({file_size:,} bytes) to GitHub Release...", flush=True)
 
     upload_url = (
         f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets"
@@ -74,7 +74,7 @@ def upload_asset(
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"Uploading '{asset_name}' attempt {attempt}/{max_retries}...")
+            print(f"Uploading '{asset_name}' attempt {attempt}/{max_retries}...", flush=True)
             with open(asset_path, "rb") as f:
                 resp = requests.post(
                     upload_url,
@@ -86,14 +86,15 @@ def upload_asset(
                 asset_data = resp.json()
                 print(
                     f"Asset '{asset_name}' uploaded successfully! "
-                    f"ID={asset_data['id']} URL={asset_data.get('browser_download_url')}"
+                    f"ID={asset_data['id']} URL={asset_data.get('browser_download_url')}",
+                    flush=True,
                 )
                 return asset_data
             raise RuntimeError(
                 f"Upload failed for '{asset_name}' with HTTP {resp.status_code}: {resp.text}"
             )
         except Exception as exc:
-            print(f"Upload error on attempt {attempt} for '{asset_name}': {exc}")
+            print(f"Upload error on attempt {attempt} for '{asset_name}': {exc}", flush=True)
             if attempt < max_retries:
                 time.sleep(3)
             else:
@@ -102,17 +103,17 @@ def upload_asset(
 
 def main() -> None:
     repo = "younes-qasempour/Spotify_downloader"
-    tag = "v2.1.0"
+    tag = "v2.2.0"
     release_name = (
-        "Flacify v2.1.0 — Tauri v2 Desktop Studio, Wi-Fi/LAN Lossless Sync "
-        "& Native Android Companion App"
+        "Flacify v2.2.0 — High-Speed USB Cable Sync, Upgraded Library Sidebar "
+        "& Desktop Polish"
     )
 
     installer_dir = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "dist", "installer")
     )
-    windows_installer = os.path.join(installer_dir, "Flacify_Setup_v2.1.0.exe")
-    android_apk = os.path.join(installer_dir, "Flacify_Android_v2.1.0.apk")
+    windows_installer = os.path.join(installer_dir, "Flacify_Setup_v2.2.0.exe")
+    android_apk = os.path.join(installer_dir, "Flacify_Android_v2.2.0.apk")
 
     for path in (windows_installer, android_apk):
         if not os.path.isfile(path):
@@ -127,27 +128,27 @@ def main() -> None:
     apk_sha256 = compute_sha256(android_apk)
 
     release_body = (
-        "# Flacify v2.1.0 — Desktop Studio, Wi-Fi/LAN Lossless Sync & Android Companion\n\n"
-        "Flacify **v2.1.0** evolves the lossless music studio onto both Windows Desktop and Android, "
-        "combining the **Tauri v2 + React 19 Desktop Studio** (`v2.0`–`v2.0.1`) with a **Wi-Fi/LAN Sync Server** "
-        "and a **native Kotlin + Jetpack Compose Android Companion App** (`v2.1.0`).\n\n"
-        "### 📱 What's New in v2.1.0 — Wi-Fi/LAN Mobile Sync & Native Android App\n"
-        "- **One-Scan QR & mDNS Discovery (`_flacify._tcp.local.`):** Pair your Android device in seconds from **Settings → Mobile Sync** via QR code or automatic local network discovery, protected by bearer pairing tokens (`mobile.pair_token`).\n"
-        "- **Resumable Lossless FLAC Sync Engine:** Offline-first Android Room + WorkManager sync with ETag / HTTP `Range` / `If-Range` resume, streaming original FLAC files, album cover art, and embedded/LRC synced lyrics from your PC.\n"
-        "- **Media3 Offline Lossless Player & Synced Lyrics:** Play synced FLAC collections completely offline with background playback service, mini player bar, interactive seekable lyrics, and queue controls.\n"
-        "- **Android Share Sheet to PC (`Send to Flacify PC`):** Share any Spotify track, album, playlist, or `spotify.link` URL from Spotify or Chrome on your phone directly into your PC download queue (with an offline retry queue when away from home Wi-Fi).\n"
-        "- **Hardened LAN Security & High-Speed Manifest:** Gzip-compressed manifest streaming (`os.scandir`), SSRF-safe short-link resolution, and loopback-only protection for sensitive PC settings/QR endpoints.\n\n"
-        "### 🖥️ Included from v2.0.0 – v2.0.1 — Tauri v2 Desktop Studio & Web PWA\n"
-        "- **Modern Tauri v2 Desktop App + React 19 Web UI:** Frameless Windows 11 studio shell, native file/folder dialogs, system tray lifecycle, real-time WebSocket queue progress, 10-band EQ, Audio Spectrum Inspector, and M3U8/Device Exporter.\n"
-        "- **Resizable Studio Mini Player (`Alt+M`):** Always-on-top detachable floating player with Micro Strip, Art Card, and Studio Deck layouts, 60fps FFT spectrum visualizer, synced karaoke lyrics + translation, and Quick EQ.\n"
-        "- **Single-Folder Library Deduplication & DB Consolidation:** Eliminates cross-playlist file duplicates while preserving shared playlists.\n\n"
+        "# Flacify v2.2.0 — High-Speed USB Cable Sync, Library Sidebar & Desktop Polish\n\n"
+        "Flacify **v2.2.0** adds **plug-and-play USB Cable Sync (`adb reverse`)** with automatic Wi-Fi fallback, "
+        "alongside major Windows Desktop Studio polish for the Library sidebar, Mini Player, and clean app shutdown.\n\n"
+        "### ⚡ What's New in v2.2.0\n"
+        "- **High-Speed USB Cable Sync (`adb reverse` + Auto Wi-Fi Fallback):**\n"
+        "  - **PC USB Bridge (`Settings → Mobile Sync`):** Automatically detects connected Android phones every 4s, offers a one-click **Install ADB (Platform-Tools)** button if missing, and opens `adb reverse tcp:8765 tcp:8765` over USB (loopback-secured).\n"
+        "  - **Android USB-First Auto-Switch:** Automatically tries `http://127.0.0.1:8765` first when plugged in (without overwriting your saved Wi-Fi PC IP) and falls back seamlessly to Wi-Fi/Tailscale if unplugged — even syncing over USB with phone Wi-Fi turned off.\n"
+        "  - **3× Faster Transfers & Live Speed Telemetry:** Upgrades Android file streaming buffers to `256 KB`, enables **3 concurrent track downloads** over USB, and displays live **`MB/s` transfer speeds** and active transport (`USB Cable · High Speed` vs `Wi-Fi / LAN`) in both the Sync screen and foreground notification.\n"
+        "- **Upgraded \"Your Library\" Left Sidebar & Cold-Start Fix:** Removes the 7-item playlist cap and unifies Saved Playlists, Offline Playlists, and Offline Albums with filter pills, search, sorting (`Recent`, `A–Z`, `Most Tracks`), hover Quick-Play, collapsed cover strip, storage footer, and reliable cold-start query/WS hydration.\n"
+        "- **Studio Mini Player Polish:** Fixes top/bottom control clipping on resize, locks lyrics scrolling strictly inside the drawer container, and returns to the Full Studio window instead of exiting the app when closed.\n"
+        "- **Close Confirmation Modal & Complete Process Cleanup:** Closing Flacify prompts with `Cancel`, `Hide to Tray`, or `Close Everything`, cleanly terminating the entire `flacify-backend.exe` process tree on exit.\n\n"
+        "### 📱 Included from v2.0.0 – v2.1.0\n"
+        "- **One-Scan QR & mDNS Pairing + Resumable FLAC Sync:** Offline Android Room + WorkManager sync with `ETag` / HTTP `Range`, offline Media3 player + synced lyrics, and Android Share Sheet (`Send to Flacify PC`).\n"
+        "- **Tauri v2 Desktop Studio + Web PWA:** Frameless Windows 11 window, real-time WebSocket queue, 10-band EQ, Audio Spectrum Inspector, M3U8/Device Exporter, and single-folder deduplication.\n\n"
         "---\n\n"
         "### 📦 Downloads & Verification\n\n"
         "| Platform | Artifact | Size | SHA-256 |\n"
         "|---|---|---|---|\n"
         f"| **Windows 10/11 (x64)** | `{win_name}` | `{win_size:,}` bytes ({win_size / (1024 * 1024):.2f} MB) | `{win_sha256}` |\n"
         f"| **Android (API 26+)** | `{apk_name}` | `{apk_size:,}` bytes ({apk_size / (1024 * 1024):.2f} MB) | `{apk_sha256}` |\n\n"
-        "> **Upgrading on Windows?** Close any running Flacify window or `python -m backend` process before running `Flacify_Setup_v2.1.0.exe`. All settings and your SQLite library in `%LOCALAPPDATA%\\Flacify` are preserved.\n"
+        "> **Upgrading on Windows?** Close any running Flacify window or backend process before running `Flacify_Setup_v2.2.0.exe`. All settings and your SQLite library in `%LOCALAPPDATA%\\Flacify` are preserved.\n"
     )
 
     token = get_github_token()

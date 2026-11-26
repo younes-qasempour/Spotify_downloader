@@ -13,7 +13,51 @@ data class PairingPayload(
 )
 
 object PairingUriParser {
-    private const val DEFAULT_PORT = 8765
+    const val DEFAULT_PORT = 8765
+    const val USB_LOOPBACK_HOST = "127.0.0.1"
+
+    fun usbLoopbackUrl(port: Int = DEFAULT_PORT): String {
+        val validPort = if (port in 1..65535) port else DEFAULT_PORT
+        return "http://$USB_LOOPBACK_HOST:$validPort"
+    }
+
+    fun isUsbLoopbackUrl(rawUrl: String): Boolean {
+        val normalized = normalizeBaseUrl(rawUrl) ?: return false
+        val uri = try {
+            URI(normalized)
+        } catch (_: Exception) {
+            return false
+        }
+        val host = uri.host
+            ?.lowercase()
+            ?.removePrefix("[")
+            ?.removeSuffix("]")
+            ?: return false
+        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+    }
+
+    fun extractPort(rawUrl: String): Int? {
+        val normalized = normalizeBaseUrl(rawUrl) ?: return null
+        val uri = try {
+            URI(normalized)
+        } catch (_: Exception) {
+            return null
+        }
+        return uri.port.takeIf { it in 1..65535 }
+    }
+
+    fun buildOrderedCandidates(
+        activeUrl: String,
+        candidateUrls: List<String>,
+        preferUsb: Boolean,
+    ): List<String> {
+        val saved = mergeCandidateUrls(activeUrl, candidateUrls)
+        if (!preferUsb) return saved
+        val port = extractPort(activeUrl)
+            ?: candidateUrls.firstNotNullOfOrNull { extractPort(it) }
+            ?: DEFAULT_PORT
+        return (listOf(usbLoopbackUrl(port)) + saved).distinct()
+    }
 
     fun parse(rawUri: String): PairingPayload? {
         val trimmed = rawUri.trim()

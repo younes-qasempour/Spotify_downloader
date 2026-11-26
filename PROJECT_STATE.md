@@ -3,7 +3,7 @@
 > **Note for Future AI Agents & Developers:**
 > Read this document first to avoid starting from scratch. It contains the exact architecture, solved edge cases, gotchas, verified test cases, and component layout.
 >
-> **v2.0–v2.1.0 Update (November 2026):** Flacify has expanded with a FastAPI/WebSocket backend (`backend/`), React 19 + TypeScript Web/PWA Studio (`frontend/`), Tauri v2 Windows desktop shell (`desktop/`), Wi-Fi/LAN sync API, and native Android companion app (`android/`). See **Section 39** at the bottom of this document for the current v2 architecture, endpoints, and build/test commands (Sections 1–38 document the underlying `core/` engine and legacy v1.x PyQt6 GUI history).
+> **v2.0–v2.2.0 Update (November 2026):** Flacify has expanded with a FastAPI/WebSocket backend (`backend/`), React 19 + TypeScript Web/PWA Studio (`frontend/`), Tauri v2 Windows desktop shell (`desktop/`), USB Cable (`adb reverse`) + Wi-Fi/LAN sync API, and native Android companion app (`android/`). See **Section 39** at the bottom of this document for the current v2 architecture, endpoints, and build/test commands (Sections 1–38 document the underlying `core/` engine and legacy v1.x PyQt6 GUI history).
 
 ---
 
@@ -900,7 +900,7 @@ d:\Spotify-Downloader\
   4. **Verified via Unit Tests ([tests/test_queue_manager.py](file:///d:/Spotify-Downloader/tests/test_queue_manager.py)):**
      - Added `test_melobot_mode_suppresses_musilon_limit_prompt`, verifying that `on_musilon_limit_reached` is never invoked and downloads proceed to YouTube Music fallback without UI disruption. All 87 unit tests passing.
 
-### 39. Flacify v2.0–v2.1.0 Architecture, Desktop Studio, Wi-Fi Sync & Android Companion App (November 2026)
+### 39. Flacify v2.0–v2.2.0 Architecture, Desktop Studio, USB + Wi-Fi Sync & Android Companion App (November 2026)
 
 - **v2.0 Desktop Studio & Web Architecture (`81f9ea8`, `791a433`, `88ece9c`, `68906f6`):**
   - **Backend (`backend/`):** Added a thin FastAPI + WebSocket server wrapping headless `core/` managers without modifying `core/` CLI/legacy GUI contracts (`main.py` and `gui/` remain preserved). `backend/state.py` manages shared `ConfigManager`, `ArchiveManager`, `QueueManager`, `SpotifyClient`, background startup scanning, auto-sync scheduler, and WebSocket event dispatch (`backend/ws.py`). Routes live under `backend/routes/` (`queue.py`, `library.py`, `media.py`, `lyrics.py`, `playlists.py`, `settings.py`, `tools.py`, `sync.py`).
@@ -923,9 +923,13 @@ d:\Spotify-Downloader\
 - **v2.1.0 Phase 2 — Native Android Companion App (`android/`, `4582aee`–`f789d0c`):**
   - **Architecture:** Kotlin + Jetpack Compose + Material 3 + Navigation Compose (`FlacifyApp.kt`), Room v2 (`Entities.kt`, `FlacifyDao.kt`, `FlacifyDatabase.kt`), DataStore (`ConnectionSettingsStore.kt`), WorkManager (`FlacifySyncWorker.kt`, `PendingShareWorker.kt`), OkHttp (`FlacifyApiClient.kt`, `ResumableFileDownloader.kt`), CameraX + ZXing (`QrScannerDialog.kt`), Android `NsdManager` (`MdnsDiscoveryManager.kt`), Coil (`2.7.0`), and Media3 ExoPlayer (`FlacifyPlaybackService.kt`, `FlacifyPlayerController.kt`, `FlacifyLyricsExtractor.kt`, `LrcParser.kt`).
   - **Offline Sync & UI:** Supports QR scanning, mDNS auto-discovery, emulator preset (`10.0.2.2:8765`), playlist offline toggles, resumable FLAC + artwork + lyrics download into app-private storage (`LocalMediaStorage.kt`), searchable/filterable offline Library (`LibraryScreen.kt`), Playlist views, persistent `MiniPlayerBar.kt` + `NowPlayingSheet.kt` (seekable synced lyrics + queue), and Android Share Sheet `ShareReceiverActivity.kt` with offline retry queue.
-  - **PyInstaller Freezing Note (`backend.spec`):** Includes `"ifaddr"` alongside `"zeroconf"` and `"qrcode"` so mDNS interface enumeration works inside frozen Windows `flacify-backend.exe`.
+- **PyInstaller Freezing Note (`backend.spec`):** Includes `"ifaddr"` alongside `"zeroconf"` and `"qrcode"` so mDNS interface enumeration works inside frozen Windows `flacify-backend.exe`.
 
-### Run v2.1 Backend & Web UI (Development / LAN Server):
+- **v2.2.0 — High-Speed USB Cable Sync, Upgraded Library Sidebar & Desktop Lifecycle Polish (`6508e23`, November 2026):**
+  - **USB Cable Sync (`backend/usb_sync.py`, `backend/routes/sync.py`, `MobileSyncSection.tsx`, `android/`):** Added loopback-only `GET /api/sync/usb/status`, `POST /api/sync/usb/enable`, `POST /api/sync/usb/disable`, and `POST /api/sync/usb/install-adb` powering `adb reverse tcp:8765 tcp:8765`; live 4s UI device polling + auto-enable; and Android USB-first routing (`http://127.0.0.1:<port>`) with automatic Wi-Fi fallback, WorkManager `NOT_REQUIRED` constraint when `preferUsb` is enabled, `256 KB` streaming buffers, 3× concurrent USB track downloads, and live `MB/s` throughput reporting.
+  - **Desktop Studio UX & Process Lifecycle (`Sidebar.tsx`, `MiniPlayer.tsx`, `CloseConfirmModal.tsx`, `desktop/src-tauri/src/`):** Upgraded left sidebar into unified **"Your Library"** panel with filter pills, search, sorting, quick-play, and cold-start hydration recovery; fixed Mini Player clamping, viewport-locked lyrics scrolling, and close-returns-to-Full-Studio; added context-aware Exit Confirmation Modal (`Cancel`, `Hide to Tray`, `Close Everything`) backed by `taskkill /PID ... /T /F` + `taskkill /IM flacify-backend.exe /T /F`.
+
+### Run v2.2 Backend & Web UI (Development / LAN Server):
 ```powershell
 python -m backend --open
 ```
@@ -935,7 +939,7 @@ python -m backend --open
 cd desktop && npm.cmd run dev
 ```
 
-### Build v2.1.0 Desktop Bundle & Windows Installer:
+### Build v2.2.0 Desktop Bundle & Windows Installer:
 ```powershell
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 python build_v2.py

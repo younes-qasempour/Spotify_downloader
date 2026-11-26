@@ -39,8 +39,9 @@ class ResumableFileDownloaderTest {
 
             val downloader = ResumableFileDownloader(OkHttpClient())
             val dest = File(tempFolder.root, "fresh.flac")
+            val baseUrl = server.url("/").toString().trimEnd('/')
             val result = downloader.downloadTrackFile(
-                candidateUrls = listOf(server.url("/").toString().trimEnd('/')),
+                candidateUrls = listOf(baseUrl),
                 token = "tok1",
                 relativeFileUrl = "/api/sync/tracks/t1/file",
                 destFile = dest,
@@ -50,6 +51,7 @@ class ResumableFileDownloaderTest {
             assertEquals(payload.size.toLong(), result.bytesWrittenTotal)
             assertEquals(0L, result.resumedFromBytes)
             assertEquals("\"1000-abc\"", result.etag)
+            assertEquals(baseUrl, result.resolvedBaseUrl)
             assertArrayEquals(payload, dest.readBytes())
             assertFalse(File(tempFolder.root, "fresh.flac.part").exists())
             assertFalse(File(tempFolder.root, "fresh.flac.part.etag").exists())
@@ -176,6 +178,43 @@ class ResumableFileDownloaderTest {
             }
         } finally {
             server.shutdown()
+        }
+    }
+
+    @Test
+    fun failsOverFromUnreachableFirstCandidateAndReportsResolvedUrl() = runTest {
+        val deadServer = MockWebServer()
+        deadServer.start()
+        val deadUrl = deadServer.url("/").toString().trimEnd('/')
+        deadServer.shutdown()
+
+        val liveServer = MockWebServer()
+        liveServer.start()
+        try {
+            val payload = flacLikeBytes(2048)
+            liveServer.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("ETag", "\"live-etag\"")
+                    .setBody(Buffer().write(payload))
+            )
+
+            val liveUrl = liveServer.url("/").toString().trimEnd('/')
+            val downloader = ResumableFileDownloader(OkHttpClient())
+            val dest = File(tempFolder.root, "failover.flac")
+            val result = downloader.downloadTrackFile(
+                candidateUrls = listOf(deadUrl, liveUrl),
+                token = "tok-failover",
+                relativeFileUrl = "/api/sync/tracks/t6/file",
+                destFile = dest,
+                expectedSize = payload.size.toLong(),
+            )
+
+            assertEquals(liveUrl, result.resolvedBaseUrl)
+            assertEquals(payload.size.toLong(), result.bytesWrittenTotal)
+            assertArrayEquals(payload, dest.readBytes())
+        } finally {
+            liveServer.shutdown()
         }
     }
 }

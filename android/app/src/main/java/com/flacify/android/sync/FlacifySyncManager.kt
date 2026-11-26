@@ -19,10 +19,15 @@ data class SyncProgressState(
     val totalTracks: Int = 0,
     val bytesDone: Long = 0L,
     val totalBytes: Long = 0L,
+    val speedBytesPerSec: Long = 0L,
+    val transport: String = "",
     val errorCount: Int = 0,
     val terminalMessage: String? = null,
     val errorMessage: String? = null,
 ) {
+    val isUsb: Boolean
+        get() = transport == FlacifySyncWorker.TRANSPORT_USB
+
     val fraction: Float
         get() = when {
             totalBytes > 0L -> (bytesDone.toDouble() / totalBytes.toDouble()).toFloat().coerceIn(0f, 1f)
@@ -38,9 +43,14 @@ class FlacifySyncManager(context: Context) {
         workManager.getWorkInfosForUniqueWorkFlow(FlacifySyncWorker.UNIQUE_WORK_NAME)
             .map { infos -> mapWorkInfos(infos) }
 
-    fun startSync(syncAllLibrary: Boolean = false) {
+    fun startSync(
+        syncAllLibrary: Boolean = false,
+        allowUsbWithoutNetwork: Boolean = true,
+    ) {
         val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiredNetworkType(
+                if (allowUsbWithoutNetwork) NetworkType.NOT_REQUIRED else NetworkType.CONNECTED
+            )
             .build()
 
         val request = OneTimeWorkRequestBuilder<FlacifySyncWorker>()
@@ -70,6 +80,8 @@ class FlacifySyncManager(context: Context) {
         val total = data.getInt(FlacifySyncWorker.KEY_TOTAL_TRACKS, 0)
         val bytesDone = data.getLong(FlacifySyncWorker.KEY_BYTES_DONE, 0L)
         val totalBytes = data.getLong(FlacifySyncWorker.KEY_TOTAL_BYTES, 0L)
+        val speedBytesPerSec = data.getLong(FlacifySyncWorker.KEY_SPEED_BYTES_PER_SEC, 0L)
+        val transport = data.getString(FlacifySyncWorker.KEY_TRANSPORT).orEmpty()
         val currentTitle = data.getString(FlacifySyncWorker.KEY_CURRENT_TITLE).orEmpty()
         val errorCount = data.getInt(FlacifySyncWorker.KEY_ERROR_COUNT, 0)
         val failError = data.getString(FlacifySyncWorker.KEY_ERROR)
@@ -88,6 +100,8 @@ class FlacifySyncManager(context: Context) {
                 totalTracks = total,
                 bytesDone = bytesDone,
                 totalBytes = totalBytes,
+                speedBytesPerSec = speedBytesPerSec,
+                transport = transport,
             )
 
             WorkInfo.State.SUCCEEDED -> {
@@ -104,6 +118,8 @@ class FlacifySyncManager(context: Context) {
                     totalTracks = total,
                     bytesDone = bytesDone,
                     totalBytes = totalBytes,
+                    speedBytesPerSec = speedBytesPerSec,
+                    transport = transport,
                     errorCount = errorCount,
                     terminalMessage = msg,
                 )

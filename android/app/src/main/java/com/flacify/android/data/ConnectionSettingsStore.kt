@@ -1,6 +1,7 @@
 package com.flacify.android.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -19,12 +20,26 @@ data class ConnectionConfig(
     val pairToken: String = "",
     val deviceName: String = "",
     val serverVersion: String = "",
+    val preferUsb: Boolean = true,
 ) {
     val isPaired: Boolean
-        get() = activeUrl.isNotBlank() && pairToken.isNotBlank()
+        get() = (activeUrl.isNotBlank() || preferUsb) && pairToken.isNotBlank() &&
+            (activeUrl.isNotBlank() || candidateUrls.isNotEmpty())
+
+    fun preferredPort(): Int =
+        PairingUriParser.extractPort(activeUrl)
+            ?: candidateUrls.firstNotNullOfOrNull { PairingUriParser.extractPort(it) }
+            ?: PairingUriParser.DEFAULT_PORT
+
+    val usbTunnelUrl: String
+        get() = PairingUriParser.usbLoopbackUrl(preferredPort())
 
     fun orderedCandidateUrls(): List<String> =
-        PairingUriParser.mergeCandidateUrls(activeUrl, candidateUrls)
+        PairingUriParser.buildOrderedCandidates(
+            activeUrl = activeUrl,
+            candidateUrls = candidateUrls,
+            preferUsb = preferUsb,
+        )
 }
 
 class ConnectionSettingsStore(private val context: Context) {
@@ -47,6 +62,7 @@ class ConnectionSettingsStore(private val context: Context) {
                 pairToken = prefs[KEY_PAIR_TOKEN].orEmpty(),
                 deviceName = prefs[KEY_DEVICE_NAME].orEmpty(),
                 serverVersion = prefs[KEY_SERVER_VERSION].orEmpty(),
+                preferUsb = prefs[KEY_PREFER_USB] ?: true,
             )
         }
 
@@ -68,14 +84,28 @@ class ConnectionSettingsStore(private val context: Context) {
         }
     }
 
+    suspend fun setPreferUsb(enabled: Boolean) {
+        context.connectionDataStore.edit { prefs ->
+            prefs[KEY_PREFER_USB] = enabled
+        }
+    }
+
     suspend fun updateActiveUrl(activeUrl: String, extraUrls: List<String> = emptyList()) {
         val cleanActive = PairingUriParser.normalizeBaseUrl(activeUrl) ?: return
         context.connectionDataStore.edit { prefs ->
+            val existingActive = PairingUriParser.normalizeBaseUrl(prefs[KEY_ACTIVE_URL].orEmpty()).orEmpty()
+            val keepExistingWifi = PairingUriParser.isUsbLoopbackUrl(cleanActive) &&
+                existingActive.isNotBlank() &&
+                !PairingUriParser.isUsbLoopbackUrl(existingActive)
+            val resolvedActive = if (keepExistingWifi) existingActive else cleanActive
             val current = prefs[KEY_CANDIDATE_URLS].orEmpty()
                 .split('\n')
                 .mapNotNull { PairingUriParser.normalizeBaseUrl(it) }
-            val merged = PairingUriParser.mergeCandidateUrls(cleanActive, current + extraUrls)
-            prefs[KEY_ACTIVE_URL] = cleanActive
+            val filteredExtras = extraUrls
+                .mapNotNull { PairingUriParser.normalizeBaseUrl(it) }
+                .filterNot { keepExistingWifi && PairingUriParser.isUsbLoopbackUrl(it) }
+            val merged = PairingUriParser.mergeCandidateUrls(resolvedActive, current + filteredExtras)
+            prefs[KEY_ACTIVE_URL] = resolvedActive
             prefs[KEY_CANDIDATE_URLS] = merged.joinToString("\n")
         }
     }
@@ -96,5 +126,6 @@ class ConnectionSettingsStore(private val context: Context) {
         val KEY_PAIR_TOKEN = stringPreferencesKey("pair_token")
         val KEY_DEVICE_NAME = stringPreferencesKey("device_name")
         val KEY_SERVER_VERSION = stringPreferencesKey("server_version")
+        val KEY_PREFER_USB = booleanPreferencesKey("prefer_usb")
     }
 }

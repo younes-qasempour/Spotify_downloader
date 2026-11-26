@@ -33,6 +33,7 @@ data class SyncUiState(
     val showToken: Boolean = false,
     val isTesting: Boolean = false,
     val isConnected: Boolean = false,
+    val resolvedLiveUrl: String = "",
     val syncInfo: SyncInfoResponse? = null,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
@@ -47,7 +48,10 @@ data class SyncUiState(
     val pendingShares: List<PendingShareEntity> = emptyList(),
     val shareUrlInput: String = "",
     val isSendingShare: Boolean = false,
-)
+) {
+    val isUsbConnected: Boolean
+        get() = isConnected && PairingUriParser.isUsbLoopbackUrl(resolvedLiveUrl)
+}
 
 class SyncViewModel(
     private val connectionStore: ConnectionSettingsStore,
@@ -166,6 +170,33 @@ class SyncViewModel(
         }
     }
 
+    fun useUsbCableHost() {
+        formSeededFromStore = true
+        val port = _uiState.value.connectionConfig.preferredPort()
+        val usbUrl = PairingUriParser.usbLoopbackUrl(port)
+        _uiState.update {
+            it.copy(
+                manualUrl = usbUrl,
+                errorMessage = null,
+                statusMessage = "Filled USB Cable tunnel address ($usbUrl). Enable USB Bridge on Flacify PC.",
+            )
+        }
+    }
+
+    fun setPreferUsb(enabled: Boolean) {
+        viewModelScope.launch {
+            connectionStore.setPreferUsb(enabled)
+            val cfg = _uiState.value.connectionConfig.copy(preferUsb = enabled)
+            if (cfg.isPaired) {
+                connectAndVerify(
+                    candidateUrls = cfg.orderedCandidateUrls(),
+                    token = cfg.pairToken,
+                    fallbackName = cfg.deviceName,
+                )
+            }
+        }
+    }
+
     fun selectDiscoveredPc(pc: DiscoveredPc) {
         formSeededFromStore = true
         _uiState.update {
@@ -231,12 +262,24 @@ class SyncViewModel(
         }
 
         val extras = if (normalizedUrl == state.connectionConfig.activeUrl) {
-            state.connectionConfig.candidateUrls
+            state.connectionConfig.orderedCandidateUrls()
+        } else if (state.connectionConfig.preferUsb && !PairingUriParser.isUsbLoopbackUrl(normalizedUrl)) {
+            val port = PairingUriParser.extractPort(normalizedUrl) ?: state.connectionConfig.preferredPort()
+            listOf(PairingUriParser.usbLoopbackUrl(port))
         } else {
             emptyList()
         }
+        val ordered = if (PairingUriParser.isUsbLoopbackUrl(normalizedUrl)) {
+            PairingUriParser.mergeCandidateUrls(normalizedUrl, state.connectionConfig.candidateUrls)
+        } else {
+            PairingUriParser.buildOrderedCandidates(
+                activeUrl = normalizedUrl,
+                candidateUrls = extras,
+                preferUsb = state.connectionConfig.preferUsb,
+            )
+        }
         connectAndVerify(
-            candidateUrls = PairingUriParser.mergeCandidateUrls(normalizedUrl, extras),
+            candidateUrls = ordered,
             token = token,
         )
     }
@@ -269,15 +312,27 @@ class SyncViewModel(
             try {
                 val result = apiClient.fetchSyncInfo(candidateUrls, token)
                 val info = result.data
-                val mergedUrls = PairingUriParser.mergeCandidateUrls(
-                    result.resolvedBaseUrl,
-                    candidateUrls + info.urls,
+                val isUsb = PairingUriParser.isUsbLoopbackUrl(result.resolvedBaseUrl)
+                val nonUsbPool = PairingUriParser.mergeCandidateUrls(
+                    info.urls.firstOrNull().orEmpty(),
+                    info.urls + candidateUrls.filterNot { PairingUriParser.isUsbLoopbackUrl(it) },
+                ).filterNot { PairingUriParser.isUsbLoopbackUrl(it) }
+                val existingWifiActive = _uiState.value.connectionConfig.activeUrl
+                    .takeIf { it.isNotBlank() && !PairingUriParser.isUsbLoopbackUrl(it) }
+                val savedActiveUrl = if (isUsb) {
+                    existingWifiActive ?: nonUsbPool.firstOrNull() ?: result.resolvedBaseUrl
+                } else {
+                    result.resolvedBaseUrl
+                }
+                val savedCandidates = PairingUriParser.mergeCandidateUrls(
+                    savedActiveUrl,
+                    nonUsbPool + if (nonUsbPool.isEmpty()) listOf(result.resolvedBaseUrl) else emptyList(),
                 )
                 val resolvedName = info.deviceName.ifBlank { fallbackName.ifBlank { "Flacify PC" } }
 
                 connectionStore.saveConnection(
-                    activeUrl = result.resolvedBaseUrl,
-                    candidateUrls = mergedUrls,
+                    activeUrl = savedActiveUrl,
+                    candidateUrls = savedCandidates,
                     pairToken = token,
                     deviceName = resolvedName,
                     serverVersion = info.serverVersion,
@@ -287,11 +342,16 @@ class SyncViewModel(
                     it.copy(
                         isTesting = false,
                         isConnected = true,
+                        resolvedLiveUrl = result.resolvedBaseUrl,
                         syncInfo = info,
-                        manualUrl = result.resolvedBaseUrl,
+                        manualUrl = savedActiveUrl,
                         manualToken = token,
                         errorMessage = null,
-                        statusMessage = "Connected to $resolvedName (${result.resolvedBaseUrl})",
+                        statusMessage = if (isUsb) {
+                            "Connected via USB Cable to $resolvedName (${result.resolvedBaseUrl})"
+                        } else {
+                            "Connected to $resolvedName (${result.resolvedBaseUrl})"
+                        },
                     )
                 }
 
@@ -304,6 +364,7 @@ class SyncViewModel(
                     it.copy(
                         isTesting = false,
                         isConnected = false,
+                        resolvedLiveUrl = "",
                         statusMessage = null,
                         errorMessage = ex.message ?: "Failed to connect to Flacify PC.",
                     )
@@ -317,11 +378,15 @@ class SyncViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isRefreshingCatalog = true, errorMessage = null) }
             try {
-                val manifest = repository.refreshManifestFromPc()
+                val refresh = repository.refreshManifestFromPcWithTransport()
+                val manifest = refresh.manifest
+                val isUsb = PairingUriParser.isUsbLoopbackUrl(refresh.resolvedBaseUrl)
                 _uiState.update {
                     it.copy(
                         isRefreshingCatalog = false,
-                        statusMessage = "Catalog refreshed: ${manifest.playlists.size} playlists · ${manifest.totalUniqueTracks} unique lossless tracks on PC.",
+                        isConnected = true,
+                        resolvedLiveUrl = refresh.resolvedBaseUrl,
+                        statusMessage = "Catalog refreshed via ${if (isUsb) "USB Cable" else "Wi-Fi"}: ${manifest.playlists.size} playlists · ${manifest.totalUniqueTracks} unique lossless tracks on PC.",
                     )
                 }
             } catch (ex: Exception) {
@@ -343,7 +408,10 @@ class SyncViewModel(
 
     fun startOfflineSync(syncAllLibrary: Boolean = false) {
         _uiState.update { it.copy(errorMessage = null, statusMessage = "Starting lossless FLAC sync...") }
-        syncManager.startSync(syncAllLibrary = syncAllLibrary)
+        syncManager.startSync(
+            syncAllLibrary = syncAllLibrary,
+            allowUsbWithoutNetwork = _uiState.value.connectionConfig.preferUsb,
+        )
     }
 
     fun cancelOfflineSync() {
@@ -442,6 +510,7 @@ class SyncViewModel(
             _uiState.update {
                 it.copy(
                     isConnected = false,
+                    resolvedLiveUrl = "",
                     syncInfo = null,
                     manualUrl = "",
                     manualToken = "",

@@ -13,6 +13,7 @@ import com.flacify.android.data.db.PendingShareEntity
 import com.flacify.android.data.db.PendingShareStatus
 import com.flacify.android.network.FlacifyApiClient
 import com.flacify.android.network.FlacifyApiException
+import com.flacify.android.network.PairingUriParser
 import com.flacify.android.network.ShareResponse
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -54,7 +55,9 @@ class ShareToPcManager(
                 sharedText = extracted.url,
                 autoDownload = autoDownload,
             )
-            if (res.resolvedBaseUrl != cfg.activeUrl) {
+            if (res.resolvedBaseUrl != cfg.activeUrl &&
+                !PairingUriParser.isUsbLoopbackUrl(res.resolvedBaseUrl)
+            ) {
                 connectionStore.updateActiveUrl(res.resolvedBaseUrl)
             }
             dao.insertPendingShare(

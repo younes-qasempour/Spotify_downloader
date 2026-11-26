@@ -145,4 +145,15 @@ object FormatUtils {
             else -> String.format(Locale.US, "%.1f MB", bytes / mb)
         }
     }
+
+    fun formatSpeed(bytesPerSec: Long): String {
+        if (bytesPerSec <= 0L) return ""
+        val mb = 1024.0 * 1024.0
+        val kb = 1024.0
+        return when {
+            bytesPerSec >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB/s", bytesPerSec / mb)
+            bytesPerSec >= 1024L -> String.format(Locale.US, "%.0f KB/s", bytesPerSec / kb)
+            else -> "$bytesPerSec B/s"
+        }
+    }
 }

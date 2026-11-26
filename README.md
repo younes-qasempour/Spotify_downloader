@@ -2,8 +2,8 @@
 
 <p align="center">
   <img src="assets/icon.png" alt="Flacify Logo" width="128" height="128"><br>
-  <strong>Flacify v2.1.0 — Tauri v2 Desktop App, Resizable Studio Mini Player, Wi-Fi Mobile Sync, Android Companion & 10-Band EQ</strong><br><br>
-  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v2.1.0-brightgreen?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v2.1.0"></a>
+  <strong>Flacify v2.2.0 — Tauri v2 Desktop App, USB Cable & Wi-Fi Mobile Sync, Android Companion & 10-Band EQ</strong><br><br>
+  <a href="https://github.com/younes-qasempour/Spotify_downloader/releases"><img src="https://img.shields.io/badge/Release-v2.2.0-brightgreen?style=for-the-badge&logo=windows11&logoColor=white" alt="Release v2.2.0"></a>
   <img src="https://img.shields.io/badge/Android-Kotlin%20%2B%20Jetpack%20Compose-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android Kotlin + Jetpack Compose">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/Desktop-Tauri%20v2%20%2B%20React%2019-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri v2 + React 19">
@@ -14,18 +14,18 @@
 
 ---
 
-## ✨ Flacify v2.1.0 Architecture & Quick Start
+## ✨ Flacify v2.2.0 Architecture & Quick Start
 
-Flacify v2.1 pairs the proven **pure-Python `core/` engine** with a thin **FastAPI + WebSocket backend (`backend/`)**, a modern **React 19 + TypeScript + Tailwind CSS v4 frontend (`frontend/`)**, a **Tauri v2 Windows desktop shell (`desktop/`)**, and a **native Kotlin + Jetpack Compose Android companion app (`android/`)**:
+Flacify v2.2 pairs the proven **pure-Python `core/` engine** with a thin **FastAPI + WebSocket backend (`backend/`)**, a modern **React 19 + TypeScript + Tailwind CSS v4 frontend (`frontend/`)**, a **Tauri v2 Windows desktop shell (`desktop/`)**, and a **native Kotlin + Jetpack Compose Android companion app (`android/`)**:
 
-- **Windows Desktop App (`desktop/`):** Run `Flacify_Setup_v2.1.0.exe` or launch dev mode via `cd desktop && npm.cmd run dev` (frameless Windows 11 window, native folder/file dialogs, system tray, automatic backend sidecar lifecycle).
-- **Wi-Fi/LAN Mobile Sync & Native Android Companion App (`android/`):** Pair via QR code or mDNS (`_flacify._tcp.local.`), run resumable lossless FLAC offline playlist sync (`Flacify_Android_v2.1.0.apk`), play offline tracks with Media3 and synced lyrics, and share Spotify links directly to your PC queue. See [`android/README.md`](android/README.md) for mobile build and pairing details.
+- **Windows Desktop App (`desktop/`):** Run `Flacify_Setup_v2.2.0.exe` or launch dev mode via `cd desktop && npm.cmd run dev` (frameless Windows 11 window, native folder/file dialogs, system tray, close confirmation modal, automatic backend sidecar lifecycle).
+- **USB Cable (`adb reverse`) & Wi-Fi/LAN Mobile Sync (`android/`):** Connect over high-speed USB cable (`127.0.0.1` with automatic Wi-Fi fallback and 3× concurrent track transfers) or pair wirelessly via QR code / mDNS (`_flacify._tcp.local.`), run resumable lossless FLAC offline playlist sync (`Flacify_Android_v2.2.0.apk`), play offline tracks with Media3 and synced lyrics, and share Spotify links directly to your PC queue. See [`android/README.md`](android/README.md) for mobile build and pairing details.
 - **Resizable Studio Mini Player (`Alt+M`):** Detachable floating PiP / native always-on-top window with 8-direction free resizing across 3 adaptive layouts (**Micro Strip**, **Art Card**, **Studio Deck**), live 60fps FFT spectrum visualizer, synced karaoke lyrics + translation, Up Next queue switching, and Quick EQ.
 - **Production Web Mode & PWA (`python -m backend`):** Serve the full UI locally or over your LAN/phone at any browser:
   ```powershell
   python -m backend --host 0.0.0.0 --port 8765 --open
   ```
-- **Build v2.1.0 Desktop Bundle + Installer:**
+- **Build v2.2.0 Desktop Bundle + Installer:**
   ```powershell
   python build_v2.py
   ```
@@ -51,7 +51,8 @@ Built on a **decoupled multi-layer architecture**:
 
 ## 🌟 Key Features
 
-### 📱 Wi-Fi/LAN Mobile Sync & Native Android Companion (v2.1.0)
+### 📱 USB Cable & Wi-Fi/LAN Mobile Sync + Native Android Companion (v2.1.0 – v2.2.0)
+- **High-Speed USB Cable Sync (`adb reverse`) with Wi-Fi Fallback (`v2.2.0`):** Plug in your phone via USB for direct local transfers bypassing Wi-Fi routers (with one-click Platform-Tools installer on PC, auto-enable detection, `256 KB` streaming buffers, 3× concurrent track downloads, and live `MB/s` speed telemetry), automatically falling back to saved Wi-Fi/Tailscale URLs when unplugged.
 - **QR Code & Automatic mDNS Discovery (`_flacify._tcp.local.`):** Pair Android phones from **Settings → Mobile Sync** via one-scan CameraX + ZXing QR pairing, local Zeroconf service discovery, or direct URL/token entry (including emulator `10.0.2.2:8765` support).
 - **Resumable Lossless FLAC Transfer:** Dedicated `WorkManager` + `ResumableFileDownloader` streams original bit-perfect `.flac` audio, embedded/LRC synced lyrics, and album cover art over LAN using `ETag` and HTTP `Range` / `If-Range` resume.
 - **Offline Room Library & Media3 Player:** Browse offline playlists and searchable tracks backed by Room SQLite, and play bit-perfect audio completely offline via Media3 (`ExoPlayer` + background `MediaSessionService`) with seekable synced lyrics, queue management, and a persistent mini player bar.
@@ -221,7 +222,7 @@ flowchart TD
 Flacify/
 ├── backend.spec              # PyInstaller configuration for v2.x FastAPI backend sidecar
 ├── build_v2.py               # Automated v2.x Windows Desktop + Installer build pipeline
-├── installer_v2.iss          # Inno Setup 6 installer script (Flacify_Setup_v2.1.0.exe)
+├── installer_v2.iss          # Inno Setup 6 installer script (Flacify_Setup_v2.2.0.exe)
 ├── app.spec                  # Legacy v1.x PyInstaller configuration
 ├── build_windows.py          # Legacy v1.x Windows build orchestrator
 ├── installer.iss             # Legacy v1.x Inno Setup script
@@ -275,7 +276,7 @@ Flacify/
 │       └── test/java/com/flacify/android/ # 9 JUnit test suites (25 unit tests)
 │
 ├── core/                     # HEADLESS MULTIMEDIA ENGINE (Zero UI Dependencies)
-│   ├── __init__.py           # Package version (`2.1.0`)
+│   ├── __init__.py           # Package version (`2.2.0`)
 │   ├── paths.py              # Centralized path manager (%LOCALAPPDATA%\Flacify)
 │   ├── config.py             # Thread-safe persistent JSON config manager
 │   ├── archive.py            # SQLite music library archive, deduplication & repair
@@ -296,7 +297,7 @@ Flacify/
 │
 ├── gui/                      # LEGACY v1.x PYQT6 FLUENT PRESENTATION LAYER (Preserved)
 ├── scripts/                  # Release automation & library maintenance scripts
-│   ├── publish_release.py    # GitHub Release v2.1.0 creator & multi-asset uploader
+│   ├── publish_release.py    # GitHub Release v2.2.0 creator & multi-asset uploader
 │   └── retag_library_genres.py # Library genre enrichment helper
 ├── assets/                   # Application icons (`icon.ico`, `icon.png`)
 └── tests/                    # Automated Python test suite (22 test modules, 140 unit tests)
@@ -307,12 +308,12 @@ Flacify/
 ## 💾 Installation
 
 ### Option 1: Standalone Windows Installer (Recommended)
-1. Download **`Flacify_Setup_v2.1.0.exe`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases).
+1. Download **`Flacify_Setup_v2.2.0.exe`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases).
 2. Close any running Flacify window or `python -m backend` process, then run the installer wizard (installs per-user into `%LOCALAPPDATA%\Programs\Flacify` without Administrator privileges while preserving your `%LOCALAPPDATA%\Flacify` database and settings).
 3. Launch **Flacify** from your Start Menu or Desktop shortcut (or launch **Flacify Web Server (LAN)** from the Start Menu for headless LAN serving).
 
 ### Option 2: Native Android Companion App (API 26+)
-1. Download **`Flacify_Android_v2.1.0.apk`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases) onto your Android phone (or install over USB/emulator via `adb install -r Flacify_Android_v2.1.0.apk`).
+1. Download **`Flacify_Android_v2.2.0.apk`** from the latest [GitHub Release](https://github.com/younes-qasempour/Spotify_downloader/releases) onto your Android phone (or install over USB/emulator via `adb install -r Flacify_Android_v2.2.0.apk`).
 2. Ensure your PC desktop app (or `python -m backend`) is running on the same Wi-Fi/LAN network with **Mobile Sync** enabled.
 3. Open **Flacify** on Android → **Sync** tab → scan the QR code shown in **Settings → Mobile Sync** on your PC (or tap the discovered mDNS host / emulator preset `10.0.2.2:8765`), enter your pairing token if configuring manually, and tap **Connect & Verify**.
 
@@ -352,7 +353,7 @@ python main.py
 
 ## 💻 Usage Guide
 
-### 1. Desktop Studio, Web UI & Android Companion (v2.1.0)
+### 1. Desktop Studio, Web UI & Android Companion (v2.2.0)
 - **Paste or Share Spotify Links:** Paste any track, album, or playlist URL into Queue, or share a link directly from Android via **Send to Flacify PC**.
 - **Saved Playlists & Batch Controls:** Import huge playlists offline, enable Auto-Sync watches, and download in controlled batches.
 - **Studio Mini Player & Equalizer:** Press `Alt+M` to pop into the resizable floating Studio Mini Player with FFT visualizer, Karaoke lyrics, and 10-band EQ.
@@ -408,7 +409,7 @@ All settings are configured via the in-app **Settings** view or persisted in `%L
 
 ## 📦 Compiling Standalone Executable, Installer & Android APK
 
-### Windows Desktop Bundle & Installer (`v2.1.0`)
+### Windows Desktop Bundle & Installer (`v2.2.0`)
 Ensure Rust (`cargo` on `PATH`) and Inno Setup 6 (`ISCC.exe`) are installed, then run:
 ```powershell
 python build_v2.py
@@ -417,9 +418,9 @@ This pipeline:
 1. Typechecks and builds the React + TypeScript frontend (`frontend/dist/`).
 2. Compiles the Tauri v2 desktop binary (`Flacify.exe`).
 3. Freezes the FastAPI + Core Python sidecar (`flacify-backend.exe`) using `backend.spec`.
-4. Bundles everything into `dist/Flacify-v2/` and compiles `dist/installer/Flacify_Setup_v2.1.0.exe` via `installer_v2.iss`.
+4. Bundles everything into `dist/Flacify-v2/` and compiles `dist/installer/Flacify_Setup_v2.2.0.exe` via `installer_v2.iss`.
 
-### Native Android Companion APK (`v2.1.0`)
+### Native Android Companion APK (`v2.2.0`)
 ```powershell
 cd android
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"

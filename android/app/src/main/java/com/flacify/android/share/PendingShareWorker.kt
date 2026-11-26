@@ -6,6 +6,7 @@ import androidx.work.WorkerParameters
 import com.flacify.android.FlacifyApplication
 import com.flacify.android.data.db.PendingShareStatus
 import com.flacify.android.network.FlacifyApiException
+import com.flacify.android.network.PairingUriParser
 
 class PendingShareWorker(
     appContext: Context,
@@ -42,7 +43,9 @@ class PendingShareWorker(
                     sharedText = share.rawUrl,
                     autoDownload = share.autoDownload,
                 )
-                if (res.resolvedBaseUrl != cfg.activeUrl) {
+                if (res.resolvedBaseUrl != cfg.activeUrl &&
+                    !PairingUriParser.isUsbLoopbackUrl(res.resolvedBaseUrl)
+                ) {
                     app.connectionStore.updateActiveUrl(res.resolvedBaseUrl)
                 }
                 dao.updatePendingShareStatus(
